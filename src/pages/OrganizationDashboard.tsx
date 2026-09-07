@@ -1,0 +1,318 @@
+import {
+  Activity,
+  AlertTriangle,
+  Building2,
+  Server,
+  ShieldCheck,
+  Users,
+} from "lucide-react"
+
+import Sidebar from "../components/Sidebar"
+import Topbar from "../components/Topbar"
+import StatCard from "../components/StatCard"
+import SeverityBadge from "../components/SeverityBadge"
+
+function OrganizationDashboard() {
+  return (
+    <div className="flex min-h-screen bg-[#021325] text-white">
+
+      <Sidebar />
+
+      <main className="min-w-0 flex-1">
+
+        <Topbar />
+
+        <div className="p-6 lg:p-8">
+
+          <div className="mb-8">
+
+            <p className="text-sm text-blue-400">
+              Organization Management
+            </p>
+
+            <h1 className="mt-2 text-3xl font-semibold">
+              Organization Dashboard
+            </h1>
+
+            <p className="mt-2 text-sm text-slate-500">
+              Monitor users, assets, security posture
+              and organization activity.
+            </p>
+
+          </div>
+
+          <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+
+            <StatCard
+              title="Organization Users"
+              value="0"
+              description="Total registered users"
+              icon={Users}
+            />
+
+            <StatCard
+              title="Registered Assets"
+              value="0"
+              description="Organization infrastructure"
+              icon={Server}
+            />
+
+            <StatCard
+              title="Security Status"
+              value="Secure"
+              description="Current security posture"
+              icon={ShieldCheck}
+            />
+
+            <StatCard
+              title="Security Activity"
+              value="0"
+              description="Recent security activity"
+              icon={Activity}
+            />
+
+          </div>
+
+          <div className="mt-8 grid gap-6 xl:grid-cols-3">
+
+            <section className="rounded-2xl border border-white/10 bg-[#0b1f33] p-6 xl:col-span-2">
+
+              <div className="flex items-center justify-between">
+
+                <div>
+
+                  <h2 className="text-lg font-semibold">
+                    Organization Overview
+                  </h2>
+
+                  <p className="mt-1 text-sm text-slate-500">
+                    Infrastructure and organization information.
+                  </p>
+
+                </div>
+
+                <select className="rounded-xl border border-white/10 bg-[#061727] px-4 py-2 text-sm">
+
+                  <option>
+                    Current Organization
+                  </option>
+
+                  <option>
+                    All Organizations
+                  </option>
+
+                </select>
+
+              </div>
+
+              <div className="mt-6 grid gap-4 md:grid-cols-2">
+
+                <OrganizationCard
+                  title="Organization"
+                  value="Not Connected"
+                  icon={<Building2 size={21} />}
+                />
+
+                <OrganizationCard
+                  title="Infrastructure"
+                  value="No Assets Registered"
+                  icon={<Server size={21} />}
+                />
+
+                <OrganizationCard
+                  title="Users"
+                  value="0 Active Users"
+                  icon={<Users size={21} />}
+                />
+
+                <OrganizationCard
+                  title="Security Coverage"
+                  value="Not Available"
+                  icon={<ShieldCheck size={21} />}
+                />
+
+              </div>
+
+            </section>
+
+            <section className="rounded-2xl border border-white/10 bg-[#0b1f33] p-6">
+
+              <h2 className="text-lg font-semibold">
+                Security Summary
+              </h2>
+
+              <p className="mt-1 text-sm text-slate-500">
+                Organization-wide threat summary.
+              </p>
+
+              <div className="mt-6 space-y-4">
+
+                <SecurityItem
+                  severity="Critical"
+                />
+
+                <SecurityItem
+                  severity="High"
+                />
+
+                <SecurityItem
+                  severity="Medium"
+                />
+
+                <SecurityItem
+                  severity="Low"
+                />
+
+              </div>
+
+            </section>
+
+          </div>
+
+          <section className="mt-8 rounded-2xl border border-white/10 bg-[#0b1f33] p-6">
+
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+
+              <div>
+
+                <h2 className="text-lg font-semibold">
+                  Organization Activity
+                </h2>
+
+                <p className="mt-1 text-sm text-slate-500">
+                  Recent organization and security activity.
+                </p>
+
+              </div>
+
+              <div className="flex gap-3">
+
+                <select className="rounded-lg border border-white/10 bg-[#061727] px-3 py-2 text-sm">
+
+                  <option>
+                    All Activity
+                  </option>
+
+                  <option>
+                    Users
+                  </option>
+
+                  <option>
+                    Assets
+                  </option>
+
+                  <option>
+                    Security
+                  </option>
+
+                </select>
+
+                <select className="rounded-lg border border-white/10 bg-[#061727] px-3 py-2 text-sm">
+
+                  <option>
+                    Last 24 Hours
+                  </option>
+
+                  <option>
+                    Last 7 Days
+                  </option>
+
+                  <option>
+                    Last 30 Days
+                  </option>
+
+                </select>
+
+              </div>
+
+            </div>
+
+            <div className="mt-6 flex min-h-[200px] flex-col items-center justify-center rounded-xl border border-dashed border-white/10 bg-[#061727]">
+
+              <AlertTriangle
+                size={28}
+                className="text-slate-600"
+              />
+
+              <p className="mt-4 font-medium">
+                No organization activity available
+              </p>
+
+              <p className="mt-2 text-sm text-slate-500">
+                Activity will appear when organization
+                data is connected.
+              </p>
+
+            </div>
+
+          </section>
+
+        </div>
+
+      </main>
+
+    </div>
+  )
+}
+
+function OrganizationCard({
+  title,
+  value,
+  icon,
+}: {
+  title: string
+  value: string
+  icon: React.ReactNode
+}) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-[#061727] p-5">
+
+      <div className="flex items-center gap-3">
+
+        <div className="rounded-lg bg-blue-500/10 p-3 text-blue-400">
+          {icon}
+        </div>
+
+        <div>
+
+          <p className="text-sm text-slate-500">
+            {title}
+          </p>
+
+          <p className="font-medium">
+            {value}
+          </p>
+
+        </div>
+
+      </div>
+
+    </div>
+  )
+}
+
+function SecurityItem({
+  severity,
+}: {
+  severity:
+    | "Critical"
+    | "High"
+    | "Medium"
+    | "Low"
+}) {
+  return (
+    <div className="flex items-center justify-between rounded-xl border border-white/10 bg-[#061727] p-4">
+
+      <SeverityBadge
+        severity={severity}
+      />
+
+      <span className="text-xl font-semibold">
+        0
+      </span>
+
+    </div>
+  )
+}
+
+export default OrganizationDashboard
