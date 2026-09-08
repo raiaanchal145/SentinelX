@@ -1,0 +1,28 @@
+{
+  "name": "SentinelX Dev",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspace",
+  "shutdownAction": "stopCompose",
+  "forwardPorts": [5173, 8000, 5432],
+  "portsAttributes": {
+    "5432": { "label": "PostgreSQL" },
+    "8000": { "label": "FastAPI backend" },
+    "5173": { "label": "Vite frontend" }
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" },
+    "ghcr.io/devcontainers/features/python:1": { "version": "3.12" }
+  },
+  "postCreateCommand": "npm install && pip install -r backend/requirements.txt",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-azuretools.vscode-docker",
+        "cweijan.vscode-postgresql-client2",
+        "dbaeumer.vscode-eslint"
+      ]
+    }
+  }
+}

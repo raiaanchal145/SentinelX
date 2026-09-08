@@ -1,0 +1,30 @@
+services:
+  app:
+    image: mcr.microsoft.com/devcontainers/base:ubuntu
+    volumes:
+      - .:/workspace:cached
+    command: sleep infinity
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16
+    container_name: sentinelx-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sentinelx
+      POSTGRES_PASSWORD: sentinelx_dev_pw
+      POSTGRES_DB: sentinelx
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentinelx"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
