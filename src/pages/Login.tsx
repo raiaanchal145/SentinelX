@@ -13,6 +13,10 @@ import { useNavigate } from "react-router-dom"
 
 import { apiLogin } from "../lib/api"
 
+// Same allow-list the backend enforces: only the standard set of
+// characters a real email address can contain.
+const EMAIL_PATTERN = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/
+
 function Login() {
   const navigate = useNavigate()
 
@@ -37,6 +41,14 @@ function Login() {
     e.preventDefault()
 
     setError("")
+
+    if (!EMAIL_PATTERN.test(email)) {
+      setError(
+        "Please enter a valid email address (letters, numbers, and . _ % + - only).",
+      )
+      return
+    }
+
     setSubmitting(true)
 
     try {

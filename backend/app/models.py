@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Enum, ForeignKey, String
+from sqlalchemy import DateTime, Enum, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -66,6 +66,16 @@ class User(Base):
         Enum(UserRole, name="user_role"), default=UserRole.soc_analyst
     )
     is_active: Mapped[bool] = mapped_column(default=True)
+
+    # Email verification. An account cannot log in until is_verified is True.
+    # verification_code/verification_code_expires_at hold the current
+    # outstanding 6-digit code (cleared once verified).
+    is_verified: Mapped[bool] = mapped_column(default=False)
+    verification_code: Mapped[str | None] = mapped_column(String(10))
+    verification_code_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     organization: Mapped["Organization | None"] = relationship(back_populates="users")

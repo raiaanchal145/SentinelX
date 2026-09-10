@@ -1,3 +1,6 @@
+import asyncio
+from datetime import datetime, timedelta, timezone
+
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from jose import JWTError
@@ -6,8 +9,10 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.email_utils import generate_verification_code, send_verification_email
 from app.models import Organization, User, UserRole
 from app.security import create_access_token, decode_access_token, hash_password, verify_password
+from app.validators import is_valid_email_format, is_valid_name_format
 
 app = FastAPI(title="SentinelX API")
 
@@ -20,6 +25,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    """Basic hardening headers applied to every response."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
 
 # Emails that are always assigned the super_admin role, no matter what role
 # they pick at registration. Decided on the server so it can't be bypassed
@@ -61,6 +77,20 @@ class UserOut(BaseModel):
     role: str
 
 
+class RegisterResponse(BaseModel):
+    email: str
+    message: str
+
+
+class VerifyEmailRequest(BaseModel):
+    email: str
+    code: str
+
+
+class ResendVerificationRequest(BaseModel):
+    email: str
+
+
 class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -94,13 +124,25 @@ async def get_current_user(
     return user
 
 
-@app.post("/api/v1/auth/register", response_model=UserOut)
+@app.post("/api/v1/auth/register", response_model=RegisterResponse)
 async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)):
     email = payload.email.strip().lower()
     name = payload.name.strip()
 
     if not name or not email or not payload.password:
         raise HTTPException(status_code=400, detail="Please complete all fields.")
+
+    if not is_valid_name_format(name):
+        raise HTTPException(
+            status_code=400,
+            detail="Name can only contain letters, spaces, apostrophes and hyphens.",
+        )
+
+    if not is_valid_email_format(email):
+        raise HTTPException(
+            status_code=400,
+            detail="Please enter a valid email address (letters, numbers, and . _ % + - only).",
+        )
 
     if len(payload.password) < 6:
         raise HTTPException(status_code=400, detail="Password must contain at least 6 characters.")
@@ -120,22 +162,102 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
             # Nobody can self-assign super_admin through the role dropdown.
             role = UserRole.soc_analyst
 
+    code = generate_verification_code()
+
     user = User(
         name=name,
         email=email,
         password_hash=hash_password(payload.password),
         role=role,
+        is_verified=False,
+        verification_code=code,
+        verification_code_expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
     )
     db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+    try:
+        await asyncio.to_thread(send_verification_email, user.email, user.name, code)
+    except Exception as exc:  # SMTP misconfigured/unreachable -- don't block registration
+        print(f"[SentinelX] Failed to send verification email to {user.email}: {exc}")
+
+    return RegisterResponse(
+        email=user.email,
+        message="Account created. Check your email for a 6-digit verification code.",
+    )
+
+
+@app.post("/api/v1/auth/verify-email", response_model=UserOut)
+async def verify_email(payload: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
+    email = payload.email.strip().lower()
+    code = payload.code.strip()
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="No account found with this email.")
+
+    if user.is_verified:
+        raise HTTPException(status_code=400, detail="This account is already verified.")
+
+    if not user.verification_code or not user.verification_code_expires_at:
+        raise HTTPException(
+            status_code=400,
+            detail="No verification code on file. Please request a new one.",
+        )
+
+    if datetime.now(timezone.utc) > user.verification_code_expires_at:
+        raise HTTPException(status_code=400, detail="This code has expired. Please request a new one.")
+
+    if code != user.verification_code:
+        raise HTTPException(status_code=400, detail="Incorrect verification code.")
+
+    user.is_verified = True
+    user.verification_code = None
+    user.verification_code_expires_at = None
     await db.commit()
     await db.refresh(user)
 
     return UserOut(id=str(user.id), name=user.name, email=user.email, role=user.role.value)
 
 
+@app.post("/api/v1/auth/resend-verification")
+async def resend_verification(payload: ResendVerificationRequest, db: AsyncSession = Depends(get_db)):
+    email = payload.email.strip().lower()
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="No account found with this email.")
+
+    if user.is_verified:
+        raise HTTPException(status_code=400, detail="This account is already verified.")
+
+    code = generate_verification_code()
+    user.verification_code = code
+    user.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    await db.commit()
+
+    try:
+        await asyncio.to_thread(send_verification_email, user.email, user.name, code)
+    except Exception as exc:
+        print(f"[SentinelX] Failed to send verification email to {user.email}: {exc}")
+
+    return {"message": "A new verification code has been sent."}
+
+
 @app.post("/api/v1/auth/login", response_model=LoginResponse)
 async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
     email = payload.email.strip().lower()
+
+    if not is_valid_email_format(email):
+        raise HTTPException(
+            status_code=400,
+            detail="Please enter a valid email address (letters, numbers, and . _ % + - only).",
+        )
 
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
@@ -145,6 +267,9 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
 
     if not user.is_active:
         raise HTTPException(status_code=403, detail="This account has been deactivated.")
+
+    if not user.is_verified:
+        raise HTTPException(status_code=403, detail="Please verify your email before logging in.")
 
     token = create_access_token({"sub": str(user.id), "role": user.role.value})
 
