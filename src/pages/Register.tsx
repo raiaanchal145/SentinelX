@@ -11,6 +11,10 @@ import { useNavigate } from "react-router-dom"
 
 import { apiRegister } from "../lib/api"
 
+// Same allow-lists the backend enforces.
+const NAME_PATTERN = /^[A-Za-z\s'-]+$/
+const EMAIL_PATTERN = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/
+
 function Register() {
   const navigate = useNavigate()
 
@@ -57,24 +61,40 @@ function Register() {
       return
     }
 
+    if (!NAME_PATTERN.test(name.trim())) {
+      setError(
+        "Name can only contain letters, spaces, apostrophes and hyphens.",
+      )
+      return
+    }
+
+    if (!EMAIL_PATTERN.test(email.trim())) {
+      setError(
+        "Please enter a valid email address (letters, numbers, and . _ % + - only).",
+      )
+      return
+    }
+
     setSubmitting(true)
 
     try {
-      const user = await apiRegister(
+      const registeredEmail = email.trim().toLowerCase()
+
+      await apiRegister(
         name.trim(),
-        email.trim().toLowerCase(),
+        registeredEmail,
         password,
         role,
       )
 
       setSuccess(
-        user.role === "super_admin"
-          ? "Super Administrator account created successfully."
-          : "Account created successfully.",
+        "Account created. Check your email for a verification code...",
       )
 
       setTimeout(() => {
-        navigate("/login")
+        navigate("/verify-email", {
+          state: { email: registeredEmail },
+        })
       }, 1000)
     } catch (err) {
       setError(

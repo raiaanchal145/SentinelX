@@ -13,6 +13,15 @@ type LoginResponse = {
   user: ApiUser
 }
 
+type RegisterResponse = {
+  email: string
+  message: string
+}
+
+type MessageResponse = {
+  message: string
+}
+
 type StatsOverview = {
   users: number
   assets: number
@@ -73,9 +82,23 @@ export function apiRegister(
   password: string,
   role: string,
 ) {
-  return request<ApiUser>("/auth/register", {
+  return request<RegisterResponse>("/auth/register", {
     method: "POST",
     body: JSON.stringify({ name, email, password, role }),
+  })
+}
+
+export function apiVerifyEmail(email: string, code: string) {
+  return request<ApiUser>("/auth/verify-email", {
+    method: "POST",
+    body: JSON.stringify({ email, code }),
+  })
+}
+
+export function apiResendVerification(email: string) {
+  return request<MessageResponse>("/auth/resend-verification", {
+    method: "POST",
+    body: JSON.stringify({ email }),
   })
 }
 
