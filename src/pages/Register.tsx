@@ -9,18 +9,7 @@ import {
 
 import { useNavigate } from "react-router-dom"
 
-const SUPER_ADMIN_EMAILS = [
-  "anchal01@gmail.com",
-  "ansh02@gmail.com.com",
-  "retika03@gmail.com",
-]
-
-type User = {
-  name: string
-  email: string
-  password: string
-  role: string
-}
+import { apiRegister } from "../lib/api"
 
 function Register() {
   const navigate = useNavigate()
@@ -39,7 +28,10 @@ function Register() {
   const [success, setSuccess] =
     useState("")
 
-  const handleRegister = (
+  const [submitting, setSubmitting] =
+    useState(false)
+
+  const handleRegister = async (
     e: FormEvent,
   ) => {
     e.preventDefault()
@@ -65,59 +57,34 @@ function Register() {
       return
     }
 
-    const storedUsers =
-      JSON.parse(
-        localStorage.getItem(
-          "sentinelx_users",
-        ) || "[]",
-      ) as User[]
+    setSubmitting(true)
 
-    const alreadyExists =
-      storedUsers.some(
-        (user) =>
-          user.email.toLowerCase() ===
-          email.toLowerCase(),
+    try {
+      const user = await apiRegister(
+        name.trim(),
+        email.trim().toLowerCase(),
+        password,
+        role,
       )
 
-    if (alreadyExists) {
+      setSuccess(
+        user.role === "super_admin"
+          ? "Super Administrator account created successfully."
+          : "Account created successfully.",
+      )
+
+      setTimeout(() => {
+        navigate("/login")
+      }, 1000)
+    } catch (err) {
       setError(
-        "An account already exists with this email.",
+        err instanceof Error
+          ? err.message
+          : "Could not create the account. Please try again.",
       )
-      return
+    } finally {
+      setSubmitting(false)
     }
-
-    const isSuperAdmin =
-      SUPER_ADMIN_EMAILS.includes(
-        email.toLowerCase(),
-      )
-
-    const newUser: User = {
-      name,
-      email: email.toLowerCase(),
-      password,
-      role: isSuperAdmin
-        ? "super_admin"
-        : role,
-    }
-
-    storedUsers.push(newUser)
-
-    localStorage.setItem(
-      "sentinelx_users",
-      JSON.stringify(
-        storedUsers,
-      ),
-    )
-
-    setSuccess(
-      isSuperAdmin
-        ? "Super Administrator account created successfully."
-        : "Account created successfully.",
-    )
-
-    setTimeout(() => {
-      navigate("/login")
-    }, 1000)
   }
 
   return (
@@ -262,9 +229,10 @@ function Register() {
 
           <button
             type="submit"
-            className="w-full rounded-xl bg-blue-600 py-3 font-medium hover:bg-blue-500"
+            disabled={submitting}
+            className="w-full rounded-xl bg-blue-600 py-3 font-medium hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            Create Account
+            {submitting ? "Creating account..." : "Create Account"}
           </button>
 
         </form>
