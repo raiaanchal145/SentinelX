@@ -104,21 +104,21 @@ function Login() {
   }
 
   return (
-    <div className="min-h-screen bg-[#021325] text-white">
+    <div className="min-h-screen bg-canvas text-white">
 
       <div className="flex min-h-screen">
 
-        <div className="hidden flex-1 items-center justify-center border-r border-white/10 bg-[#061727] lg:flex">
+        <div className="hidden flex-1 items-center justify-center border-r border-white/10 bg-surface-sunken lg:flex">
 
           <div className="max-w-xl px-14">
 
             <div className="mb-8 flex items-center gap-3">
 
-              <div className="rounded-xl bg-blue-500/10 p-3">
+              <div className="rounded-xl bg-brand-500/10 p-3">
 
                 <ShieldCheck
                   size={32}
-                  className="text-blue-400"
+                  className="text-brand-400"
                 />
 
               </div>
@@ -128,13 +128,13 @@ function Login() {
                 <h1 className="text-3xl font-bold">
 
                   Sentinel
-                  <span className="text-blue-400">
+                  <span className="text-brand-400">
                     X
                   </span>
 
                 </h1>
 
-                <p className="text-sm text-slate-500">
+                <p className="text-sm text-fg-muted">
                   AI-Powered Security Operations
                 </p>
 
@@ -147,13 +147,13 @@ function Login() {
               Security operations,
               <br />
 
-              <span className="text-blue-400">
+              <span className="text-brand-400">
                 simplified.
               </span>
 
             </h2>
 
-            <p className="mt-6 text-base leading-7 text-slate-400">
+            <p className="mt-6 text-base leading-7 text-fg-subtle">
 
               Monitor security events, investigate
               incidents, analyze threats and manage
@@ -170,13 +170,13 @@ function Login() {
 
           <div className="w-full max-w-md">
 
-            <div className="rounded-2xl border border-white/10 bg-[#0b1f33] p-8 shadow-2xl">
+            <div className="rounded-2xl border border-white/10 bg-surface p-8 shadow-2xl">
 
               <h2 className="text-2xl font-semibold">
                 Welcome back
               </h2>
 
-              <p className="mt-2 text-sm text-slate-500">
+              <p className="mt-2 text-sm text-fg-muted">
                 Sign in to SentinelX.
               </p>
 
@@ -187,7 +187,7 @@ function Login() {
 
                 <div>
 
-                  <label className="mb-2 block text-sm text-slate-300">
+                  <label className="mb-2 block text-sm text-fg-secondary">
                     Email address
                   </label>
 
@@ -200,7 +200,7 @@ function Login() {
                       )
                     }
                     placeholder="you@example.com"
-                    className="w-full rounded-xl border border-white/10 bg-[#061727] px-4 py-3 outline-none focus:border-blue-500"
+                    className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 outline-none focus:border-brand-500"
                     required
                   />
 
@@ -208,7 +208,7 @@ function Login() {
 
                 <div>
 
-                  <label className="mb-2 block text-sm text-slate-300">
+                  <label className="mb-2 block text-sm text-fg-secondary">
                     Password
                   </label>
 
@@ -227,7 +227,7 @@ function Login() {
                         )
                       }
                       placeholder="Enter password"
-                      className="w-full rounded-xl border border-white/10 bg-[#061727] px-4 py-3 pr-12 outline-none focus:border-blue-500"
+                      className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 pr-12 outline-none focus:border-brand-500"
                       required
                     />
 
@@ -238,7 +238,7 @@ function Login() {
                           !showPassword,
                         )
                       }
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-muted"
                     >
 
                       {showPassword
@@ -254,7 +254,7 @@ function Login() {
 
                 {error && (
 
-                  <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-400">
+                  <div className="rounded-xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger-fg">
                     {error}
                   </div>
 
@@ -263,14 +263,14 @@ function Login() {
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="w-full rounded-xl bg-blue-600 py-3 font-medium transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="w-full rounded-xl bg-brand-600 py-3 font-medium transition hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {submitting ? "Signing in..." : "Sign in"}
                 </button>
 
               </form>
 
-              <div className="mt-6 text-center text-sm text-slate-500">
+              <div className="mt-6 text-center text-sm text-fg-muted">
 
                 Need an account?{" "}
 
@@ -280,7 +280,7 @@ function Login() {
                       "/register",
                     )
                   }
-                  className="text-blue-400 hover:text-blue-300"
+                  className="text-brand-400 hover:text-brand-300"
                 >
                   Register
                 </button>

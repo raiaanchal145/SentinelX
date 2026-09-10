@@ -39,7 +39,7 @@ function OrganizationDashboard() {
   }, [])
 
   return (
-    <div className="flex min-h-screen bg-[#021325] text-white">
+    <div className="flex min-h-screen bg-canvas text-white">
 
       <Sidebar />
 
@@ -51,7 +51,7 @@ function OrganizationDashboard() {
 
           <div className="mb-8">
 
-            <p className="text-sm text-blue-400">
+            <p className="text-sm text-brand-400">
               Organization Management
             </p>
 
@@ -59,7 +59,7 @@ function OrganizationDashboard() {
               Organization Dashboard
             </h1>
 
-            <p className="mt-2 text-sm text-slate-500">
+            <p className="mt-2 text-sm text-fg-muted">
               Monitor users, assets, security posture
               and organization activity.
             </p>
@@ -108,7 +108,7 @@ function OrganizationDashboard() {
 
           <div className="mt-8 grid gap-6 xl:grid-cols-3">
 
-            <section className="rounded-2xl border border-white/10 bg-[#0b1f33] p-6 xl:col-span-2">
+            <section className="rounded-2xl border border-white/10 bg-surface p-6 xl:col-span-2">
 
               <div className="flex items-center justify-between">
 
@@ -118,13 +118,13 @@ function OrganizationDashboard() {
                     Organization Overview
                   </h2>
 
-                  <p className="mt-1 text-sm text-slate-500">
+                  <p className="mt-1 text-sm text-fg-muted">
                     Infrastructure and organization information.
                   </p>
 
                 </div>
 
-                <select className="rounded-xl border border-white/10 bg-[#061727] px-4 py-2 text-sm">
+                <select className="rounded-xl border border-white/10 bg-surface-sunken px-4 py-2 text-sm">
 
                   <option>
                     Current Organization
@@ -178,13 +178,13 @@ function OrganizationDashboard() {
 
             </section>
 
-            <section className="rounded-2xl border border-white/10 bg-[#0b1f33] p-6">
+            <section className="rounded-2xl border border-white/10 bg-surface p-6">
 
               <h2 className="text-lg font-semibold">
                 Security Summary
               </h2>
 
-              <p className="mt-1 text-sm text-slate-500">
+              <p className="mt-1 text-sm text-fg-muted">
                 Organization-wide threat summary.
               </p>
 
@@ -212,7 +212,7 @@ function OrganizationDashboard() {
 
           </div>
 
-          <section className="mt-8 rounded-2xl border border-white/10 bg-[#0b1f33] p-6">
+          <section className="mt-8 rounded-2xl border border-white/10 bg-surface p-6">
 
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 
@@ -222,7 +222,7 @@ function OrganizationDashboard() {
                   Organization Activity
                 </h2>
 
-                <p className="mt-1 text-sm text-slate-500">
+                <p className="mt-1 text-sm text-fg-muted">
                   Recent organization and security activity.
                 </p>
 
@@ -230,7 +230,7 @@ function OrganizationDashboard() {
 
               <div className="flex gap-3">
 
-                <select className="rounded-lg border border-white/10 bg-[#061727] px-3 py-2 text-sm">
+                <select className="rounded-lg border border-white/10 bg-surface-sunken px-3 py-2 text-sm">
 
                   <option>
                     All Activity
@@ -250,7 +250,7 @@ function OrganizationDashboard() {
 
                 </select>
 
-                <select className="rounded-lg border border-white/10 bg-[#061727] px-3 py-2 text-sm">
+                <select className="rounded-lg border border-white/10 bg-surface-sunken px-3 py-2 text-sm">
 
                   <option>
                     Last 24 Hours
@@ -270,18 +270,18 @@ function OrganizationDashboard() {
 
             </div>
 
-            <div className="mt-6 flex min-h-[200px] flex-col items-center justify-center rounded-xl border border-dashed border-white/10 bg-[#061727]">
+            <div className="mt-6 flex min-h-[200px] flex-col items-center justify-center rounded-xl border border-dashed border-white/10 bg-surface-sunken">
 
               <AlertTriangle
                 size={28}
-                className="text-slate-600"
+                className="text-fg-faint"
               />
 
               <p className="mt-4 font-medium">
                 No organization activity available
               </p>
 
-              <p className="mt-2 text-sm text-slate-500">
+              <p className="mt-2 text-sm text-fg-muted">
                 Activity will appear when organization
                 data is connected.
               </p>
@@ -308,17 +308,17 @@ function OrganizationCard({
   icon: React.ReactNode
 }) {
   return (
-    <div className="rounded-xl border border-white/10 bg-[#061727] p-5">
+    <div className="rounded-xl border border-white/10 bg-surface-sunken p-5">
 
       <div className="flex items-center gap-3">
 
-        <div className="rounded-lg bg-blue-500/10 p-3 text-blue-400">
+        <div className="rounded-lg bg-brand-500/10 p-3 text-brand-400">
           {icon}
         </div>
 
         <div>
 
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-fg-muted">
             {title}
           </p>
 
@@ -344,7 +344,7 @@ function SecurityItem({
     | "Low"
 }) {
   return (
-    <div className="flex items-center justify-between rounded-xl border border-white/10 bg-[#061727] p-4">
+    <div className="flex items-center justify-between rounded-xl border border-white/10 bg-surface-sunken p-4">
 
       <SeverityBadge
         severity={severity}

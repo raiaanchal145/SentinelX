@@ -12,13 +12,13 @@ function StatCard({
   icon: LucideIcon
 }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-[#0b1f33] p-5 transition hover:border-blue-500/40">
+    <div className="rounded-2xl border border-white/10 bg-surface p-5 transition hover:border-brand-500/40">
 
       <div className="flex items-start justify-between">
 
         <div>
 
-          <p className="text-sm text-slate-400">
+          <p className="text-sm text-fg-subtle">
             {title}
           </p>
 
@@ -28,18 +28,18 @@ function StatCard({
 
         </div>
 
-        <div className="rounded-xl bg-blue-500/10 p-3">
+        <div className="rounded-xl bg-brand-500/10 p-3">
 
           <Icon
             size={22}
-            className="text-blue-400"
+            className="text-brand-400"
           />
 
         </div>
 
       </div>
 
-      <p className="mt-4 text-xs text-slate-500">
+      <p className="mt-4 text-xs text-fg-muted">
         {description}
       </p>
 

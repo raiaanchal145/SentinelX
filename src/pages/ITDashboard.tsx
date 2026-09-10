@@ -12,7 +12,7 @@ import EmptyState from "../components/EmptyState"
 
 function ITDashboard() {
   return (
-    <div className="flex min-h-screen bg-[#021325] text-white">
+    <div className="flex min-h-screen bg-canvas text-white">
 
       <Sidebar />
 
@@ -24,7 +24,7 @@ function ITDashboard() {
 
           <div className="mb-8">
 
-            <p className="text-sm text-blue-400">
+            <p className="text-sm text-brand-400">
               IT & Development
             </p>
 
@@ -32,7 +32,7 @@ function ITDashboard() {
               IT Dashboard
             </h1>
 
-            <p className="mt-2 text-sm text-slate-500">
+            <p className="mt-2 text-sm text-fg-muted">
               View and manage assigned remediation tasks.
             </p>
 
@@ -70,7 +70,7 @@ function ITDashboard() {
 
           </div>
 
-          <section className="mt-8 rounded-2xl border border-white/10 bg-[#0b1f33] p-6">
+          <section className="mt-8 rounded-2xl border border-white/10 bg-surface p-6">
 
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 
@@ -80,7 +80,7 @@ function ITDashboard() {
                   Remediation Tasks
                 </h2>
 
-                <p className="mt-1 text-sm text-slate-500">
+                <p className="mt-1 text-sm text-fg-muted">
                   Security remediation tasks assigned
                   to the IT team.
                 </p>
@@ -89,7 +89,7 @@ function ITDashboard() {
 
               <div className="flex gap-3">
 
-                <select className="rounded-lg border border-white/10 bg-[#061727] px-3 py-2 text-sm">
+                <select className="rounded-lg border border-white/10 bg-surface-sunken px-3 py-2 text-sm">
 
                   <option>
                     All Priority
@@ -113,7 +113,7 @@ function ITDashboard() {
 
                 </select>
 
-                <select className="rounded-lg border border-white/10 bg-[#061727] px-3 py-2 text-sm">
+                <select className="rounded-lg border border-white/10 bg-surface-sunken px-3 py-2 text-sm">
 
                   <option>
                     All Status

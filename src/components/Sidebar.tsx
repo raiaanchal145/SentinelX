@@ -119,7 +119,7 @@ function Sidebar() {
         : itItems
 
   return (
-    <aside className="flex min-h-screen w-72 flex-col border-r border-white/10 bg-[#061727]">
+    <aside className="flex min-h-screen w-72 flex-col border-r border-white/10 bg-surface-sunken">
 
       {/* LOGO */}
 
@@ -127,11 +127,11 @@ function Sidebar() {
 
         <div className="flex items-center gap-3">
 
-          <div className="rounded-xl bg-blue-500/10 p-2.5">
+          <div className="rounded-xl bg-brand-500/10 p-2.5">
 
             <ShieldCheck
               size={27}
-              className="text-blue-400"
+              className="text-brand-400"
             />
 
           </div>
@@ -141,13 +141,13 @@ function Sidebar() {
             <h1 className="text-xl font-bold text-white">
 
               Sentinel
-              <span className="text-blue-400">
+              <span className="text-brand-400">
                 X
               </span>
 
             </h1>
 
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-fg-muted">
               AI Security Operations
             </p>
 
@@ -171,8 +171,8 @@ function Sidebar() {
               className={({ isActive }) =>
                 `flex items-center gap-3 rounded-xl px-4 py-3 text-sm transition ${
                   isActive
-                    ? "bg-blue-500/10 text-blue-400"
-                    : "text-slate-400 hover:bg-white/5 hover:text-white"
+                    ? "bg-brand-500/10 text-brand-400"
+                    : "text-fg-subtle hover:bg-white/5 hover:text-white"
                 }`
               }
             >
@@ -191,13 +191,13 @@ function Sidebar() {
 
       <div className="mt-auto p-5">
 
-        <div className="rounded-xl border border-blue-500/10 bg-blue-500/5 p-4">
+        <div className="rounded-xl border border-brand-500/10 bg-brand-500/5 p-4">
 
-          <p className="text-xs font-medium text-blue-300">
+          <p className="text-xs font-medium text-brand-300">
             SentinelX Platform
           </p>
 
-          <p className="mt-1 text-xs leading-5 text-slate-500">
+          <p className="mt-1 text-xs leading-5 text-fg-muted">
             AI-powered security monitoring and incident response.
           </p>
 

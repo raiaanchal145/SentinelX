@@ -8,13 +8,13 @@ function EmptyState({
   description: string
 }) {
   return (
-    <div className="flex min-h-[260px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/10 bg-[#081827] p-8 text-center">
+    <div className="flex min-h-[260px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/10 bg-surface p-8 text-center">
 
-      <div className="rounded-full bg-blue-500/10 p-4">
+      <div className="rounded-full bg-brand-500/10 p-4">
 
         <ShieldCheck
           size={32}
-          className="text-blue-400"
+          className="text-brand-400"
         />
 
       </div>
@@ -23,7 +23,7 @@ function EmptyState({
         {title}
       </h3>
 
-      <p className="mt-2 max-w-md text-sm text-slate-500">
+      <p className="mt-2 max-w-md text-sm text-fg-muted">
         {description}
       </p>
 

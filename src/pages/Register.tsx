@@ -1,5 +1,4 @@
 import {
-  FormEvent,
   useState,
 } from "react"
 
@@ -108,16 +107,16 @@ function Register() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#021325] px-6 text-white">
+    <div className="flex min-h-screen items-center justify-center bg-canvas px-6 text-white">
 
-      <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0b1f33] p-8">
+      <div className="w-full max-w-md rounded-2xl border border-white/10 bg-surface p-8">
 
         <div className="mb-8 flex items-center gap-3">
 
-          <div className="rounded-xl bg-blue-500/10 p-3">
+          <div className="rounded-xl bg-brand-500/10 p-3">
 
             <ShieldCheck
-              className="text-blue-400"
+              className="text-brand-400"
               size={28}
             />
 
@@ -129,7 +128,7 @@ function Register() {
               Create Account
             </h1>
 
-            <p className="text-sm text-slate-500">
+            <p className="text-sm text-fg-muted">
               Join SentinelX
             </p>
 
@@ -155,7 +154,7 @@ function Register() {
                   e.target.value,
                 )
               }
-              className="w-full rounded-xl border border-white/10 bg-[#061727] px-4 py-3 outline-none focus:border-blue-500"
+              className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 outline-none focus:border-brand-500"
               required
             />
 
@@ -175,7 +174,7 @@ function Register() {
                   e.target.value,
                 )
               }
-              className="w-full rounded-xl border border-white/10 bg-[#061727] px-4 py-3 outline-none focus:border-blue-500"
+              className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 outline-none focus:border-brand-500"
               required
             />
 
@@ -195,7 +194,7 @@ function Register() {
                   e.target.value,
                 )
               }
-              className="w-full rounded-xl border border-white/10 bg-[#061727] px-4 py-3 outline-none focus:border-blue-500"
+              className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 outline-none focus:border-brand-500"
               required
             />
 
@@ -214,7 +213,7 @@ function Register() {
                   e.target.value,
                 )
               }
-              className="w-full rounded-xl border border-white/10 bg-[#061727] px-4 py-3 outline-none focus:border-blue-500"
+              className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 outline-none focus:border-brand-500"
             >
 
               <option value="soc_analyst">
@@ -227,7 +226,7 @@ function Register() {
 
             </select>
 
-            <p className="mt-2 text-xs text-slate-500">
+            <p className="mt-2 text-xs text-fg-muted">
               Super Administrator access is
               automatically assigned only to the
               three configured administrator emails.
@@ -236,13 +235,13 @@ function Register() {
           </div>
 
           {error && (
-            <div className="rounded-xl bg-red-500/10 p-3 text-sm text-red-400">
+            <div className="rounded-xl bg-danger/10 p-3 text-sm text-danger-fg">
               {error}
             </div>
           )}
 
           {success && (
-            <div className="rounded-xl bg-green-500/10 p-3 text-sm text-green-400">
+            <div className="rounded-xl bg-success/10 p-3 text-sm text-success-fg">
               {success}
             </div>
           )}
@@ -250,14 +249,14 @@ function Register() {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full rounded-xl bg-blue-600 py-3 font-medium hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+            className="w-full rounded-xl bg-brand-600 py-3 font-medium hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {submitting ? "Creating account..." : "Create Account"}
           </button>
 
         </form>
 
-        <div className="mt-6 text-center text-sm text-slate-500">
+        <div className="mt-6 text-center text-sm text-fg-muted">
 
           Already have an account?{" "}
 
@@ -265,7 +264,7 @@ function Register() {
             onClick={() =>
               navigate("/login")
             }
-            className="text-blue-400"
+            className="text-brand-400"
           >
             Sign in
           </button>
