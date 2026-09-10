@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react"
+
 import {
   Activity,
   Server,
@@ -10,7 +12,30 @@ import Topbar from "../components/Topbar"
 import StatCard from "../components/StatCard"
 import SeverityBadge from "../components/SeverityBadge"
 
+import { apiGetStatsOverview } from "../lib/api"
+
 function AdminDashboard() {
+  const [assetsCount, setAssetsCount] = useState<number | null>(null)
+  const [usersCount, setUsersCount] = useState<number | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    apiGetStatsOverview()
+      .then((stats) => {
+        if (cancelled) return
+        setAssetsCount(stats.assets)
+        setUsersCount(stats.users)
+      })
+      .catch(() => {
+        // Backend not reachable -- leave the cards showing "0" rather than crash the page.
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   return (
     <div className="flex min-h-screen bg-[#021325] text-white">
 
@@ -42,14 +67,22 @@ function AdminDashboard() {
 
             <StatCard
               title="Organization Assets"
-              value="0"
+              value={
+                assetsCount === null
+                  ? "..."
+                  : String(assetsCount)
+              }
               description="Registered infrastructure assets"
               icon={Server}
             />
 
             <StatCard
               title="Security Users"
-              value="0"
+              value={
+                usersCount === null
+                  ? "..."
+                  : String(usersCount)
+              }
               description="Registered organization users"
               icon={Users}
             />

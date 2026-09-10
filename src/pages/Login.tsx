@@ -11,29 +11,7 @@ import {
 
 import { useNavigate } from "react-router-dom"
 
-const SUPER_ADMINS = [
-  {
-    email: "anchal01@gmail.com",
-    password: "Sentinel@123",
-    name: "Anchal",
-  },
-  {
-    email: "ansh02@gmail.com",
-    password: "Sentinel@123",
-    name: "Ansh",
-  },
-  {
-    email: "retika03@gmail.com",
-    password: "Sentinel@123",
-    name: "Retika",
-  },
-]
-type User = {
-  name: string
-  email: string
-  password: string
-  role: string
-}
+import { apiLogin } from "../lib/api"
 
 function Login() {
   const navigate = useNavigate()
@@ -50,103 +28,68 @@ function Login() {
   const [error, setError] =
     useState("")
 
-  const handleLogin = (
-  e: FormEvent<HTMLFormElement>,
-) => {
-  e.preventDefault()
+  const [submitting, setSubmitting] =
+    useState(false)
 
-  setError("")
+  const handleLogin = async (
+    e: FormEvent<HTMLFormElement>,
+  ) => {
+    e.preventDefault()
 
-  const loginEmail =
-    email.trim().toLowerCase()
+    setError("")
+    setSubmitting(true)
 
-  // Check fixed Super Admin accounts
-  const superAdmin = SUPER_ADMINS.find(
-    (admin) =>
-      admin.email.toLowerCase() ===
-      loginEmail,
-  )
+    try {
+      const { access_token, user } =
+        await apiLogin(email, password)
 
-  if (superAdmin) {
-    if (superAdmin.password !== password) {
-      setError("Invalid email or password.")
-      return
+      localStorage.setItem(
+        "sentinelx_token",
+        access_token,
+      )
+
+      localStorage.setItem(
+        "sentinelx_logged_in",
+        "true",
+      )
+
+      localStorage.setItem(
+        "sentinelx_role",
+        user.role,
+      )
+
+      localStorage.setItem(
+        "sentinelx_name",
+        user.name,
+      )
+
+      localStorage.setItem(
+        "sentinelx_email",
+        user.email,
+      )
+
+      if (user.role === "super_admin") {
+        navigate("/admin")
+      } else if (user.role === "organization_admin") {
+        navigate("/organization-dashboard")
+      } else if (user.role === "soc_analyst") {
+        navigate("/soc-dashboard")
+      } else if (user.role === "it_developer") {
+        navigate("/it-dashboard")
+      } else {
+        // auditor and any future roles without a dedicated dashboard yet
+        navigate("/soc-dashboard")
+      }
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Invalid email or password.",
+      )
+    } finally {
+      setSubmitting(false)
     }
-
-    localStorage.setItem(
-      "sentinelx_logged_in",
-      "true",
-    )
-
-    localStorage.setItem(
-      "sentinelx_role",
-      "super_admin",
-    )
-
-    localStorage.setItem(
-      "sentinelx_name",
-      superAdmin.name,
-    )
-
-    localStorage.setItem(
-      "sentinelx_email",
-      superAdmin.email,
-    )
-
-    navigate("/admin")
-    return
   }
-
-  // Check normal registered users
-  const storedUsers =
-    JSON.parse(
-      localStorage.getItem(
-        "sentinelx_users",
-      ) || "[]",
-    ) as User[]
-
-  const user = storedUsers.find(
-    (item) =>
-      item.email?.trim().toLowerCase() ===
-        loginEmail &&
-      item.password === password,
-  )
-
-  if (!user) {
-    setError("Invalid email or password.")
-    return
-  }
-
-  localStorage.setItem(
-    "sentinelx_logged_in",
-    "true",
-  )
-
-  localStorage.setItem(
-    "sentinelx_role",
-    user.role,
-  )
-
-  localStorage.setItem(
-    "sentinelx_name",
-    user.name,
-  )
-
-  localStorage.setItem(
-    "sentinelx_email",
-    user.email,
-  )
-
-  if (user.role === "organization") {
-    navigate("/organization-dashboard")
-  } else if (user.role === "soc_analyst") {
-    navigate("/soc-dashboard")
-  } else if (user.role === "it_developer") {
-    navigate("/it-dashboard")
-  } else {
-    setError("Invalid account role.")
-  }
-}
 
   return (
     <div className="min-h-screen bg-[#021325] text-white">
@@ -307,9 +250,10 @@ function Login() {
 
                 <button
                   type="submit"
-                  className="w-full rounded-xl bg-blue-600 py-3 font-medium transition hover:bg-blue-500"
+                  disabled={submitting}
+                  className="w-full rounded-xl bg-blue-600 py-3 font-medium transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Sign in
+                  {submitting ? "Signing in..." : "Sign in"}
                 </button>
 
               </form>

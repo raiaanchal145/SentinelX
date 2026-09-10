@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react"
+
 import {
   Activity,
   AlertTriangle,
@@ -12,7 +14,30 @@ import Topbar from "../components/Topbar"
 import StatCard from "../components/StatCard"
 import SeverityBadge from "../components/SeverityBadge"
 
+import { apiGetStatsOverview } from "../lib/api"
+
 function OrganizationDashboard() {
+  const [usersCount, setUsersCount] = useState<number | null>(null)
+  const [assetsCount, setAssetsCount] = useState<number | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    apiGetStatsOverview()
+      .then((stats) => {
+        if (cancelled) return
+        setUsersCount(stats.users)
+        setAssetsCount(stats.assets)
+      })
+      .catch(() => {
+        // Backend not reachable -- leave the cards showing their defaults rather than crash the page.
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   return (
     <div className="flex min-h-screen bg-[#021325] text-white">
 
@@ -45,14 +70,22 @@ function OrganizationDashboard() {
 
             <StatCard
               title="Organization Users"
-              value="0"
+              value={
+                usersCount === null
+                  ? "..."
+                  : String(usersCount)
+              }
               description="Total registered users"
               icon={Users}
             />
 
             <StatCard
               title="Registered Assets"
-              value="0"
+              value={
+                assetsCount === null
+                  ? "..."
+                  : String(assetsCount)
+              }
               description="Organization infrastructure"
               icon={Server}
             />
@@ -115,13 +148,23 @@ function OrganizationDashboard() {
 
                 <OrganizationCard
                   title="Infrastructure"
-                  value="No Assets Registered"
+                  value={
+                    assetsCount === null
+                      ? "Loading..."
+                      : assetsCount === 0
+                        ? "No Assets Registered"
+                        : `${assetsCount} Asset${assetsCount === 1 ? "" : "s"} Registered`
+                  }
                   icon={<Server size={21} />}
                 />
 
                 <OrganizationCard
                   title="Users"
-                  value="0 Active Users"
+                  value={
+                    usersCount === null
+                      ? "Loading..."
+                      : `${usersCount} Active User${usersCount === 1 ? "" : "s"}`
+                  }
                   icon={<Users size={21} />}
                 />
 
