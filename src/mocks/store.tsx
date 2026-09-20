@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from "react"
 
-import type { AuditEntry, Evidence, Ticket } from "../types"
+import type { AlertStatus, AuditEntry, Evidence, Ticket } from "../types"
 import { buildSeedData, type SeedData } from "./seed"
 import { getSession } from "../lib/auth"
 
@@ -16,6 +16,7 @@ type Action =
   | { type: "ACK_ALERT"; alertId: string; actorName: string }
   | { type: "ASSIGN_ALERT_TO_ME"; alertId: string; userId: string; actorName: string }
   | { type: "DISMISS_ALERT"; alertId: string; reason: string; actorName: string }
+  | { type: "RESTORE_ALERT_STATUS"; alertId: string; status: AlertStatus; actorName: string }
   | { type: "ESCALATE_ALERT"; alertId: string; actorName: string }
   | { type: "CREATE_TICKET_FROM_ALERT"; alertId: string; ticket: Ticket; actorName: string }
   | { type: "IT_ACK_TICKET"; ticketId: string; actorName: string }
@@ -102,6 +103,26 @@ function reducer(state: StoreState, action: Action): StoreState {
           targetType: "alert",
           targetId: alert.id,
           details: action.reason,
+        }),
+      }
+    }
+
+    case "RESTORE_ALERT_STATUS": {
+      const alert = state.alerts.find((a) => a.id === action.alertId)
+      if (!alert) return state
+      return {
+        ...state,
+        alerts: state.alerts.map((a) =>
+          a.id === action.alertId ? { ...a, status: action.status, dismissReason: null } : a,
+        ),
+        audit: appendAudit(state, {
+          organizationId: alert.organizationId,
+          actorType: "user",
+          actorName: action.actorName,
+          action: "alert.restore",
+          targetType: "alert",
+          targetId: alert.id,
+          details: `undo -> ${action.status}`,
         }),
       }
     }

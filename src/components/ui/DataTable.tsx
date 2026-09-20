@@ -19,6 +19,10 @@ type DataTableProps<T> = {
   emptyState?: ReactNode
   onRowActivate?: (row: T) => void
   rowHref?: (row: T) => string | undefined
+  /** Called for every keydown on a focused row, after the built-in
+   * Up/Down/Enter handling -- use it for row-level hotkeys like "a" to
+   * acknowledge, "d" to dismiss. */
+  onRowKeyDown?: (row: T, event: KeyboardEvent<HTMLTableRowElement>) => void
 }
 
 /** Sticky header, sortable columns, keyboard row navigation (Up/Down + Enter),
@@ -33,6 +37,7 @@ function DataTable<T>({
   emptyState,
   onRowActivate,
   rowHref,
+  onRowKeyDown,
 }: DataTableProps<T>) {
   const [sortKey, setSortKey] = useState<string | null>(null)
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
@@ -78,6 +83,7 @@ function DataTable<T>({
     } else if (event.key === "Enter") {
       onRowActivate?.(row)
     }
+    onRowKeyDown?.(row, event)
   }
 
   if (loading) {
