@@ -36,3 +36,7 @@ backend/.env
 pgdata/
 *.pgdata/
 postgres-data/
+
+# Dev launcher (scripts/dev.mjs) state and logs -- per-machine only
+.dev-state.json
+.dev-logs/
