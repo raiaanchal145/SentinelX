@@ -26,27 +26,52 @@ export function openWindow({ cwd, command, args, title }) {
   const fullCommand = [command, ...args].map(quoteWin).join(' ');
 
   if (IS_WIN) {
-    // PowerShell's Start-Process -PassThru is the one Windows-native way to
-    // reliably get back the PID of a *detached* process -- `cmd /c start`
-    // launched directly from Node only gives us the short-lived launcher
-    // process's PID, not the window's. We still only ever run one inline
-    // -Command string (never a .ps1 file), so this does not hit the
-    // execution-policy restrictions that apply to script files.
-    const useWt = commandExists('wt');
-    const innerCmd = `cmd.exe /k "${fullCommand}"`;
-    const psCommand = useWt
-      ? `$p = Start-Process wt.exe -ArgumentList 'new-tab','--title','${title}','-d','${cwd}',${innerCmdArgsForWt(fullCommand)} -PassThru; $p.Id`
-      : `$p = Start-Process cmd.exe -ArgumentList '/k','${fullCommand.replace(/'/g, "''")}' -WorkingDirectory '${cwd}' -PassThru; $p.Id`;
+    // Prefer spawning wt.exe (Windows Terminal) directly through Node, with
+    // a clean argv array -- Node's own Windows argument encoding quotes
+    // each element correctly, title included, even though it contains a
+    // space. We get the real PID straight from spawn().pid; no PowerShell
+    // involved for this path at all.
+    //
+    // (This used to go through `Start-Process -ArgumentList <array>`
+    // instead. That hit a real, documented PowerShell bug: Start-Process
+    // does not reliably quote array elements that contain spaces before
+    // building the child's command line -- it silently dropped the quotes
+    // around the title, so wt.exe received a corrupted command line and
+    // failed outright with "the system cannot find the file specified".
+    // Spawning wt.exe directly sidesteps that layer entirely.)
+    if (commandExists('wt')) {
+      const child = spawn(
+        'wt.exe',
+        ['new-tab', '--title', title, '-d', cwd, 'cmd.exe', '/k', fullCommand],
+        { detached: true, stdio: 'ignore' }
+      );
+      child.unref();
+      if (child.pid) return child.pid;
+      log.warn('wt.exe did not report a PID -- falling back to a plain console window.');
+    }
 
-    const result = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', psCommand], {
+    // No Windows Terminal (or it failed to spawn): fall back to a plain
+    // console window. `cmd /c start` alone only gives Node the short-lived
+    // launcher's PID, not the window's, so PowerShell's Start-Process is
+    // still needed here for a real PID -- but this time as a single
+    // pre-quoted string (not an array), which does not hit the quoting bug
+    // above, and with the command/cwd passed through environment variables
+    // instead of interpolated into the script string, so nothing about
+    // them needs escaping for PowerShell's sake.
+    const script =
+      '$p = Start-Process -FilePath "cmd.exe" ' +
+      "-ArgumentList ('/k \"' + $env:SENTINELX_CMD + '\"') " +
+      '-WorkingDirectory $env:SENTINELX_CWD -PassThru; $p.Id';
+    const result = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
       encoding: 'utf8',
+      env: { ...process.env, SENTINELX_CMD: fullCommand, SENTINELX_CWD: cwd },
     });
     const pid = Number((result.stdout || '').trim());
 
     if (!Number.isFinite(pid)) {
       // Last-resort fallback: plain `start`, no PID capture at all.
       log.warn('Could not capture the backend window PID via PowerShell -- falling back to `start` (dev:stop will use the port instead).');
-      spawn('cmd.exe', ['/c', 'start', `"${title}"`, 'cmd', '/k', fullCommand], {
+      spawn('cmd.exe', ['/c', 'start', title, 'cmd', '/k', fullCommand], {
         cwd,
         detached: true,
         stdio: 'ignore',
@@ -79,13 +104,6 @@ export function openWindow({ cwd, command, args, title }) {
     return child.pid || null;
   }
   return null;
-}
-
-function innerCmdArgsForWt(fullCommand) {
-  // wt.exe's -ArgumentList needs each token as its own PowerShell array
-  // element; simplest reliable form is to hand it cmd /k "<command>" as one
-  // quoted token via cmd.exe itself.
-  return `'cmd.exe','/k','${fullCommand.replace(/'/g, "''")}'`;
 }
 
 function shEscape(s) {
