@@ -9,6 +9,7 @@ import path from 'node:path';
 import * as log from './log.mjs';
 import {
   ROOT,
+  IS_WIN,
   sha256File,
   readState,
   writeState,
@@ -26,12 +27,20 @@ const REQUIREMENTS = path.join(ROOT, 'backend', 'requirements.txt');
 const BACKEND_ENV = path.join(ROOT, 'backend', '.env');
 const BACKEND_ENV_EXAMPLE = path.join(ROOT, 'backend', '.env.example');
 
+const NPM_CMD = IS_WIN ? 'npm.cmd' : 'npm';
+
 function run(command, args, opts = {}) {
-  return spawnSync(command, args, {
+  const result = spawnSync(command, args, {
     stdio: 'inherit',
     cwd: ROOT,
     ...opts,
   });
+  if (result.error) {
+    // The process never even started (e.g. ENOENT) -- there is no "output
+    // above" to point to, so say that plainly instead of the generic message.
+    log.error(`Could not run "${command}": ${result.error.message}`);
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,13 +70,18 @@ export function ensureNodeDeps() {
   // what's committed (fast, reproducible across all three teammates'
   // laptops) instead of letting npm re-resolve ranges. Only fall back to
   // `npm install` when there is no lockfile to trust yet.
-  const result = hasLockfile ? run('npm', ['ci']) : run('npm', ['install']);
+  const result = hasLockfile ? run(NPM_CMD, ['ci']) : run(NPM_CMD, ['install']);
 
   if (result.status !== 0) {
     throw new LauncherError(
-      'npm install failed -- see the npm output above for the real error.',
-      'Delete node_modules and re-run `npm run dev`. If it keeps failing, check your ' +
-        'internet connection / npm registry access, or run `npm install` by hand to see the full log.'
+      result.error
+        ? `npm could not be started (${result.error.code || result.error.message}).`
+        : 'npm install failed -- see the npm output above for the real error.',
+      result.error
+        ? 'Make sure Node.js/npm is installed and on PATH (open a new terminal after installing, ' +
+          'since PATH changes need a fresh shell), then re-run `npm run dev`.'
+        : 'Delete node_modules and re-run `npm run dev`. If it keeps failing, check your ' +
+          'internet connection / npm registry access, or run `npm install` by hand to see the full log.'
     );
   }
 
