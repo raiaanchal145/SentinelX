@@ -27,8 +27,6 @@ const REQUIREMENTS = path.join(ROOT, 'backend', 'requirements.txt');
 const BACKEND_ENV = path.join(ROOT, 'backend', '.env');
 const BACKEND_ENV_EXAMPLE = path.join(ROOT, 'backend', '.env.example');
 
-const NPM_CMD = IS_WIN ? 'npm.cmd' : 'npm';
-
 function run(command, args, opts = {}) {
   const result = spawnSync(command, args, {
     stdio: 'inherit',
@@ -41,6 +39,15 @@ function run(command, args, opts = {}) {
     log.error(`Could not run "${command}": ${result.error.message}`);
   }
   return result;
+}
+
+// npm is a .cmd shim on Windows. Node won't exec .cmd/.bat files directly
+// without shell:true (this is Node's own recommended fix for CVE-2024-27980,
+// not a workaround) -- naming "npm.cmd" explicitly instead throws EINVAL on
+// some Node/Windows combinations, so shell:true is the one that's actually
+// reliable. On POSIX this is a no-op (plain "npm" runs fine either way).
+function runNpm(args) {
+  return run('npm', args, { shell: IS_WIN });
 }
 
 // ---------------------------------------------------------------------------
@@ -70,7 +77,7 @@ export function ensureNodeDeps() {
   // what's committed (fast, reproducible across all three teammates'
   // laptops) instead of letting npm re-resolve ranges. Only fall back to
   // `npm install` when there is no lockfile to trust yet.
-  const result = hasLockfile ? run(NPM_CMD, ['ci']) : run(NPM_CMD, ['install']);
+  const result = hasLockfile ? runNpm(['ci']) : runNpm(['install']);
 
   if (result.status !== 0) {
     throw new LauncherError(

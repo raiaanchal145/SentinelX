@@ -357,8 +357,10 @@ async function cmdFullDev() {
   }
 
   log.step('Starting frontend (vite) in this terminal...');
-  const npmCmd = IS_WIN ? 'npm.cmd' : 'npm';
-  const frontendChild = spawn(npmCmd, ['run', 'dev:web'], { cwd: ROOT, stdio: 'inherit' });
+  // shell:true is the reliable way to invoke the "npm" .cmd shim on Windows
+  // (naming "npm.cmd" explicitly can throw EINVAL on some Node/Windows
+  // combinations) -- see the matching comment in lib/first-run.mjs.
+  const frontendChild = spawn('npm', ['run', 'dev:web'], { cwd: ROOT, stdio: 'inherit', shell: IS_WIN });
 
   let cleanedUp = false;
   const cleanup = () => {
