@@ -1,6 +1,6 @@
 # SentinelX one-command dev launcher — report
 
-Branch: `chore/dev-launcher` (off `chore/cleanup-unused`). **Not pushed.** 5 commits, in order:
+**Status: merged into `ansh-dev`/`main`; the `chore/dev-launcher` and `chore/cleanup-unused` branches have since been deleted.** Kept here as a historical record of what was built and how it was tested. Originally on branch `chore/dev-launcher` (off `chore/cleanup-unused`), 5 commits, in order:
 
 ```
 1b692eb  feat(dev-launcher): add logging and environment-check primitives

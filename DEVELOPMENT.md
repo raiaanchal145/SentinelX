@@ -1,8 +1,8 @@
-# CLAUDE.md
+# Development Guide
 
-Guidance for Claude (or any AI assistant) working in this repo. Read this
-before making changes — it's shorter than re-deriving these rules from
-the code every time.
+Guidance for anyone (or any AI coding assistant) working in this repo.
+Read this before making changes -- it's shorter than re-deriving these
+rules from the code every time.
 
 ## What this is
 
@@ -45,6 +45,20 @@ backend/
 
 scripts/dev.mjs + scripts/lib/   the `npm run dev` one-command launcher (see README)
 ```
+
+## Git workflow
+
+- **`ansh-dev` is the working branch.** All day-to-day commits land on
+  `ansh-dev` first -- never commit directly to `main` (or any other
+  branch). `main` is promoted from `ansh-dev` deliberately (a fast-
+  forward or merge), not written to directly.
+- Before starting new work, make sure `ansh-dev` is at the same commit
+  as `main` (`git merge --ff-only main` from `ansh-dev` if it's behind)
+  so the two never silently diverge.
+- Feature/chore branches (`feat/...`, `chore/...`) are short-lived: once
+  merged into `ansh-dev`, delete them (`git branch -d <branch>`) rather
+  than leaving merged branches around.
+- Nothing is pushed to the shared remote without being asked explicitly.
 
 ## Hard constraints -- do not violate these without being told to
 
