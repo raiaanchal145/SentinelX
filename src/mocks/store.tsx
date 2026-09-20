@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from "react"
 
-import type { AlertStatus, AuditEntry, Evidence, Ticket } from "../types"
+import type { AlertStatus, AuditEntry, Evidence, Ticket, TicketComment } from "../types"
 import { buildSeedData, type SeedData } from "./seed"
 import { getSession } from "../lib/auth"
 
@@ -24,6 +24,7 @@ type Action =
   | { type: "IT_TOGGLE_CHECKLIST_ITEM"; ticketId: string; itemId: string; actorName: string }
   | { type: "IT_ADD_EVIDENCE"; ticketId: string; evidence: Evidence; actorName: string }
   | { type: "IT_SUBMIT_FOR_VERIFICATION"; ticketId: string; actorName: string }
+  | { type: "IT_ADD_COMMENT"; ticketId: string; comment: TicketComment }
   | { type: "SOC_VERIFY_TICKET"; ticketId: string; actorName: string }
   | { type: "SOC_REOPEN_TICKET"; ticketId: string; reason: string; actorName: string }
   | { type: "ADMIN_REASSIGN_ALERT"; alertId: string; userId: string; actorName: string }
@@ -280,6 +281,15 @@ function reducer(state: StoreState, action: Action): StoreState {
           targetType: "ticket",
           targetId: ticket.id,
         }),
+      }
+    }
+
+    case "IT_ADD_COMMENT": {
+      return {
+        ...state,
+        tickets: state.tickets.map((t) =>
+          t.id === action.ticketId ? { ...t, comments: [...t.comments, action.comment] } : t,
+        ),
       }
     }
 
