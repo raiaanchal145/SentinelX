@@ -5,6 +5,9 @@ export type ApiUser = {
   name: string
   email: string
   role: string
+  // "admin" (super_admin/organization_admin) or "user" (soc_analyst,
+  // security_manager, it_developer, auditor) -- see backend UserOut.
+  account_type: string
 }
 
 type LoginResponse = {
