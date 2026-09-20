@@ -4,7 +4,13 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "vite",
+    "dev:api": "node scripts/dev.mjs --api-only",
+    "dev:db": "node scripts/dev.mjs --db-only",
+    "dev:setup": "node scripts/dev.mjs --setup-only",
+    "dev:doctor": "node scripts/dev.mjs --doctor",
+    "dev:stop": "node scripts/dev.mjs --stop",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"

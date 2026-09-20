@@ -3,6 +3,8 @@ import ReactDOM from "react-dom/client"
 import { BrowserRouter } from "react-router-dom"
 
 import App from "./App"
+import { MockStoreProvider } from "./mocks/store"
+import { ToastProvider } from "./components/ui/Toast"
 import "./index.css"
 
 ReactDOM.createRoot(
@@ -10,7 +12,11 @@ ReactDOM.createRoot(
 ).render(
   <React.StrictMode>
     <BrowserRouter>
-      <App />
+      <MockStoreProvider>
+        <ToastProvider>
+          <App />
+        </ToastProvider>
+      </MockStoreProvider>
     </BrowserRouter>
   </React.StrictMode>,
 )

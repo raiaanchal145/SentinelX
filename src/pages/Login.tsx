@@ -1,5 +1,5 @@
 import {
-  FormEvent,
+  type FormEvent,
   useState,
 } from "react"
 
@@ -12,6 +12,7 @@ import {
 import { useNavigate } from "react-router-dom"
 
 import { apiLogin } from "../lib/api"
+import { homePathFor } from "../lib/auth"
 
 // Same allow-list the backend enforces: only the standard set of
 // characters a real email address can contain.
@@ -80,18 +81,14 @@ function Login() {
         user.email,
       )
 
-      if (user.role === "super_admin") {
-        navigate("/admin")
-      } else if (user.role === "organization_admin") {
-        navigate("/organization-dashboard")
-      } else if (user.role === "soc_analyst") {
-        navigate("/soc-dashboard")
-      } else if (user.role === "it_developer") {
-        navigate("/it-dashboard")
-      } else {
-        // auditor and any future roles without a dedicated dashboard yet
-        navigate("/soc-dashboard")
-      }
+      // TODO: replace with real auth (backend already issues a JWT) --
+      // kept alongside the existing mock-session keys above.
+      localStorage.setItem(
+        "sentinelx_account_type",
+        user.account_type,
+      )
+
+      navigate(homePathFor(user.role))
     } catch (err) {
       const message =
         err instanceof Error
