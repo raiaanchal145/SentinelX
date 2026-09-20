@@ -37,7 +37,7 @@ function AdminDashboard() {
   }, [])
 
   return (
-    <div className="flex min-h-screen bg-[#021325] text-white">
+    <div className="flex min-h-screen bg-canvas text-white">
 
       <Sidebar />
 
@@ -49,7 +49,7 @@ function AdminDashboard() {
 
           <div className="mb-8">
 
-            <p className="text-sm text-blue-400">
+            <p className="text-sm text-brand-400">
               System Administration
             </p>
 
@@ -57,7 +57,7 @@ function AdminDashboard() {
               Admin Dashboard
             </h1>
 
-            <p className="mt-2 text-sm text-slate-500">
+            <p className="mt-2 text-sm text-fg-muted">
               Complete visibility across SentinelX.
             </p>
 
@@ -103,7 +103,7 @@ function AdminDashboard() {
 
           </div>
 
-          <section className="mt-8 rounded-2xl border border-white/10 bg-[#0b1f33] p-6">
+          <section className="mt-8 rounded-2xl border border-white/10 bg-surface p-6">
 
             <div className="flex items-center justify-between">
 
@@ -113,13 +113,13 @@ function AdminDashboard() {
                   Security Overview
                 </h2>
 
-                <p className="mt-1 text-sm text-slate-500">
+                <p className="mt-1 text-sm text-fg-muted">
                   Organization-wide threat visibility.
                 </p>
 
               </div>
 
-              <select className="rounded-xl border border-white/10 bg-[#061727] px-4 py-2 text-sm text-slate-300 outline-none">
+              <select className="rounded-xl border border-white/10 bg-surface-sunken px-4 py-2 text-sm text-fg-secondary outline-none">
 
                 <option>
                   Last 24 Hours
@@ -139,7 +139,7 @@ function AdminDashboard() {
 
             <div className="mt-8 grid gap-4 md:grid-cols-4">
 
-              <div className="rounded-xl bg-[#061727] p-5">
+              <div className="rounded-xl bg-surface-sunken p-5">
 
                 <SeverityBadge
                   severity="Critical"
@@ -151,7 +151,7 @@ function AdminDashboard() {
 
               </div>
 
-              <div className="rounded-xl bg-[#061727] p-5">
+              <div className="rounded-xl bg-surface-sunken p-5">
 
                 <SeverityBadge
                   severity="High"
@@ -163,7 +163,7 @@ function AdminDashboard() {
 
               </div>
 
-              <div className="rounded-xl bg-[#061727] p-5">
+              <div className="rounded-xl bg-surface-sunken p-5">
 
                 <SeverityBadge
                   severity="Medium"
@@ -175,7 +175,7 @@ function AdminDashboard() {
 
               </div>
 
-              <div className="rounded-xl bg-[#061727] p-5">
+              <div className="rounded-xl bg-surface-sunken p-5">
 
                 <SeverityBadge
                   severity="Low"

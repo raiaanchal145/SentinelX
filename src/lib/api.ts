@@ -102,6 +102,24 @@ export function apiResendVerification(email: string) {
   })
 }
 
+export function apiForgotPassword(email: string) {
+  return request<MessageResponse>("/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  })
+}
+
+export function apiResetPassword(
+  email: string,
+  code: string,
+  newPassword: string,
+) {
+  return request<MessageResponse>("/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify({ email, code, new_password: newPassword }),
+  })
+}
+
 export function apiGetStatsOverview() {
   return request<StatsOverview>("/stats/overview")
 }

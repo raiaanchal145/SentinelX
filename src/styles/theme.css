@@ -1,0 +1,100 @@
+/*
+  ============================================================
+  SentinelX Design Tokens
+  ============================================================
+
+  This is the single source of truth for color, typography and
+  radius across the whole app. Nothing else should hardcode a hex
+  color, an rgba(), or a font stack -- add or change a value here
+  instead.
+
+  Built on Tailwind v4's @theme directive, so every variable below
+  is BOTH:
+    1) a plain CSS custom property, usable anywhere as var(--color-brand-500)
+       (this is how index.css's hand-written classes use it), and
+    2) an auto-generated Tailwind utility class
+       (bg-brand-500, text-brand-500, border-brand-500, rounded-card, ...)
+       usable directly in className="..." on any component.
+
+  Change a value here and every place that uses it updates together --
+  in the Tailwind classes on pages/components AND in index.css.
+*/
+
+@theme {
+  /* ============================= */
+  /* BRAND / ACCENT                */
+  /* ============================= */
+  /* ONE accent blue for the entire app: sidebar, buttons, links,
+     focus rings, "info/low" severity. Use these instead of Tailwind's
+     built-in blue-* scale so every "blue" in SentinelX matches. */
+  --color-brand-300: #9cc9ff;
+  --color-brand-400: #5ca8ff;
+  --color-brand-500: #258cff;
+  --color-brand-600: #1c74d1;
+  --color-brand-700: #145493;
+
+  /* ============================= */
+  /* SURFACES (dark navy scale)    */
+  /* ============================= */
+  --color-canvas: #07111f;         /* page / app background */
+  --color-sidebar: #091522;        /* sidebar & nav chrome */
+  --color-surface: #0b1828;        /* cards, panels, inputs, table containers */
+  --color-surface-raised: #0d1a2a; /* top of a raised card's gradient */
+  --color-surface-sunken: #0a1624; /* bottom of a raised card's gradient */
+  --color-surface-hover: #101f31;  /* hover background for nav links / icon buttons */
+  --color-line: #1b2b3d;           /* default border / divider */
+  --color-line-strong: #29425f;    /* emphasized border (hover, dashed, focus-adjacent) */
+
+  /* ============================= */
+  /* TEXT (foreground)             */
+  /* ============================= */
+  --color-fg-primary: #f4f8fc;     /* headings, high-emphasis content */
+  --color-fg-secondary: #dbeafe;   /* active/highlighted text, links */
+  --color-fg-subtle: #a8b6c6;      /* everyday body copy on dark surfaces */
+  --color-fg-muted: #8fa1b7;       /* secondary labels, icons */
+  --color-fg-faint: #718096;       /* placeholders, captions, least prominent text */
+
+  /* ============================= */
+  /* STATUS / SEVERITY             */
+  /* ============================= */
+  /* "-fg" variants are the readable, lighter version of the same
+     color for use as text on a dark surface (the base color is meant
+     for solid fills / low-opacity tints via bg-critical/10 etc). */
+  --color-critical: #ef4444;
+  --color-critical-fg: #ff9b9b;
+  --color-high: #f97316;
+  --color-high-fg: #ffb37d;
+  --color-medium: #eab308;
+  --color-medium-fg: #f6d57b;
+  --color-low: var(--color-brand-500);
+  --color-low-fg: #83b7ec;
+  --color-info: #94a3b8;
+  --color-info-fg: #9aa9ba;
+
+  /* Generic aliases for use outside the SOC-severity context
+     (form validation errors, toasts, success confirmations). Kept
+     equal to critical/on purpose -- there's only one "red" in this app. */
+  --color-danger: var(--color-critical);
+  --color-danger-fg: var(--color-critical-fg);
+  --color-success: #22c55e;
+  --color-success-fg: #4ade80;
+
+  /* ============================= */
+  /* TYPOGRAPHY                    */
+  /* ============================= */
+  --font-sans:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+
+  /* ============================= */
+  /* RADIUS                        */
+  /* ============================= */
+  /* For the hand-written classes in index.css. Tailwind's own
+     rounded-lg/xl/2xl scale is still fine to use directly in
+     className for anything not listed here. */
+  --radius-control: 9px;  /* inputs, small buttons, nav links */
+  --radius-panel: 12px;   /* icon tiles, avatars */
+  --radius-card: 14px;    /* cards, tables, filter bar, empty states */
+  --radius-modal: 16px;   /* larger panels */
+  --radius-pill: 999px;   /* badges, status dots */
+}

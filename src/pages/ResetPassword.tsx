@@ -9,120 +9,114 @@ import {
   ShieldCheck,
 } from "lucide-react"
 
-import { useNavigate } from "react-router-dom"
+import {
+  useLocation,
+  useNavigate,
+} from "react-router-dom"
 
-import { apiRegister } from "../lib/api"
+import {
+  apiForgotPassword,
+  apiResetPassword,
+} from "../lib/api"
 
-// Same allow-lists the backend enforces.
-const NAME_PATTERN = /^[A-Za-z\s'-]+$/
-const EMAIL_PATTERN = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/
+const CODE_PATTERN = /^[0-9]{6}$/
 
-function Register() {
+function ResetPassword() {
   const navigate = useNavigate()
+  const location = useLocation()
 
-  const [name, setName] = useState("")
-  const [email, setEmail] = useState("")
-  const [password, setPassword] =
-    useState("")
+  const stateEmail =
+    (location.state as { email?: string } | null)?.email || ""
 
-  const [confirmPassword, setConfirmPassword] =
-    useState("")
+  const [email, setEmail] = useState(stateEmail)
+  const [code, setCode] = useState("")
 
-  const [showPassword, setShowPassword] =
+  const [newPassword, setNewPassword] = useState("")
+  const [confirmNewPassword, setConfirmNewPassword] = useState("")
+
+  const [showNewPassword, setShowNewPassword] = useState(false)
+  const [showConfirmNewPassword, setShowConfirmNewPassword] =
     useState(false)
 
-  const [showConfirmPassword, setShowConfirmPassword] =
-    useState(false)
+  const [error, setError] = useState("")
+  const [success, setSuccess] = useState("")
 
-  const [role, setRole] =
-    useState("soc_analyst")
+  const [submitting, setSubmitting] = useState(false)
+  const [resending, setResending] = useState(false)
 
-  const [error, setError] =
-    useState("")
-
-  const [success, setSuccess] =
-    useState("")
-
-  const [submitting, setSubmitting] =
-    useState(false)
-
-  const handleRegister = async (
-    e: FormEvent,
-  ) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
 
     setError("")
     setSuccess("")
 
-    if (
-      !name.trim() ||
-      !email.trim() ||
-      !password.trim() ||
-      !confirmPassword.trim()
-    ) {
-      setError(
-        "Please complete all fields.",
-      )
+    if (!email.trim()) {
+      setError("Please enter your account email.")
       return
     }
 
-    if (password.length < 6) {
-      setError(
-        "Password must contain at least 6 characters.",
-      )
+    if (!CODE_PATTERN.test(code.trim())) {
+      setError("Please enter the 6-digit code from your email.")
       return
     }
 
-    if (password !== confirmPassword) {
-      setError(
-        "Passwords do not match.",
-      )
+    if (newPassword.length < 6) {
+      setError("Password must contain at least 6 characters.")
       return
     }
 
-    if (!NAME_PATTERN.test(name.trim())) {
-      setError(
-        "Name can only contain letters, spaces, apostrophes and hyphens.",
-      )
-      return
-    }
-
-    if (!EMAIL_PATTERN.test(email.trim())) {
-      setError(
-        "Please enter a valid email address (letters, numbers, and . _ % + - only).",
-      )
+    if (newPassword !== confirmNewPassword) {
+      setError("Passwords do not match.")
       return
     }
 
     setSubmitting(true)
 
     try {
-      const registeredEmail = email.trim().toLowerCase()
-
-      await apiRegister(
-        name.trim(),
-        registeredEmail,
-        password,
-        role,
+      await apiResetPassword(
+        email.trim().toLowerCase(),
+        code.trim(),
+        newPassword,
       )
 
-      setSuccess(
-        "Verification code sent. Check your email to finish creating your account...",
-      )
+      setSuccess("Password reset. You can now sign in.")
 
       setTimeout(() => {
-        navigate("/verify-email", {
-          state: { email: registeredEmail },
-        })
+        navigate("/login")
       }, 1000)
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : "Could not create the account. Please try again.",
+          : "Could not reset the password. Please try again.",
       )
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const handleResend = async () => {
+    setError("")
+    setSuccess("")
+
+    if (!email.trim()) {
+      setError("Please enter your account email.")
+      return
+    }
+
+    setResending(true)
+
+    try {
+      await apiForgotPassword(email.trim().toLowerCase())
+      setSuccess("A new password reset code has been sent.")
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not resend the code. Please try again.",
+      )
+    } finally {
+      setResending(false)
     }
   }
 
@@ -145,11 +139,11 @@ function Register() {
           <div>
 
             <h1 className="text-2xl font-bold">
-              Create Account
+              Reset Password
             </h1>
 
             <p className="text-sm text-fg-muted">
-              Join SentinelX
+              Enter the code and your new password
             </p>
 
           </div>
@@ -157,28 +151,9 @@ function Register() {
         </div>
 
         <form
-          onSubmit={handleRegister}
+          onSubmit={handleSubmit}
           className="space-y-5"
         >
-
-          <div>
-
-            <label className="mb-2 block text-sm">
-              Full Name
-            </label>
-
-            <input
-              value={name}
-              onChange={(e) =>
-                setName(
-                  e.target.value,
-                )
-              }
-              className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 outline-none focus:border-brand-500"
-              required
-            />
-
-          </div>
 
           <div>
 
@@ -190,9 +165,7 @@ function Register() {
               type="email"
               value={email}
               onChange={(e) =>
-                setEmail(
-                  e.target.value,
-                )
+                setEmail(e.target.value)
               }
               className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 outline-none focus:border-brand-500"
               required
@@ -203,126 +176,106 @@ function Register() {
           <div>
 
             <label className="mb-2 block text-sm">
-              Password
+              Reset Code
             </label>
 
-            <div className="relative">
-
-              <input
-                type={
-                  showPassword
-                    ? "text"
-                    : "password"
-                }
-                value={password}
-                onChange={(e) =>
-                  setPassword(
-                    e.target.value,
-                  )
-                }
-                className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 pr-12 outline-none focus:border-brand-500"
-                required
-              />
-
-              <button
-                type="button"
-                onClick={() =>
-                  setShowPassword(
-                    !showPassword,
-                  )
-                }
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-muted"
-                tabIndex={-1}
-              >
-
-                {showPassword
-                  ? <EyeOff size={18} />
-                  : <Eye size={18} />
-                }
-
-              </button>
-
-            </div>
-
-          </div>
-
-          <div>
-
-            <label className="mb-2 block text-sm">
-              Confirm Password
-            </label>
-
-            <div className="relative">
-
-              <input
-                type={
-                  showConfirmPassword
-                    ? "text"
-                    : "password"
-                }
-                value={confirmPassword}
-                onChange={(e) =>
-                  setConfirmPassword(
-                    e.target.value,
-                  )
-                }
-                className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 pr-12 outline-none focus:border-brand-500"
-                required
-              />
-
-              <button
-                type="button"
-                onClick={() =>
-                  setShowConfirmPassword(
-                    !showConfirmPassword,
-                  )
-                }
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-muted"
-                tabIndex={-1}
-              >
-
-                {showConfirmPassword
-                  ? <EyeOff size={18} />
-                  : <Eye size={18} />
-                }
-
-              </button>
-
-            </div>
-
-          </div>
-
-          <div>
-
-            <label className="mb-2 block text-sm">
-              Role
-            </label>
-
-            <select
-              value={role}
+            <input
+              value={code}
               onChange={(e) =>
-                setRole(
-                  e.target.value,
-                )
+                setCode(e.target.value)
               }
-              className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 outline-none focus:border-brand-500"
-            >
+              placeholder="6-digit code"
+              inputMode="numeric"
+              maxLength={6}
+              className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 tracking-[0.5em] outline-none focus:border-brand-500"
+              required
+            />
 
-              <option value="soc_analyst">
-                SOC Analyst
-              </option>
+          </div>
 
-              <option value="it_developer">
-                IT / Developer
-              </option>
+          <div>
 
-            </select>
+            <label className="mb-2 block text-sm">
+              New Password
+            </label>
 
-            <p className="mt-2 text-xs text-fg-muted">
-              Super Administrator access is
-              automatically assigned only to the
-              three configured administrator emails.
-            </p>
+            <div className="relative">
+
+              <input
+                type={
+                  showNewPassword
+                    ? "text"
+                    : "password"
+                }
+                value={newPassword}
+                onChange={(e) =>
+                  setNewPassword(e.target.value)
+                }
+                className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 pr-12 outline-none focus:border-brand-500"
+                required
+              />
+
+              <button
+                type="button"
+                onClick={() =>
+                  setShowNewPassword(!showNewPassword)
+                }
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-muted"
+                tabIndex={-1}
+              >
+
+                {showNewPassword
+                  ? <EyeOff size={18} />
+                  : <Eye size={18} />
+                }
+
+              </button>
+
+            </div>
+
+          </div>
+
+          <div>
+
+            <label className="mb-2 block text-sm">
+              Confirm New Password
+            </label>
+
+            <div className="relative">
+
+              <input
+                type={
+                  showConfirmNewPassword
+                    ? "text"
+                    : "password"
+                }
+                value={confirmNewPassword}
+                onChange={(e) =>
+                  setConfirmNewPassword(e.target.value)
+                }
+                className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 pr-12 outline-none focus:border-brand-500"
+                required
+              />
+
+              <button
+                type="button"
+                onClick={() =>
+                  setShowConfirmNewPassword(
+                    !showConfirmNewPassword,
+                  )
+                }
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-muted"
+                tabIndex={-1}
+              >
+
+                {showConfirmNewPassword
+                  ? <EyeOff size={18} />
+                  : <Eye size={18} />
+                }
+
+              </button>
+
+            </div>
 
           </div>
 
@@ -343,22 +296,21 @@ function Register() {
             disabled={submitting}
             className="w-full rounded-xl bg-brand-600 py-3 font-medium hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {submitting ? "Sending code..." : "Create Account"}
+            {submitting ? "Resetting..." : "Reset Password"}
           </button>
 
         </form>
 
         <div className="mt-6 text-center text-sm text-fg-muted">
 
-          Already have an account?{" "}
+          Didn't get a code?{" "}
 
           <button
-            onClick={() =>
-              navigate("/login")
-            }
-            className="text-brand-400"
+            onClick={handleResend}
+            disabled={resending}
+            className="text-brand-400 disabled:opacity-60"
           >
-            Sign in
+            {resending ? "Sending..." : "Resend code"}
           </button>
 
         </div>
@@ -369,4 +321,4 @@ function Register() {
   )
 }
 
-export default Register
+export default ResetPassword

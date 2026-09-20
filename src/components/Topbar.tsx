@@ -43,25 +43,25 @@ function Topbar() {
         : "IT / Developer"
 
   return (
-    <header className="flex h-20 items-center justify-between border-b border-white/10 bg-[#061727] px-6">
+    <header className="flex h-20 items-center justify-between border-b border-white/10 bg-surface-sunken px-6">
 
-      <div className="hidden items-center gap-3 rounded-xl border border-white/10 bg-[#0b1f33] px-4 py-2 md:flex">
+      <div className="hidden items-center gap-3 rounded-xl border border-white/10 bg-surface px-4 py-2 md:flex">
 
         <Search
           size={18}
-          className="text-slate-500"
+          className="text-fg-muted"
         />
 
         <input
           placeholder="Search..."
-          className="w-64 bg-transparent text-sm text-white outline-none placeholder:text-slate-600"
+          className="w-64 bg-transparent text-sm text-white outline-none placeholder:text-fg-faint"
         />
 
       </div>
 
       <div className="ml-auto flex items-center gap-4">
 
-        <button className="rounded-xl border border-white/10 bg-[#0b1f33] p-2.5 text-slate-400 transition hover:text-blue-400">
+        <button className="rounded-xl border border-white/10 bg-surface p-2.5 text-fg-subtle transition hover:text-brand-400">
 
           <Bell size={19} />
 
@@ -73,7 +73,7 @@ function Topbar() {
             {name}
           </p>
 
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-fg-muted">
             {formattedRole}
           </p>
 
@@ -81,7 +81,7 @@ function Topbar() {
 
         <button
           onClick={logout}
-          className="rounded-xl border border-red-500/20 bg-red-500/5 p-2.5 text-red-400 transition hover:bg-red-500/10"
+          className="rounded-xl border border-danger/20 bg-danger/5 p-2.5 text-danger-fg transition hover:bg-danger/10"
         >
 
           <LogOut size={18} />

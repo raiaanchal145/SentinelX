@@ -55,3 +55,48 @@ def send_verification_email(to_email: str, name: str, code: str) -> None:
     with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, context=context) as server:
         server.login(settings.smtp_user, settings.smtp_password)
         server.sendmail(settings.smtp_user, to_email, message.as_string())
+
+
+def send_password_reset_email(to_email: str, name: str, code: str) -> None:
+    """Emails a password-reset code via SMTP (Gmail by default).
+
+    Same fallback as send_verification_email: if SMTP isn't configured,
+    the code is printed to the server console instead.
+    """
+    if not settings.smtp_user or not settings.smtp_password:
+        print(
+            f"[SentinelX] SMTP not configured -- password reset code for "
+            f"{to_email}: {code}"
+        )
+        return
+
+    message = MIMEMultipart("alternative")
+    message["Subject"] = "Reset your SentinelX password"
+    message["From"] = f"{settings.smtp_from_name} <{settings.smtp_user}>"
+    message["To"] = to_email
+
+    text_body = (
+        f"Hi {name},\n\n"
+        f"Your SentinelX password reset code is: {code}\n\n"
+        f"This code expires in 10 minutes.\n\n"
+        f"If you didn't request a password reset, you can ignore this email --"
+        f" your password will stay the same."
+    )
+
+    html_body = f"""
+    <div style="font-family: Arial, sans-serif; color: #0b1f33;">
+      <p>Hi {name},</p>
+      <p>Your SentinelX password reset code is:</p>
+      <p style="font-size: 28px; font-weight: bold; letter-spacing: 6px;">{code}</p>
+      <p>This code expires in 10 minutes.</p>
+      <p style="color: #888;">If you didn't request a password reset, you can ignore this email -- your password will stay the same.</p>
+    </div>
+    """
+
+    message.attach(MIMEText(text_body, "plain"))
+    message.attach(MIMEText(html_body, "html"))
+
+    context = ssl.create_default_context()
+    with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, context=context) as server:
+        server.login(settings.smtp_user, settings.smtp_password)
+        server.sendmail(settings.smtp_user, to_email, message.as_string())

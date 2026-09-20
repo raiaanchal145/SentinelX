@@ -69,16 +69,59 @@ class User(Base):
 
     # Email verification. An account cannot log in until is_verified is True.
     # verification_code/verification_code_expires_at hold the current
-    # outstanding 6-digit code (cleared once verified).
+    # outstanding 6-digit code -- used both to finish registration and,
+    # if is_verified gets flipped back to False by the lockout below, to
+    # re-verify before logging in again.
     is_verified: Mapped[bool] = mapped_column(default=False)
     verification_code: Mapped[str | None] = mapped_column(String(10))
     verification_code_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
 
+    # Wrong-password counter. Reset to 0 on any successful login or
+    # password reset; hitting 3 forces is_verified back to False (and
+    # emails a fresh code) so the account can't be logged into again
+    # until it's re-verified.
+    failed_login_attempts: Mapped[int] = mapped_column(default=0)
+
+    # Forgot-password flow. Separate from verification_code above so a
+    # password reset never accidentally re-triggers/clears the account
+    # verification state.
+    password_reset_code: Mapped[str | None] = mapped_column(String(10))
+    password_reset_code_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     organization: Mapped["Organization | None"] = relationship(back_populates="users")
+
+
+class PendingRegistration(Base):
+    """
+    A registration that has been submitted but not yet email-verified.
+
+    No row in `users` is created until the OTP is confirmed -- this table
+    holds everything needed to create that row at that point (name,
+    password hash, role) plus the outstanding code/expiry. Re-registering
+    with the same email before verifying overwrites this row instead of
+    creating a duplicate.
+    """
+
+    __tablename__ = "pending_registrations"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[UserRole] = mapped_column(
+        Enum(UserRole, name="user_role"), default=UserRole.soc_analyst
+    )
+    verification_code: Mapped[str] = mapped_column(String(10), nullable=False)
+    verification_code_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 class Asset(Base):

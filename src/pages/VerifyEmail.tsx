@@ -24,14 +24,18 @@ function VerifyEmail() {
   const navigate = useNavigate()
   const location = useLocation()
 
-  const stateEmail =
-    (location.state as { email?: string } | null)?.email || ""
+  const routeState = location.state as
+    | { email?: string; notice?: string }
+    | null
+
+  const stateEmail = routeState?.email || ""
 
   const [email, setEmail] = useState(stateEmail)
   const [code, setCode] = useState("")
 
   const [error, setError] = useState("")
   const [success, setSuccess] = useState("")
+  const [notice] = useState(routeState?.notice || "")
 
   const [submitting, setSubmitting] = useState(false)
   const [resending, setResending] = useState(false)
@@ -99,16 +103,16 @@ function VerifyEmail() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#021325] px-6 text-white">
+    <div className="flex min-h-screen items-center justify-center bg-canvas px-6 text-white">
 
-      <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0b1f33] p-8">
+      <div className="w-full max-w-md rounded-2xl border border-white/10 bg-surface p-8">
 
         <div className="mb-8 flex items-center gap-3">
 
-          <div className="rounded-xl bg-blue-500/10 p-3">
+          <div className="rounded-xl bg-brand-500/10 p-3">
 
             <ShieldCheck
-              className="text-blue-400"
+              className="text-brand-400"
               size={28}
             />
 
@@ -120,13 +124,19 @@ function VerifyEmail() {
               Verify Your Email
             </h1>
 
-            <p className="text-sm text-slate-500">
+            <p className="text-sm text-fg-muted">
               Enter the code we emailed you
             </p>
 
           </div>
 
         </div>
+
+        {notice && (
+          <div className="mb-5 rounded-xl border border-brand-500/20 bg-brand-500/10 p-3 text-sm text-brand-300">
+            {notice}
+          </div>
+        )}
 
         <form
           onSubmit={handleVerify}
@@ -145,7 +155,7 @@ function VerifyEmail() {
               onChange={(e) =>
                 setEmail(e.target.value)
               }
-              className="w-full rounded-xl border border-white/10 bg-[#061727] px-4 py-3 outline-none focus:border-blue-500"
+              className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 outline-none focus:border-brand-500"
               required
             />
 
@@ -165,20 +175,20 @@ function VerifyEmail() {
               placeholder="6-digit code"
               inputMode="numeric"
               maxLength={6}
-              className="w-full rounded-xl border border-white/10 bg-[#061727] px-4 py-3 tracking-[0.5em] outline-none focus:border-blue-500"
+              className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 tracking-[0.5em] outline-none focus:border-brand-500"
               required
             />
 
           </div>
 
           {error && (
-            <div className="rounded-xl bg-red-500/10 p-3 text-sm text-red-400">
+            <div className="rounded-xl bg-danger/10 p-3 text-sm text-danger-fg">
               {error}
             </div>
           )}
 
           {success && (
-            <div className="rounded-xl bg-green-500/10 p-3 text-sm text-green-400">
+            <div className="rounded-xl bg-success/10 p-3 text-sm text-success-fg">
               {success}
             </div>
           )}
@@ -186,21 +196,21 @@ function VerifyEmail() {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full rounded-xl bg-blue-600 py-3 font-medium hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+            className="w-full rounded-xl bg-brand-600 py-3 font-medium hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {submitting ? "Verifying..." : "Verify Email"}
           </button>
 
         </form>
 
-        <div className="mt-6 text-center text-sm text-slate-500">
+        <div className="mt-6 text-center text-sm text-fg-muted">
 
           Didn't get a code?{" "}
 
           <button
             onClick={handleResend}
             disabled={resending}
-            className="text-blue-400 disabled:opacity-60"
+            className="text-brand-400 disabled:opacity-60"
           >
             {resending ? "Sending..." : "Resend code"}
           </button>

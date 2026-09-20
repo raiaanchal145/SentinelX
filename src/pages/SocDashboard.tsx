@@ -12,7 +12,7 @@ import EmptyState from "../components/EmptyState"
 
 function SOCDashboard() {
   return (
-    <div className="flex min-h-screen bg-[#021325] text-white">
+    <div className="flex min-h-screen bg-canvas text-white">
 
       <Sidebar />
 
@@ -24,7 +24,7 @@ function SOCDashboard() {
 
           <div className="mb-8">
 
-            <p className="text-sm text-blue-400">
+            <p className="text-sm text-brand-400">
               Security Operations Center
             </p>
 
@@ -32,7 +32,7 @@ function SOCDashboard() {
               SOC Dashboard
             </h1>
 
-            <p className="mt-2 text-sm text-slate-500">
+            <p className="mt-2 text-sm text-fg-muted">
               Monitor security events, alerts and
               investigations.
             </p>
@@ -73,7 +73,7 @@ function SOCDashboard() {
 
           <div className="mt-8 grid gap-6 xl:grid-cols-3">
 
-            <section className="rounded-2xl border border-white/10 bg-[#0b1f33] p-6 xl:col-span-2">
+            <section className="rounded-2xl border border-white/10 bg-surface p-6 xl:col-span-2">
 
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 
@@ -83,7 +83,7 @@ function SOCDashboard() {
                     Security Events
                   </h2>
 
-                  <p className="text-sm text-slate-500">
+                  <p className="text-sm text-fg-muted">
                     Incoming events will appear here.
                   </p>
 
@@ -91,7 +91,7 @@ function SOCDashboard() {
 
                 <div className="flex gap-3">
 
-                  <select className="rounded-lg border border-white/10 bg-[#061727] px-3 py-2 text-sm">
+                  <select className="rounded-lg border border-white/10 bg-surface-sunken px-3 py-2 text-sm">
 
                     <option>
                       All Severity
@@ -115,7 +115,7 @@ function SOCDashboard() {
 
                   </select>
 
-                  <select className="rounded-lg border border-white/10 bg-[#061727] px-3 py-2 text-sm">
+                  <select className="rounded-lg border border-white/10 bg-surface-sunken px-3 py-2 text-sm">
 
                     <option>
                       All Status
@@ -150,13 +150,13 @@ function SOCDashboard() {
 
             </section>
 
-            <section className="rounded-2xl border border-white/10 bg-[#0b1f33] p-6">
+            <section className="rounded-2xl border border-white/10 bg-surface p-6">
 
               <h2 className="text-lg font-semibold">
                 Analyst Workspace
               </h2>
 
-              <p className="mt-2 text-sm text-slate-500">
+              <p className="mt-2 text-sm text-fg-muted">
                 Your investigation activity.
               </p>
 
@@ -199,13 +199,13 @@ function WorkspaceItem({
   value: string
 }) {
   return (
-    <div className="flex items-center justify-between rounded-xl border border-white/10 bg-[#061727] p-4">
+    <div className="flex items-center justify-between rounded-xl border border-white/10 bg-surface-sunken p-4">
 
-      <p className="text-sm text-slate-400">
+      <p className="text-sm text-fg-subtle">
         {title}
       </p>
 
-      <span className="text-xl font-semibold text-blue-400">
+      <span className="text-xl font-semibold text-brand-400">
         {value}
       </span>
 
