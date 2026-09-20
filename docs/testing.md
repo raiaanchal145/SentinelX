@@ -47,6 +47,16 @@ endpoint requiring auth actually rejects an unauthenticated request —
 that's what caught (and now guards) `/organizations` and
 `/stats/overview` previously being open.
 
+If the new endpoint reads or writes organization-scoped data, it must
+depend on `org_scope`/`require_admin`/`require_roles` from
+`app/scope.py` and filter its query with `scoped_to_org(...)` — then add
+its tenant-isolation case to `backend/tests/test_scope.py` (seed two
+organizations, assert org A's token never sees org B's rows, assert a
+super_admin sees both). That file also has the pattern for unit-testing
+a role guard directly (call `require_admin`/`require_roles(...)` with a
+hand-built `Scope`, no HTTP or database needed) — reuse it instead of
+inventing a new way to test guards.
+
 ## Frontend
 
 No automated test runner is configured yet. The current gates are:
