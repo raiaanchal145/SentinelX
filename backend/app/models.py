@@ -81,6 +81,33 @@ class User(Base):
     organization: Mapped["Organization | None"] = relationship(back_populates="users")
 
 
+class PendingRegistration(Base):
+    """
+    A registration that has been submitted but not yet email-verified.
+
+    No row in `users` is created until the OTP is confirmed -- this table
+    holds everything needed to create that row at that point (name,
+    password hash, role) plus the outstanding code/expiry. Re-registering
+    with the same email before verifying overwrites this row instead of
+    creating a duplicate.
+    """
+
+    __tablename__ = "pending_registrations"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[UserRole] = mapped_column(
+        Enum(UserRole, name="user_role"), default=UserRole.soc_analyst
+    )
+    verification_code: Mapped[str] = mapped_column(String(10), nullable=False)
+    verification_code_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
 class Asset(Base):
     __tablename__ = "assets"
 

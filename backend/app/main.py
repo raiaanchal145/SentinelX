@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.email_utils import generate_verification_code, send_verification_email
-from app.models import Organization, User, UserRole
+from app.models import Organization, PendingRegistration, User, UserRole
 from app.security import create_access_token, decode_access_token, hash_password, verify_password
 from app.validators import is_valid_email_format, is_valid_name_format
 
@@ -42,7 +42,7 @@ async def add_security_headers(request, call_next):
 # from the browser.
 SUPER_ADMIN_EMAILS = {
     "anchal01@gmail.com",
-    "ansh02@gmail.com",
+    "anshpatel4204@gmail.com",
     "retika03@gmail.com",
 }
 
@@ -126,6 +126,13 @@ async def get_current_user(
 
 @app.post("/api/v1/auth/register", response_model=RegisterResponse)
 async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Stores the submission as a pending registration and emails an OTP.
+
+    No row is created in `users` here -- that only happens in
+    verify_email() once the code is confirmed, so an account someone
+    never verifies leaves nothing behind but an expired pending row.
+    """
     email = payload.email.strip().lower()
     name = payload.name.strip()
 
@@ -147,8 +154,8 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
     if len(payload.password) < 6:
         raise HTTPException(status_code=400, detail="Password must contain at least 6 characters.")
 
-    existing = await db.execute(select(User).where(User.email == email))
-    if existing.scalar_one_or_none():
+    existing_user = await db.execute(select(User).where(User.email == email))
+    if existing_user.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="An account already exists with this email.")
 
     if email in SUPER_ADMIN_EMAILS:
@@ -163,28 +170,43 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
             role = UserRole.soc_analyst
 
     code = generate_verification_code()
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    password_hash = hash_password(payload.password)
 
-    user = User(
-        name=name,
-        email=email,
-        password_hash=hash_password(payload.password),
-        role=role,
-        is_verified=False,
-        verification_code=code,
-        verification_code_expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+    existing_pending = await db.execute(
+        select(PendingRegistration).where(PendingRegistration.email == email)
     )
-    db.add(user)
+    pending = existing_pending.scalar_one_or_none()
+
+    if pending:
+        # Re-registering before verifying just refreshes the pending
+        # submission (new details, new code) rather than erroring out.
+        pending.name = name
+        pending.password_hash = password_hash
+        pending.role = role
+        pending.verification_code = code
+        pending.verification_code_expires_at = expires_at
+    else:
+        pending = PendingRegistration(
+            name=name,
+            email=email,
+            password_hash=password_hash,
+            role=role,
+            verification_code=code,
+            verification_code_expires_at=expires_at,
+        )
+        db.add(pending)
+
     await db.commit()
-    await db.refresh(user)
 
     try:
-        await asyncio.to_thread(send_verification_email, user.email, user.name, code)
+        await asyncio.to_thread(send_verification_email, email, name, code)
     except Exception as exc:  # SMTP misconfigured/unreachable -- don't block registration
-        print(f"[SentinelX] Failed to send verification email to {user.email}: {exc}")
+        print(f"[SentinelX] Failed to send verification email to {email}: {exc}")
 
     return RegisterResponse(
-        email=user.email,
-        message="Account created. Check your email for a 6-digit verification code.",
+        email=email,
+        message="Check your email for a 6-digit verification code to finish creating your account.",
     )
 
 
@@ -193,30 +215,36 @@ async def verify_email(payload: VerifyEmailRequest, db: AsyncSession = Depends(g
     email = payload.email.strip().lower()
     code = payload.code.strip()
 
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalar_one_or_none()
+    result = await db.execute(
+        select(PendingRegistration).where(PendingRegistration.email == email)
+    )
+    pending = result.scalar_one_or_none()
 
-    if not user:
-        raise HTTPException(status_code=404, detail="No account found with this email.")
-
-    if user.is_verified:
-        raise HTTPException(status_code=400, detail="This account is already verified.")
-
-    if not user.verification_code or not user.verification_code_expires_at:
+    if not pending:
+        existing_user = await db.execute(select(User).where(User.email == email))
+        if existing_user.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="This account is already verified.")
         raise HTTPException(
-            status_code=400,
-            detail="No verification code on file. Please request a new one.",
+            status_code=404,
+            detail="No pending registration found for this email. Please register again.",
         )
 
-    if datetime.now(timezone.utc) > user.verification_code_expires_at:
+    if datetime.now(timezone.utc) > pending.verification_code_expires_at:
         raise HTTPException(status_code=400, detail="This code has expired. Please request a new one.")
 
-    if code != user.verification_code:
+    if code != pending.verification_code:
         raise HTTPException(status_code=400, detail="Incorrect verification code.")
 
-    user.is_verified = True
-    user.verification_code = None
-    user.verification_code_expires_at = None
+    # The code is correct -- this is the moment the real account is created.
+    user = User(
+        name=pending.name,
+        email=pending.email,
+        password_hash=pending.password_hash,
+        role=pending.role,
+        is_verified=True,
+    )
+    db.add(user)
+    await db.delete(pending)
     await db.commit()
     await db.refresh(user)
 
@@ -227,24 +255,29 @@ async def verify_email(payload: VerifyEmailRequest, db: AsyncSession = Depends(g
 async def resend_verification(payload: ResendVerificationRequest, db: AsyncSession = Depends(get_db)):
     email = payload.email.strip().lower()
 
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalar_one_or_none()
+    result = await db.execute(
+        select(PendingRegistration).where(PendingRegistration.email == email)
+    )
+    pending = result.scalar_one_or_none()
 
-    if not user:
-        raise HTTPException(status_code=404, detail="No account found with this email.")
-
-    if user.is_verified:
-        raise HTTPException(status_code=400, detail="This account is already verified.")
+    if not pending:
+        existing_user = await db.execute(select(User).where(User.email == email))
+        if existing_user.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="This account is already verified.")
+        raise HTTPException(
+            status_code=404,
+            detail="No pending registration found for this email. Please register again.",
+        )
 
     code = generate_verification_code()
-    user.verification_code = code
-    user.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    pending.verification_code = code
+    pending.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
     await db.commit()
 
     try:
-        await asyncio.to_thread(send_verification_email, user.email, user.name, code)
+        await asyncio.to_thread(send_verification_email, pending.email, pending.name, code)
     except Exception as exc:
-        print(f"[SentinelX] Failed to send verification email to {user.email}: {exc}")
+        print(f"[SentinelX] Failed to send verification email to {pending.email}: {exc}")
 
     return {"message": "A new verification code has been sent."}
 

@@ -1,8 +1,11 @@
 import {
+  FormEvent,
   useState,
 } from "react"
 
 import {
+  Eye,
+  EyeOff,
   ShieldCheck,
 } from "lucide-react"
 
@@ -21,6 +24,15 @@ function Register() {
   const [email, setEmail] = useState("")
   const [password, setPassword] =
     useState("")
+
+  const [confirmPassword, setConfirmPassword] =
+    useState("")
+
+  const [showPassword, setShowPassword] =
+    useState(false)
+
+  const [showConfirmPassword, setShowConfirmPassword] =
+    useState(false)
 
   const [role, setRole] =
     useState("soc_analyst")
@@ -45,7 +57,8 @@ function Register() {
     if (
       !name.trim() ||
       !email.trim() ||
-      !password.trim()
+      !password.trim() ||
+      !confirmPassword.trim()
     ) {
       setError(
         "Please complete all fields.",
@@ -56,6 +69,13 @@ function Register() {
     if (password.length < 6) {
       setError(
         "Password must contain at least 6 characters.",
+      )
+      return
+    }
+
+    if (password !== confirmPassword) {
+      setError(
+        "Passwords do not match.",
       )
       return
     }
@@ -87,7 +107,7 @@ function Register() {
       )
 
       setSuccess(
-        "Account created. Check your email for a verification code...",
+        "Verification code sent. Check your email to finish creating your account...",
       )
 
       setTimeout(() => {
@@ -186,17 +206,89 @@ function Register() {
               Password
             </label>
 
-            <input
-              type="password"
-              value={password}
-              onChange={(e) =>
-                setPassword(
-                  e.target.value,
-                )
-              }
-              className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 outline-none focus:border-brand-500"
-              required
-            />
+            <div className="relative">
+
+              <input
+                type={
+                  showPassword
+                    ? "text"
+                    : "password"
+                }
+                value={password}
+                onChange={(e) =>
+                  setPassword(
+                    e.target.value,
+                  )
+                }
+                className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 pr-12 outline-none focus:border-brand-500"
+                required
+              />
+
+              <button
+                type="button"
+                onClick={() =>
+                  setShowPassword(
+                    !showPassword,
+                  )
+                }
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-muted"
+                tabIndex={-1}
+              >
+
+                {showPassword
+                  ? <EyeOff size={18} />
+                  : <Eye size={18} />
+                }
+
+              </button>
+
+            </div>
+
+          </div>
+
+          <div>
+
+            <label className="mb-2 block text-sm">
+              Confirm Password
+            </label>
+
+            <div className="relative">
+
+              <input
+                type={
+                  showConfirmPassword
+                    ? "text"
+                    : "password"
+                }
+                value={confirmPassword}
+                onChange={(e) =>
+                  setConfirmPassword(
+                    e.target.value,
+                  )
+                }
+                className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 pr-12 outline-none focus:border-brand-500"
+                required
+              />
+
+              <button
+                type="button"
+                onClick={() =>
+                  setShowConfirmPassword(
+                    !showConfirmPassword,
+                  )
+                }
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-muted"
+                tabIndex={-1}
+              >
+
+                {showConfirmPassword
+                  ? <EyeOff size={18} />
+                  : <Eye size={18} />
+                }
+
+              </button>
+
+            </div>
 
           </div>
 
@@ -251,7 +343,7 @@ function Register() {
             disabled={submitting}
             className="w-full rounded-xl bg-brand-600 py-3 font-medium hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {submitting ? "Creating account..." : "Create Account"}
+            {submitting ? "Sending code..." : "Create Account"}
           </button>
 
         </form>
