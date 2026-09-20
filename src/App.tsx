@@ -58,22 +58,20 @@ function ProtectedRoute({
   }
 
   /*
-    SUPER ADMIN ACCESS
+    ROLE RESTRICTIONS
 
-    Super Admin can access every protected page -- unchanged from before.
-  */
+    A logged-in user hitting a route that isn't theirs -- including
+    super_admin hitting a /soc, /it, /manager or /auditor route -- is
+    sent to THEIR OWN home instead of being bounced to /login (which
+    they're already past) or, worse, rendered inside a layout with no
+    matching nav for their role. homePathFor() is the single source of
+    truth for what "home" means for every role, shared with Login's
+    post-auth redirect.
 
-  if (role === "super_admin") {
-    return children
-  }
-
-  /*
-    OTHER ROLE RESTRICTIONS
-
-    A logged-in user hitting a route that isn't theirs is sent to THEIR
-    OWN home instead of being bounced to /login (which they're already
-    past). homePathFor() is the single source of truth for what "home"
-    means for every role, shared with Login's post-auth redirect.
+    super_admin no longer gets a blanket bypass here: /admin and
+    /organization-dashboard already list it in allowedRoles below, so
+    this only changes behavior for the new user-side routes, which were
+    never meant to be reachable by an admin account.
   */
 
   if (allowedRoles && !allowedRoles.includes(role ?? "")) {
@@ -166,6 +164,10 @@ function App() {
           <ProtectedRoute
             allowedRoles={[
               "super_admin",
+              // Login already sends organization_admin here; without this,
+              // removing the super_admin bypass above would leave them
+              // stuck in a redirect loop back to this same route.
+              "organization_admin",
             ]}
           >
             <OrganizationDashboard />
