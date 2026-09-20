@@ -77,7 +77,7 @@ This reads the schema that's already defined in the project (in `backend/migrati
 
 ### Step 5 — Check it worked
 
-Go back to pgAdmin → expand **Databases → sentinelx → Schemas → public → Tables**. You should see `organizations`, `users`, `assets`, and `alembic_version` listed. Right-click any table → **View/Edit Data → All Rows** to see it (they'll be empty for now — that's expected).
+Go back to pgAdmin → expand **Databases → sentinelx → Schemas → public → Tables**. As of the admins/users-split migration, you should see over 40 tables listed -- `organizations`, `admins`, `users`, `assets`, the full alert/incident/ticket pipeline (`security_events`, `alerts`, `incidents`, `tickets`, ...), and `alembic_version`. Right-click any table → **View/Edit Data → All Rows** to see it (they'll be empty for now — that's expected).
 
 ---
 
@@ -111,3 +111,4 @@ If you get stuck, take a screenshot of the exact error and send it — don't gue
 
 - Each teammate has their **own separate local database** — this is intentional. Nobody's test data is shared, and nothing about the database ever gets committed to GitHub (`.env` and any local data are excluded via `.gitignore`).
 - If you later add or change a table (a SQLAlchemy model in `backend/app/models.py`), only the person making that change runs `alembic revision --autogenerate -m "..."` and commits the resulting file in `backend/migrations/versions/`. Everyone else just runs `alembic upgrade head` after pulling to catch up — never `--autogenerate` on someone else's change.
+- **Pulling the admins/users split migration** (`f2a3b4c5d6e7_admins_users_split_and_pipeline_tables.py`): just run `alembic upgrade head` like any other migration, from `backend`. It splits the old single `users` table into `admins` (super_admin/organization_admin) and a narrower `users` (soc_analyst/security_manager/it_developer/auditor), and adds the full event → alert → incident → ticket → remediation → verification pipeline schema. If you already had test accounts in your local `users` table, any super_admin/organization_admin rows are moved into `admins` automatically as part of the upgrade -- you don't need to re-register. As always, this migration was written by hand, not with `--autogenerate` -- don't run `alembic revision --autogenerate` against it or any other migration in this project.
