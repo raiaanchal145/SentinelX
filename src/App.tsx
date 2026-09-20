@@ -3,6 +3,8 @@ import { Navigate, Route, Routes } from "react-router-dom"
 import Login from "./pages/Login"
 import Register from "./pages/Register"
 import VerifyEmail from "./pages/VerifyEmail"
+import ForgotPassword from "./pages/ForgotPassword"
+import ResetPassword from "./pages/ResetPassword"
 
 import AdminDashboard from "./pages/AdminDashboard"
 import OrganizationDashboard from "./pages/OrganizationDashboard"
@@ -111,6 +113,16 @@ function App() {
       <Route
         path="/verify-email"
         element={<VerifyEmail />}
+      />
+
+      <Route
+        path="/forgot-password"
+        element={<ForgotPassword />}
+      />
+
+      <Route
+        path="/reset-password"
+        element={<ResetPassword />}
       />
 
       {/* SUPER ADMIN DASHBOARD */}

@@ -93,11 +93,22 @@ function Login() {
         navigate("/soc-dashboard")
       }
     } catch (err) {
-      setError(
+      const message =
         err instanceof Error
           ? err.message
-          : "Invalid email or password.",
-      )
+          : "Invalid email or password."
+
+      if (message.toLowerCase().includes("verify")) {
+        navigate("/verify-email", {
+          state: {
+            email: email.trim().toLowerCase(),
+            notice: message,
+          },
+        })
+        return
+      }
+
+      setError(message)
     } finally {
       setSubmitting(false)
     }
@@ -208,9 +219,23 @@ function Login() {
 
                 <div>
 
-                  <label className="mb-2 block text-sm text-fg-secondary">
-                    Password
-                  </label>
+                  <div className="mb-2 flex items-center justify-between">
+
+                    <label className="text-sm text-fg-secondary">
+                      Password
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        navigate("/forgot-password")
+                      }
+                      className="text-xs text-brand-400 hover:text-brand-300"
+                    >
+                      Forgot password?
+                    </button>
+
+                  </div>
 
                   <div className="relative">
 

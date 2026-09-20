@@ -4,6 +4,8 @@ import {
 } from "react"
 
 import {
+  Eye,
+  EyeOff,
   ShieldCheck,
 } from "lucide-react"
 
@@ -13,41 +15,43 @@ import {
 } from "react-router-dom"
 
 import {
-  apiResendVerification,
-  apiVerifyEmail,
+  apiForgotPassword,
+  apiResetPassword,
 } from "../lib/api"
 
-// Only digits are ever valid in a 6-digit code.
 const CODE_PATTERN = /^[0-9]{6}$/
 
-function VerifyEmail() {
+function ResetPassword() {
   const navigate = useNavigate()
   const location = useLocation()
 
-  const routeState = location.state as
-    | { email?: string; notice?: string }
-    | null
-
-  const stateEmail = routeState?.email || ""
+  const stateEmail =
+    (location.state as { email?: string } | null)?.email || ""
 
   const [email, setEmail] = useState(stateEmail)
   const [code, setCode] = useState("")
 
+  const [newPassword, setNewPassword] = useState("")
+  const [confirmNewPassword, setConfirmNewPassword] = useState("")
+
+  const [showNewPassword, setShowNewPassword] = useState(false)
+  const [showConfirmNewPassword, setShowConfirmNewPassword] =
+    useState(false)
+
   const [error, setError] = useState("")
   const [success, setSuccess] = useState("")
-  const [notice] = useState(routeState?.notice || "")
 
   const [submitting, setSubmitting] = useState(false)
   const [resending, setResending] = useState(false)
 
-  const handleVerify = async (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
 
     setError("")
     setSuccess("")
 
     if (!email.trim()) {
-      setError("Please enter the email you registered with.")
+      setError("Please enter your account email.")
       return
     }
 
@@ -56,12 +60,26 @@ function VerifyEmail() {
       return
     }
 
+    if (newPassword.length < 6) {
+      setError("Password must contain at least 6 characters.")
+      return
+    }
+
+    if (newPassword !== confirmNewPassword) {
+      setError("Passwords do not match.")
+      return
+    }
+
     setSubmitting(true)
 
     try {
-      await apiVerifyEmail(email.trim().toLowerCase(), code.trim())
+      await apiResetPassword(
+        email.trim().toLowerCase(),
+        code.trim(),
+        newPassword,
+      )
 
-      setSuccess("Email verified. You can now sign in.")
+      setSuccess("Password reset. You can now sign in.")
 
       setTimeout(() => {
         navigate("/login")
@@ -70,7 +88,7 @@ function VerifyEmail() {
       setError(
         err instanceof Error
           ? err.message
-          : "Could not verify this code. Please try again.",
+          : "Could not reset the password. Please try again.",
       )
     } finally {
       setSubmitting(false)
@@ -82,15 +100,15 @@ function VerifyEmail() {
     setSuccess("")
 
     if (!email.trim()) {
-      setError("Please enter the email you registered with.")
+      setError("Please enter your account email.")
       return
     }
 
     setResending(true)
 
     try {
-      await apiResendVerification(email.trim().toLowerCase())
-      setSuccess("A new verification code has been sent.")
+      await apiForgotPassword(email.trim().toLowerCase())
+      setSuccess("A new password reset code has been sent.")
     } catch (err) {
       setError(
         err instanceof Error
@@ -121,25 +139,19 @@ function VerifyEmail() {
           <div>
 
             <h1 className="text-2xl font-bold">
-              Verify Your Email
+              Reset Password
             </h1>
 
             <p className="text-sm text-fg-muted">
-              Enter the code we emailed you
+              Enter the code and your new password
             </p>
 
           </div>
 
         </div>
 
-        {notice && (
-          <div className="mb-5 rounded-xl border border-brand-500/20 bg-brand-500/10 p-3 text-sm text-brand-300">
-            {notice}
-          </div>
-        )}
-
         <form
-          onSubmit={handleVerify}
+          onSubmit={handleSubmit}
           className="space-y-5"
         >
 
@@ -164,7 +176,7 @@ function VerifyEmail() {
           <div>
 
             <label className="mb-2 block text-sm">
-              Verification Code
+              Reset Code
             </label>
 
             <input
@@ -178,6 +190,92 @@ function VerifyEmail() {
               className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 tracking-[0.5em] outline-none focus:border-brand-500"
               required
             />
+
+          </div>
+
+          <div>
+
+            <label className="mb-2 block text-sm">
+              New Password
+            </label>
+
+            <div className="relative">
+
+              <input
+                type={
+                  showNewPassword
+                    ? "text"
+                    : "password"
+                }
+                value={newPassword}
+                onChange={(e) =>
+                  setNewPassword(e.target.value)
+                }
+                className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 pr-12 outline-none focus:border-brand-500"
+                required
+              />
+
+              <button
+                type="button"
+                onClick={() =>
+                  setShowNewPassword(!showNewPassword)
+                }
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-muted"
+                tabIndex={-1}
+              >
+
+                {showNewPassword
+                  ? <EyeOff size={18} />
+                  : <Eye size={18} />
+                }
+
+              </button>
+
+            </div>
+
+          </div>
+
+          <div>
+
+            <label className="mb-2 block text-sm">
+              Confirm New Password
+            </label>
+
+            <div className="relative">
+
+              <input
+                type={
+                  showConfirmNewPassword
+                    ? "text"
+                    : "password"
+                }
+                value={confirmNewPassword}
+                onChange={(e) =>
+                  setConfirmNewPassword(e.target.value)
+                }
+                className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 pr-12 outline-none focus:border-brand-500"
+                required
+              />
+
+              <button
+                type="button"
+                onClick={() =>
+                  setShowConfirmNewPassword(
+                    !showConfirmNewPassword,
+                  )
+                }
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-muted"
+                tabIndex={-1}
+              >
+
+                {showConfirmNewPassword
+                  ? <EyeOff size={18} />
+                  : <Eye size={18} />
+                }
+
+              </button>
+
+            </div>
 
           </div>
 
@@ -198,7 +296,7 @@ function VerifyEmail() {
             disabled={submitting}
             className="w-full rounded-xl bg-brand-600 py-3 font-medium hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {submitting ? "Verifying..." : "Verify Email"}
+            {submitting ? "Resetting..." : "Reset Password"}
           </button>
 
         </form>
@@ -223,4 +321,4 @@ function VerifyEmail() {
   )
 }
 
-export default VerifyEmail
+export default ResetPassword

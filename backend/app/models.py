@@ -69,10 +69,26 @@ class User(Base):
 
     # Email verification. An account cannot log in until is_verified is True.
     # verification_code/verification_code_expires_at hold the current
-    # outstanding 6-digit code (cleared once verified).
+    # outstanding 6-digit code -- used both to finish registration and,
+    # if is_verified gets flipped back to False by the lockout below, to
+    # re-verify before logging in again.
     is_verified: Mapped[bool] = mapped_column(default=False)
     verification_code: Mapped[str | None] = mapped_column(String(10))
     verification_code_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    # Wrong-password counter. Reset to 0 on any successful login or
+    # password reset; hitting 3 forces is_verified back to False (and
+    # emails a fresh code) so the account can't be logged into again
+    # until it's re-verified.
+    failed_login_attempts: Mapped[int] = mapped_column(default=0)
+
+    # Forgot-password flow. Separate from verification_code above so a
+    # password reset never accidentally re-triggers/clears the account
+    # verification state.
+    password_reset_code: Mapped[str | None] = mapped_column(String(10))
+    password_reset_code_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
 

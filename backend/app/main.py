@@ -9,7 +9,11 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.email_utils import generate_verification_code, send_verification_email
+from app.email_utils import (
+    generate_verification_code,
+    send_password_reset_email,
+    send_verification_email,
+)
 from app.models import Organization, PendingRegistration, User, UserRole
 from app.security import create_access_token, decode_access_token, hash_password, verify_password
 from app.validators import is_valid_email_format, is_valid_name_format
@@ -89,6 +93,16 @@ class VerifyEmailRequest(BaseModel):
 
 class ResendVerificationRequest(BaseModel):
     email: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    code: str
+    new_password: str
 
 
 class LoginResponse(BaseModel):
@@ -212,6 +226,15 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
 
 @app.post("/api/v1/auth/verify-email", response_model=UserOut)
 async def verify_email(payload: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Handles two different situations with the same code+email form:
+
+    1. Finishing a brand-new registration (a row in pending_registrations
+       exists) -- the real `users` row gets created here.
+    2. Re-verifying an existing account after the 3-failed-attempts
+       lockout below flipped is_verified back to False -- no new row,
+       just clears the lockout.
+    """
     email = payload.email.strip().lower()
     code = payload.code.strip()
 
@@ -220,31 +243,58 @@ async def verify_email(payload: VerifyEmailRequest, db: AsyncSession = Depends(g
     )
     pending = result.scalar_one_or_none()
 
-    if not pending:
-        existing_user = await db.execute(select(User).where(User.email == email))
-        if existing_user.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="This account is already verified.")
+    if pending:
+        if datetime.now(timezone.utc) > pending.verification_code_expires_at:
+            raise HTTPException(status_code=400, detail="This code has expired. Please request a new one.")
+
+        if code != pending.verification_code:
+            raise HTTPException(status_code=400, detail="Incorrect verification code.")
+
+        # The code is correct -- this is the moment the real account is created.
+        user = User(
+            name=pending.name,
+            email=pending.email,
+            password_hash=pending.password_hash,
+            role=pending.role,
+            is_verified=True,
+        )
+        db.add(user)
+        await db.delete(pending)
+        await db.commit()
+        await db.refresh(user)
+
+        return UserOut(id=str(user.id), name=user.name, email=user.email, role=user.role.value)
+
+    # No pending registration -- this must be an existing account
+    # re-verifying (e.g. after a login lockout).
+    existing_user = await db.execute(select(User).where(User.email == email))
+    user = existing_user.scalar_one_or_none()
+
+    if not user:
         raise HTTPException(
             status_code=404,
             detail="No pending registration found for this email. Please register again.",
         )
 
-    if datetime.now(timezone.utc) > pending.verification_code_expires_at:
+    if user.is_verified:
+        raise HTTPException(status_code=400, detail="This account is already verified.")
+
+    if not user.verification_code or not user.verification_code_expires_at:
+        raise HTTPException(
+            status_code=400,
+            detail="No verification code on file. Please request a new one.",
+        )
+
+    if datetime.now(timezone.utc) > user.verification_code_expires_at:
         raise HTTPException(status_code=400, detail="This code has expired. Please request a new one.")
 
-    if code != pending.verification_code:
+    if code != user.verification_code:
         raise HTTPException(status_code=400, detail="Incorrect verification code.")
 
-    # The code is correct -- this is the moment the real account is created.
-    user = User(
-        name=pending.name,
-        email=pending.email,
-        password_hash=pending.password_hash,
-        role=pending.role,
-        is_verified=True,
-    )
-    db.add(user)
-    await db.delete(pending)
+    user.is_verified = True
+    user.verification_code = None
+    user.verification_code_expires_at = None
+    user.failed_login_attempts = 0
     await db.commit()
     await db.refresh(user)
 
@@ -260,24 +310,42 @@ async def resend_verification(payload: ResendVerificationRequest, db: AsyncSessi
     )
     pending = result.scalar_one_or_none()
 
-    if not pending:
-        existing_user = await db.execute(select(User).where(User.email == email))
-        if existing_user.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="This account is already verified.")
+    if pending:
+        code = generate_verification_code()
+        pending.verification_code = code
+        pending.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+        await db.commit()
+
+        try:
+            await asyncio.to_thread(send_verification_email, pending.email, pending.name, code)
+        except Exception as exc:
+            print(f"[SentinelX] Failed to send verification email to {pending.email}: {exc}")
+
+        return {"message": "A new verification code has been sent."}
+
+    # No pending registration -- this must be an existing account that
+    # needs to re-verify (e.g. after a login lockout).
+    existing_user = await db.execute(select(User).where(User.email == email))
+    user = existing_user.scalar_one_or_none()
+
+    if not user:
         raise HTTPException(
             status_code=404,
             detail="No pending registration found for this email. Please register again.",
         )
 
+    if user.is_verified:
+        raise HTTPException(status_code=400, detail="This account is already verified.")
+
     code = generate_verification_code()
-    pending.verification_code = code
-    pending.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    user.verification_code = code
+    user.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
     await db.commit()
 
     try:
-        await asyncio.to_thread(send_verification_email, pending.email, pending.name, code)
+        await asyncio.to_thread(send_verification_email, user.email, user.name, code)
     except Exception as exc:
-        print(f"[SentinelX] Failed to send verification email to {pending.email}: {exc}")
+        print(f"[SentinelX] Failed to send verification email to {user.email}: {exc}")
 
     return {"message": "A new verification code has been sent."}
 
@@ -296,6 +364,36 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(payload.password, user.password_hash):
+        # Only track wrong-password attempts against a real, currently
+        # loggable-into account -- an unverified/deactivated account is
+        # already blocked below, so there's nothing to lock further.
+        if user and user.is_active and user.is_verified:
+            user.failed_login_attempts += 1
+
+            if user.failed_login_attempts >= 3:
+                user.failed_login_attempts = 0
+                user.is_verified = False
+                code = generate_verification_code()
+                user.verification_code = code
+                user.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+                await db.commit()
+
+                try:
+                    await asyncio.to_thread(send_verification_email, user.email, user.name, code)
+                except Exception as exc:
+                    print(f"[SentinelX] Failed to send verification email to {user.email}: {exc}")
+
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "Too many failed login attempts. We've emailed a new "
+                        "verification code -- please verify your account before "
+                        "logging in again."
+                    ),
+                )
+
+            await db.commit()
+
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
     if not user.is_active:
@@ -303,6 +401,11 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
 
     if not user.is_verified:
         raise HTTPException(status_code=403, detail="Please verify your email before logging in.")
+
+    if user.failed_login_attempts:
+        # Clear a stale count (e.g. 1-2 prior misses) on a successful login.
+        user.failed_login_attempts = 0
+        await db.commit()
 
     token = create_access_token({"sub": str(user.id), "role": user.role.value})
 
@@ -320,6 +423,70 @@ async def me(current_user: User = Depends(get_current_user)):
         email=current_user.email,
         role=current_user.role.value,
     )
+
+
+@app.post("/api/v1/auth/forgot-password")
+async def forgot_password(payload: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    email = payload.email.strip().lower()
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="No account found with this email.")
+
+    if not user.is_verified:
+        raise HTTPException(
+            status_code=400,
+            detail="Please verify your email before resetting your password.",
+        )
+
+    code = generate_verification_code()
+    user.password_reset_code = code
+    user.password_reset_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    await db.commit()
+
+    try:
+        await asyncio.to_thread(send_password_reset_email, user.email, user.name, code)
+    except Exception as exc:
+        print(f"[SentinelX] Failed to send password reset email to {user.email}: {exc}")
+
+    return {"message": "Check your email for a 6-digit password reset code."}
+
+
+@app.post("/api/v1/auth/reset-password")
+async def reset_password(payload: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    email = payload.email.strip().lower()
+    code = payload.code.strip()
+
+    if len(payload.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must contain at least 6 characters.")
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="No account found with this email.")
+
+    if not user.password_reset_code or not user.password_reset_code_expires_at:
+        raise HTTPException(
+            status_code=400,
+            detail="No password reset code on file. Please request a new one.",
+        )
+
+    if datetime.now(timezone.utc) > user.password_reset_code_expires_at:
+        raise HTTPException(status_code=400, detail="This code has expired. Please request a new one.")
+
+    if code != user.password_reset_code:
+        raise HTTPException(status_code=400, detail="Incorrect verification code.")
+
+    user.password_hash = hash_password(payload.new_password)
+    user.password_reset_code = None
+    user.password_reset_code_expires_at = None
+    user.failed_login_attempts = 0
+    await db.commit()
+
+    return {"message": "Password reset. You can now log in with your new password."}
 
 
 # ---------------------------------------------------------------------------
