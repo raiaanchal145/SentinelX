@@ -4,13 +4,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # "dev" (default, local/college-project use) or anything else (e.g.
+    # "production", "staging") -- controls whether the hardcoded
+    # secret_key default below is allowed. See _require_secret_key_in_non_dev.
+    env: str = "dev"
+
     database_url: str = (
         "postgresql+asyncpg://sentinelx:sentinelx_dev_pw@postgres:5432/sentinelx"
     )
 
     # Used to sign login tokens. Fine as a default for a college project running
     # only on localhost -- if this were a real product, every teammate would set
-    # their own random value in their own .env instead.
+    # their own random value in their own .env instead. Outside ENV=dev this
+    # default is refused at startup; see _require_secret_key_in_non_dev.
     secret_key: str = "sentinelx-dev-secret-change-me"
     access_token_expire_minutes: int = 60 * 12  # 12 hours
 
@@ -26,4 +32,27 @@ class Settings(BaseSettings):
     smtp_from_name: str = "SentinelX"
 
 
+DEFAULT_SECRET_KEY = "sentinelx-dev-secret-change-me"
+
+
+def _require_secret_key_in_non_dev(settings: "Settings") -> None:
+    """
+    The hardcoded secret_key default above is only safe on localhost, where
+    ENV defaults to "dev". Anywhere else (ENV=production, staging, ...) a
+    real SECRET_KEY must be set in the environment/.env, or every login
+    token this server issues could be forged by anyone who reads this
+    source file. Fails fast at import time rather than silently signing
+    tokens with a public default.
+    """
+    if settings.env.lower() == "dev":
+        return
+    if not settings.secret_key or settings.secret_key == DEFAULT_SECRET_KEY:
+        raise RuntimeError(
+            "SECRET_KEY must be set to a real, private value when ENV is not "
+            "'dev' (current ENV=" + repr(settings.env) + "). Set SECRET_KEY "
+            "in the environment or backend/.env before starting the server."
+        )
+
+
 settings = Settings()
+_require_secret_key_in_non_dev(settings)
