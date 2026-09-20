@@ -14,7 +14,7 @@ from app.email_utils import (
     send_password_reset_email,
     send_verification_email,
 )
-from app.models import Organization, PendingRegistration, User, UserRole
+from app.models import AccountEmail, Admin, AdminLevel, Organization, PendingRegistration, User, UserRole
 from app.security import create_access_token, decode_access_token, hash_password, verify_password
 from app.validators import is_valid_email_format, is_valid_name_format
 
@@ -43,7 +43,9 @@ async def add_security_headers(request, call_next):
 
 # Emails that are always assigned the super_admin role, no matter what role
 # they pick at registration. Decided on the server so it can't be bypassed
-# from the browser.
+# from the browser. Since the admins/users split, these become `admins`
+# rows with admin_level=super_admin (organization_id NULL) instead of
+# `users` rows -- see register()/verify_email() below.
 SUPER_ADMIN_EMAILS = {
     "anchal01@gmail.com",
     "anshpatel4204@gmail.com",
@@ -66,7 +68,15 @@ class RegisterRequest(BaseModel):
     name: str
     email: str
     password: str
+    # One of the UserRole values (soc_analyst/security_manager/it_developer/
+    # auditor) for a plain user, or the literal string "organization_admin"
+    # to self-register as an admin of a brand-new organization. Never
+    # "super_admin" -- that's assigned only via SUPER_ADMIN_EMAILS below.
     role: str = "soc_analyst"
+    # Only used when role == "organization_admin" (or for a plain user, as
+    # the name of their auto-created personal org, since there's no "pick
+    # your org" UI yet). Defaults to "<name>'s Organization" if omitted.
+    organization_name: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -78,7 +88,12 @@ class UserOut(BaseModel):
     id: str
     name: str
     email: str
+    # For a user account this is the UserRole value; for an admin account
+    # this is the AdminLevel value (super_admin/organization_admin) -- kept
+    # under the same field name for frontend compatibility (existing code
+    # already checks role == "super_admin"). account_type disambiguates.
     role: str
+    account_type: str  # "admin" | "user"
 
 
 class RegisterResponse(BaseModel):
@@ -111,10 +126,37 @@ class LoginResponse(BaseModel):
     user: UserOut
 
 
+async def _account_by_email(db: AsyncSession, email: str) -> tuple[Admin | User | None, str | None]:
+    """
+    Looks up the single account (admin or user) that owns `email`, via
+    account_emails -- the table that enforces "one email, one account,
+    whichever table it's in" (see AccountEmail's docstring in models.py).
+    Returns (account, account_type) or (None, None).
+    """
+    mapping = (await db.execute(select(AccountEmail).where(AccountEmail.email == email))).scalar_one_or_none()
+    if not mapping:
+        return None, None
+
+    model = Admin if mapping.account_type == "admin" else User
+    account = (await db.execute(select(model).where(model.id == mapping.account_id))).scalar_one_or_none()
+    return account, mapping.account_type
+
+
+def _role_value(account: Admin | User, account_type: str) -> str:
+    return account.admin_level.value if account_type == "admin" else account.role.value
+
+
 async def get_current_user(
     authorization: str | None = Header(default=None),
     db: AsyncSession = Depends(get_db),
-) -> User:
+) -> Admin | User:
+    """
+    Resolves the bearer token to whichever table (admins or users) its
+    account_type claim points into. Despite the name (kept because most
+    existing call sites just want "whoever is logged in"), this can
+    return either an Admin or a User -- use get_current_admin or
+    require_roles below where an endpoint needs to restrict which kind.
+    """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated.")
 
@@ -122,20 +164,51 @@ async def get_current_user(
 
     try:
         payload = decode_access_token(token)
-        user_id = payload.get("sub")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired session. Please log in again.")
 
-    if not user_id:
+    account_id = payload.get("sub")
+    account_type = payload.get("account_type")
+
+    if not account_id or account_type not in ("admin", "user"):
         raise HTTPException(status_code=401, detail="Invalid or expired session. Please log in again.")
 
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
+    model = Admin if account_type == "admin" else User
+    result = await db.execute(select(model).where(model.id == account_id))
+    account = result.scalar_one_or_none()
 
-    if not user:
+    if not account:
         raise HTTPException(status_code=401, detail="Invalid or expired session. Please log in again.")
 
-    return user
+    return account
+
+
+async def get_current_admin(current_account: Admin | User = Depends(get_current_user)) -> Admin:
+    """Like get_current_user, but rejects anything that isn't an admin."""
+    if not isinstance(current_account, Admin):
+        raise HTTPException(status_code=403, detail="This action requires an administrator account.")
+    return current_account
+
+
+def require_roles(*roles: str):
+    """
+    Dependency factory restricting an endpoint to `users` accounts whose
+    role is one of `roles` (UserRole values, e.g. "soc_analyst"). Admin
+    accounts always pass -- they aren't restricted by UserRole.
+
+    Not used by any endpoint yet: this migration doesn't add the
+    ticket/incident/etc. endpoints themselves, only the tables and the
+    auth plumbing they'll need.
+    """
+
+    async def _check(current_account: Admin | User = Depends(get_current_user)) -> Admin | User:
+        if isinstance(current_account, Admin):
+            return current_account
+        if isinstance(current_account, User) and current_account.role.value in roles:
+            return current_account
+        raise HTTPException(status_code=403, detail="You do not have permission to perform this action.")
+
+    return _check
 
 
 @app.post("/api/v1/auth/register", response_model=RegisterResponse)
@@ -143,7 +216,7 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
     """
     Stores the submission as a pending registration and emails an OTP.
 
-    No row is created in `users` here -- that only happens in
+    No row is created in `admins` or `users` here -- that only happens in
     verify_email() once the code is confirmed, so an account someone
     never verifies leaves nothing behind but an expired pending row.
     """
@@ -168,20 +241,37 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
     if len(payload.password) < 6:
         raise HTTPException(status_code=400, detail="Password must contain at least 6 characters.")
 
-    existing_user = await db.execute(select(User).where(User.email == email))
-    if existing_user.scalar_one_or_none():
+    # account_emails is the cross-table ("admins" + "users") uniqueness
+    # check -- a plain "does users or admins have this email" query would
+    # miss whichever table it's not looking at. See AccountEmail's
+    # docstring in models.py.
+    existing = await db.execute(select(AccountEmail).where(AccountEmail.email == email))
+    if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="An account already exists with this email.")
 
+    organization_name: str | None = None
+
     if email in SUPER_ADMIN_EMAILS:
-        role = UserRole.super_admin
+        # Nobody can self-assign super_admin through the role field --
+        # this is decided purely by the configured email allow-list.
+        account_type = "admin"
+        admin_level: AdminLevel | None = AdminLevel.super_admin
+        role: UserRole | None = None
+    elif payload.role == "organization_admin":
+        account_type = "admin"
+        admin_level = AdminLevel.organization_admin
+        role = None
+        organization_name = (payload.organization_name or "").strip() or f"{name}'s Organization"
     else:
+        account_type = "user"
+        admin_level = None
         try:
             role = UserRole(payload.role)
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid account role.")
-        if role == UserRole.super_admin:
-            # Nobody can self-assign super_admin through the role dropdown.
             role = UserRole.soc_analyst
+        # No "pick your org" UI yet -- a self-registered plain user gets a
+        # personal organization created at verify time (see verify_email).
+        organization_name = (payload.organization_name or "").strip() or f"{name}'s Organization"
 
     code = generate_verification_code()
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
@@ -197,7 +287,10 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
         # submission (new details, new code) rather than erroring out.
         pending.name = name
         pending.password_hash = password_hash
+        pending.account_type = account_type
         pending.role = role
+        pending.admin_level = admin_level
+        pending.organization_name = organization_name
         pending.verification_code = code
         pending.verification_code_expires_at = expires_at
     else:
@@ -205,7 +298,10 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
             name=name,
             email=email,
             password_hash=password_hash,
+            account_type=account_type,
             role=role,
+            admin_level=admin_level,
+            organization_name=organization_name,
             verification_code=code,
             verification_code_expires_at=expires_at,
         )
@@ -230,10 +326,11 @@ async def verify_email(payload: VerifyEmailRequest, db: AsyncSession = Depends(g
     Handles two different situations with the same code+email form:
 
     1. Finishing a brand-new registration (a row in pending_registrations
-       exists) -- the real `users` row gets created here.
-    2. Re-verifying an existing account after the 3-failed-attempts
-       lockout below flipped is_verified back to False -- no new row,
-       just clears the lockout.
+       exists) -- the real `admins` or `users` row gets created here,
+       whichever pending.account_type points to.
+    2. Re-verifying an existing account (either table) after the
+       3-failed-attempts lockout below flipped is_verified back to False
+       -- no new row, just clears the lockout.
     """
     email = payload.email.strip().lower()
     code = payload.code.strip()
@@ -250,55 +347,103 @@ async def verify_email(payload: VerifyEmailRequest, db: AsyncSession = Depends(g
         if code != pending.verification_code:
             raise HTTPException(status_code=400, detail="Incorrect verification code.")
 
-        # The code is correct -- this is the moment the real account is created.
-        user = User(
-            name=pending.name,
-            email=pending.email,
-            password_hash=pending.password_hash,
-            role=pending.role,
-            is_verified=True,
-        )
-        db.add(user)
+        # The code is correct -- this is the moment the real account (and,
+        # for an organization_admin or plain user, its organization) is
+        # created.
+        if pending.account_type == "admin":
+            organization_id = None
+            org: Organization | None = None
+
+            if pending.admin_level == AdminLevel.organization_admin:
+                # Self-registering as an organization admin always creates
+                # a brand-new organization -- there's no "join an existing
+                # org" flow yet.
+                org = Organization(name=pending.organization_name or f"{pending.name}'s Organization")
+                db.add(org)
+                await db.flush()  # need org.id before the admin row references it
+                organization_id = org.id
+
+            account: Admin | User = Admin(
+                organization_id=organization_id,
+                name=pending.name,
+                email=pending.email,
+                password_hash=pending.password_hash,
+                admin_level=pending.admin_level,
+                is_verified=True,
+            )
+            db.add(account)
+            await db.flush()  # need account.id for organizations.created_by_admin_id
+
+            if org is not None:
+                org.created_by_admin_id = account.id
+
+            account_type = "admin"
+        else:
+            # A plain user has no "pick your org" UI yet either -- give
+            # them a personal organization, same as a self-registered
+            # organization_admin.
+            org = Organization(name=pending.organization_name or f"{pending.name}'s Organization")
+            db.add(org)
+            await db.flush()
+
+            account = User(
+                organization_id=org.id,
+                name=pending.name,
+                email=pending.email,
+                password_hash=pending.password_hash,
+                role=pending.role,
+                is_verified=True,
+            )
+            db.add(account)
+            await db.flush()  # need account.id for the AccountEmail row below
+            account_type = "user"
+
+        db.add(AccountEmail(email=pending.email, account_type=account_type, account_id=account.id))
         await db.delete(pending)
         await db.commit()
-        await db.refresh(user)
+        await db.refresh(account)
 
-        return UserOut(id=str(user.id), name=user.name, email=user.email, role=user.role.value)
+        return UserOut(
+            id=str(account.id), name=account.name, email=account.email,
+            role=_role_value(account, account_type), account_type=account_type,
+        )
 
     # No pending registration -- this must be an existing account
-    # re-verifying (e.g. after a login lockout).
-    existing_user = await db.execute(select(User).where(User.email == email))
-    user = existing_user.scalar_one_or_none()
+    # re-verifying (e.g. after a login lockout). Could be either table.
+    account, account_type = await _account_by_email(db, email)
 
-    if not user:
+    if not account:
         raise HTTPException(
             status_code=404,
             detail="No pending registration found for this email. Please register again.",
         )
 
-    if user.is_verified:
+    if account.is_verified:
         raise HTTPException(status_code=400, detail="This account is already verified.")
 
-    if not user.verification_code or not user.verification_code_expires_at:
+    if not account.verification_code or not account.verification_code_expires_at:
         raise HTTPException(
             status_code=400,
             detail="No verification code on file. Please request a new one.",
         )
 
-    if datetime.now(timezone.utc) > user.verification_code_expires_at:
+    if datetime.now(timezone.utc) > account.verification_code_expires_at:
         raise HTTPException(status_code=400, detail="This code has expired. Please request a new one.")
 
-    if code != user.verification_code:
+    if code != account.verification_code:
         raise HTTPException(status_code=400, detail="Incorrect verification code.")
 
-    user.is_verified = True
-    user.verification_code = None
-    user.verification_code_expires_at = None
-    user.failed_login_attempts = 0
+    account.is_verified = True
+    account.verification_code = None
+    account.verification_code_expires_at = None
+    account.failed_login_attempts = 0
     await db.commit()
-    await db.refresh(user)
+    await db.refresh(account)
 
-    return UserOut(id=str(user.id), name=user.name, email=user.email, role=user.role.value)
+    return UserOut(
+        id=str(account.id), name=account.name, email=account.email,
+        role=_role_value(account, account_type), account_type=account_type,
+    )
 
 
 @app.post("/api/v1/auth/resend-verification")
@@ -323,29 +468,28 @@ async def resend_verification(payload: ResendVerificationRequest, db: AsyncSessi
 
         return {"message": "A new verification code has been sent."}
 
-    # No pending registration -- this must be an existing account that
-    # needs to re-verify (e.g. after a login lockout).
-    existing_user = await db.execute(select(User).where(User.email == email))
-    user = existing_user.scalar_one_or_none()
+    # No pending registration -- this must be an existing account (either
+    # table) that needs to re-verify (e.g. after a login lockout).
+    account, _account_type = await _account_by_email(db, email)
 
-    if not user:
+    if not account:
         raise HTTPException(
             status_code=404,
             detail="No pending registration found for this email. Please register again.",
         )
 
-    if user.is_verified:
+    if account.is_verified:
         raise HTTPException(status_code=400, detail="This account is already verified.")
 
     code = generate_verification_code()
-    user.verification_code = code
-    user.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    account.verification_code = code
+    account.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
     await db.commit()
 
     try:
-        await asyncio.to_thread(send_verification_email, user.email, user.name, code)
+        await asyncio.to_thread(send_verification_email, account.email, account.name, code)
     except Exception as exc:
-        print(f"[SentinelX] Failed to send verification email to {user.email}: {exc}")
+        print(f"[SentinelX] Failed to send verification email to {account.email}: {exc}")
 
     return {"message": "A new verification code has been sent."}
 
@@ -360,28 +504,27 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
             detail="Please enter a valid email address (letters, numbers, and . _ % + - only).",
         )
 
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalar_one_or_none()
+    account, account_type = await _account_by_email(db, email)
 
-    if not user or not verify_password(payload.password, user.password_hash):
+    if not account or not verify_password(payload.password, account.password_hash):
         # Only track wrong-password attempts against a real, currently
         # loggable-into account -- an unverified/deactivated account is
         # already blocked below, so there's nothing to lock further.
-        if user and user.is_active and user.is_verified:
-            user.failed_login_attempts += 1
+        if account and account.is_active and account.is_verified:
+            account.failed_login_attempts += 1
 
-            if user.failed_login_attempts >= 3:
-                user.failed_login_attempts = 0
-                user.is_verified = False
+            if account.failed_login_attempts >= 3:
+                account.failed_login_attempts = 0
+                account.is_verified = False
                 code = generate_verification_code()
-                user.verification_code = code
-                user.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+                account.verification_code = code
+                account.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
                 await db.commit()
 
                 try:
-                    await asyncio.to_thread(send_verification_email, user.email, user.name, code)
+                    await asyncio.to_thread(send_verification_email, account.email, account.name, code)
                 except Exception as exc:
-                    print(f"[SentinelX] Failed to send verification email to {user.email}: {exc}")
+                    print(f"[SentinelX] Failed to send verification email to {account.email}: {exc}")
 
                 raise HTTPException(
                     status_code=403,
@@ -396,32 +539,45 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
 
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
-    if not user.is_active:
+    if not account.is_active:
         raise HTTPException(status_code=403, detail="This account has been deactivated.")
 
-    if not user.is_verified:
+    if not account.is_verified:
         raise HTTPException(status_code=403, detail="Please verify your email before logging in.")
 
-    if user.failed_login_attempts:
+    if account.failed_login_attempts:
         # Clear a stale count (e.g. 1-2 prior misses) on a successful login.
-        user.failed_login_attempts = 0
-        await db.commit()
+        account.failed_login_attempts = 0
 
-    token = create_access_token({"sub": str(user.id), "role": user.role.value})
+    account.last_login_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    role_value = _role_value(account, account_type)
+
+    token = create_access_token({
+        "sub": str(account.id),
+        "account_type": account_type,
+        "role": role_value,
+    })
 
     return LoginResponse(
         access_token=token,
-        user=UserOut(id=str(user.id), name=user.name, email=user.email, role=user.role.value),
+        user=UserOut(
+            id=str(account.id), name=account.name, email=account.email,
+            role=role_value, account_type=account_type,
+        ),
     )
 
 
 @app.get("/api/v1/auth/me", response_model=UserOut)
-async def me(current_user: User = Depends(get_current_user)):
+async def me(current_account: Admin | User = Depends(get_current_user)):
+    account_type = "admin" if isinstance(current_account, Admin) else "user"
     return UserOut(
-        id=str(current_user.id),
-        name=current_user.name,
-        email=current_user.email,
-        role=current_user.role.value,
+        id=str(current_account.id),
+        name=current_account.name,
+        email=current_account.email,
+        role=_role_value(current_account, account_type),
+        account_type=account_type,
     )
 
 
@@ -429,27 +585,26 @@ async def me(current_user: User = Depends(get_current_user)):
 async def forgot_password(payload: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
     email = payload.email.strip().lower()
 
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalar_one_or_none()
+    account, _account_type = await _account_by_email(db, email)
 
-    if not user:
+    if not account:
         raise HTTPException(status_code=404, detail="No account found with this email.")
 
-    if not user.is_verified:
+    if not account.is_verified:
         raise HTTPException(
             status_code=400,
             detail="Please verify your email before resetting your password.",
         )
 
     code = generate_verification_code()
-    user.password_reset_code = code
-    user.password_reset_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    account.password_reset_code = code
+    account.password_reset_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
     await db.commit()
 
     try:
-        await asyncio.to_thread(send_password_reset_email, user.email, user.name, code)
+        await asyncio.to_thread(send_password_reset_email, account.email, account.name, code)
     except Exception as exc:
-        print(f"[SentinelX] Failed to send password reset email to {user.email}: {exc}")
+        print(f"[SentinelX] Failed to send password reset email to {account.email}: {exc}")
 
     return {"message": "Check your email for a 6-digit password reset code."}
 
@@ -462,35 +617,34 @@ async def reset_password(payload: ResetPasswordRequest, db: AsyncSession = Depen
     if len(payload.new_password) < 6:
         raise HTTPException(status_code=400, detail="Password must contain at least 6 characters.")
 
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalar_one_or_none()
+    account, _account_type = await _account_by_email(db, email)
 
-    if not user:
+    if not account:
         raise HTTPException(status_code=404, detail="No account found with this email.")
 
-    if not user.password_reset_code or not user.password_reset_code_expires_at:
+    if not account.password_reset_code or not account.password_reset_code_expires_at:
         raise HTTPException(
             status_code=400,
             detail="No password reset code on file. Please request a new one.",
         )
 
-    if datetime.now(timezone.utc) > user.password_reset_code_expires_at:
+    if datetime.now(timezone.utc) > account.password_reset_code_expires_at:
         raise HTTPException(status_code=400, detail="This code has expired. Please request a new one.")
 
-    if code != user.password_reset_code:
+    if code != account.password_reset_code:
         raise HTTPException(status_code=400, detail="Incorrect verification code.")
 
-    user.password_hash = hash_password(payload.new_password)
-    user.password_reset_code = None
-    user.password_reset_code_expires_at = None
-    user.failed_login_attempts = 0
+    account.password_hash = hash_password(payload.new_password)
+    account.password_reset_code = None
+    account.password_reset_code_expires_at = None
+    account.failed_login_attempts = 0
     await db.commit()
 
     return {"message": "Password reset. You can now log in with your new password."}
 
 
 # ---------------------------------------------------------------------------
-# Organizations (used earlier to prove the DB connection works end to end)
+# Organizations
 # ---------------------------------------------------------------------------
 
 
@@ -514,12 +668,23 @@ class OrganizationOut(BaseModel):
 
 
 @app.post("/api/v1/organizations", response_model=OrganizationOut)
-async def create_organization(payload: OrganizationCreate, db: AsyncSession = Depends(get_db)):
+async def create_organization(
+    payload: OrganizationCreate,
+    db: AsyncSession = Depends(get_db),
+    current_admin: Admin = Depends(get_current_admin),
+):
+    """
+    Admin-only. Per the schema split, every organization should know
+    which admin created it (organizations.created_by_admin_id) -- this
+    endpoint used to be open with no such link; now that `admins` exists,
+    it requires an authenticated admin and records them as the creator.
+    """
     org = Organization(
         name=payload.name,
         industry=payload.industry,
         environment=payload.environment,
         timezone=payload.timezone,
+        created_by_admin_id=current_admin.id,
     )
     db.add(org)
     await db.commit()
@@ -566,10 +731,12 @@ async def list_organizations(db: AsyncSession = Depends(get_db)):
 async def stats_overview(db: AsyncSession = Depends(get_db)):
     """Real counts pulled straight from the database, for the dashboard stat cards.
 
-    Only users/assets/organizations exist as real tables today. Incidents,
-    alerts and events aren't modeled yet, so those dashboard cards stay at 0
-    until that schema is added -- this endpoint doesn't fabricate numbers for
-    them.
+    `users` counts now exclude admins (they moved to their own table).
+    admins isn't in this response -- the dashboard cards this feeds were
+    built around "how many analysts/assets/orgs" and don't have an admin
+    card yet. The full pipeline tables (alerts/incidents/tickets/...) exist
+    as of this migration but have no endpoints yet, so they're still left
+    out here rather than always reporting 0.
     """
     users_count = (await db.execute(text("SELECT COUNT(*) FROM users"))).scalar()
     assets_count = (await db.execute(text("SELECT COUNT(*) FROM assets"))).scalar()
