@@ -128,3 +128,19 @@ structurally cannot be, covered by the pytest suite as it exists today.
 It needs a manual `alembic upgrade head` / `alembic downgrade -1`
 run against a real Postgres database -- see the final manual checklist
 for the exact commands.
+
+## Login's "Invalid email or password." stays deliberately generic
+
+Asked directly whether a wrong email and a wrong password should get
+distinct messages ("no account with that email" vs "wrong password").
+Kept the single generic message (`app/routers/auth.py::login`) on
+purpose: splitting it enables user enumeration -- an attacker probing
+emails to learn which ones have accounts, before even attempting a
+password, then focusing brute-force/credential-stuffing effort only on
+confirmed accounts. This is a standard, well-known login anti-pattern
+(OWASP calls it out explicitly), and avoiding it matters especially
+here since SentinelX is itself a security-operations tool. The
+existing lockout behavior (3 failed attempts on a real account force
+re-verification -- see `login`'s `failed_login_attempts` handling)
+already gives a legitimate user enough signal that something's wrong
+without telling an attacker which half of their guess was right.
