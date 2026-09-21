@@ -100,7 +100,7 @@ async def test_full_signup_to_soc_staffing_lifecycle(client, db_session):
     dev_raw_token = await _mint_and_stamp_token(db_session, email="dev@example.com")
 
     # 4. The invitee accepts and logs in; /auth/me shows exactly their role's
-    # default modules (assets: read, it_tickets: write) -- nothing else,
+    # default modules (assets: write, it_tickets: write) -- nothing else,
     # since the organization is still soc_mode=managed at this point.
     accept_resp = await client.post(
         f"{INVITATIONS_BASE}/accept",
@@ -112,7 +112,7 @@ async def test_full_signup_to_soc_staffing_lifecycle(client, db_session):
 
     me_resp = await client.get("/api/v1/auth/me", headers=auth(dev_token))
     assert me_resp.status_code == 200
-    assert me_resp.json()["effective_modules"] == {"assets": "read", "it_tickets": "write"}
+    assert me_resp.json()["effective_modules"] == {"assets": "write", "it_tickets": "write"}
 
     # 5. Owner denies a module for that member; it disappears from effective_modules.
     deny_resp = await client.put(
@@ -123,7 +123,7 @@ async def test_full_signup_to_soc_staffing_lifecycle(client, db_session):
     assert deny_resp.status_code == 200
 
     me_after_deny = await client.get("/api/v1/auth/me", headers=auth(dev_token))
-    assert me_after_deny.json()["effective_modules"] == {"assets": "read"}
+    assert me_after_deny.json()["effective_modules"] == {"assets": "write"}
 
     # 6. Inviting a soc_analyst is rejected while the organization is
     # managed, since only platform SOC staff work its incidents.
@@ -158,5 +158,5 @@ async def test_full_signup_to_soc_staffing_lifecycle(client, db_session):
 
     soc_me_resp = await client.get("/api/v1/auth/me", headers=auth(soc_analyst_token))
     assert soc_me_resp.json()["effective_modules"] == {
-        "assets": "write", "soc": "write", "incidents": "write", "ai_agents": "write", "reports": "write",
+        "assets": "read", "soc": "write", "incidents": "write", "ai_agents": "write", "reports": "write",
     }

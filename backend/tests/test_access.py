@@ -33,7 +33,7 @@ async def test_role_default_only_grants_exactly_its_map(db_session):
     dev = await make_user(db_session, email="dev@example.com", role=UserRole.it_developer, organization_id=org.id)
 
     access = await get_effective_access(db_session, dev, org)
-    assert access["modules"] == {"assets": ACCESS_READ, "it_tickets": ACCESS_WRITE}
+    assert access["modules"] == {"assets": ACCESS_WRITE, "it_tickets": ACCESS_WRITE}
 
 
 async def test_org_module_disabled_narrows_role_default(db_session):
@@ -51,7 +51,7 @@ async def test_org_module_disabled_narrows_role_default(db_session):
     await db_session.commit()
 
     access = await get_effective_access(db_session, dev, org)
-    assert access["modules"] == {"assets": ACCESS_READ}
+    assert access["modules"] == {"assets": ACCESS_WRITE}
 
 
 async def test_org_role_access_denial_narrows_but_does_not_touch_other_modules(db_session):
@@ -106,7 +106,7 @@ async def test_user_override_can_never_grant_beyond_role_default(db_session):
 
     access = await get_effective_access(db_session, dev, org)
     assert "soc" not in access["modules"]
-    assert access["modules"] == {"assets": ACCESS_READ, "it_tickets": ACCESS_WRITE}
+    assert access["modules"] == {"assets": ACCESS_WRITE, "it_tickets": ACCESS_WRITE}
 
 
 async def test_soc_mode_gates_soc_analyst_soc_and_incidents_only(db_session):
@@ -116,7 +116,7 @@ async def test_soc_mode_gates_soc_analyst_soc_and_incidents_only(db_session):
     managed_access = await get_effective_access(db_session, analyst, org)
     assert "soc" not in managed_access["modules"]
     assert "incidents" not in managed_access["modules"]
-    assert managed_access["modules"]["assets"] == ACCESS_WRITE
+    assert managed_access["modules"]["assets"] == ACCESS_READ
     assert managed_access["modules"]["ai_agents"] == ACCESS_WRITE
     assert managed_access["modules"]["reports"] == ACCESS_WRITE
 
