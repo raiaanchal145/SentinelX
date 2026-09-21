@@ -31,7 +31,14 @@ async def check_invitation_rate_limit(db: AsyncSession, organization_id: uuid.UU
     using the same threshold, so a runaway loop can't spam that path
     either.
     """
-    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    # Invitation.created_at, like every created_at column in this schema
+    # (see app/models.py), is a naive TIMESTAMP WITHOUT TIME ZONE
+    # populated by Postgres's own now() -- there's no DateTime(timezone=
+    # True) on it. asyncpg refuses to bind a tz-aware Python datetime
+    # against that column type ("can't subtract offset-naive and
+    # offset-aware datetimes"), so `since` has to be stripped to naive
+    # UTC to match, not left as datetime.now(timezone.utc).
+    since = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(tzinfo=None)
     stmt = select(func.count(Invitation.id)).where(Invitation.created_at >= since)
     stmt = stmt.where(Invitation.organization_id == organization_id) if organization_id is not None else stmt.where(
         Invitation.organization_id.is_(None)
