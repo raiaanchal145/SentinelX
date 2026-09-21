@@ -15,6 +15,7 @@ from collections.abc import AsyncGenerator
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.config import settings
 from app.database import Base, get_db
@@ -35,7 +36,15 @@ def _test_database_url() -> str:
 
 
 TEST_DATABASE_URL = _test_database_url()
-test_engine = create_async_engine(TEST_DATABASE_URL, echo=False)
+# NullPool: pytest-asyncio runs every test on its own event loop, but a
+# default (pooled) engine is module-level here -- a pooled asyncpg
+# connection created on test N's loop would be checked out by test N+1
+# on a different, already-closed loop and die with "'NoneType' object
+# has no attribute 'send'" (or worse, silently corrupt the test's setup).
+# No pool -> every checkout creates a fresh connection on the current
+# test's loop. Slightly slower per test, and the only way a module-level
+# engine survives per-test loop rotation.
+test_engine = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullPool)
 TestSessionLocal = async_sessionmaker(test_engine, expire_on_commit=False, class_=AsyncSession)
 
 
