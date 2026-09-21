@@ -83,11 +83,18 @@ export function apiRegister(
   name: string,
   email: string,
   password: string,
-  role: string,
+  organizationName: string,
+  industry?: string,
 ) {
   return request<RegisterResponse>("/auth/register", {
     method: "POST",
-    body: JSON.stringify({ name, email, password, role }),
+    body: JSON.stringify({
+      name,
+      email,
+      password,
+      organization_name: organizationName,
+      industry: industry || null,
+    }),
   })
 }
 
