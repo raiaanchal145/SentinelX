@@ -451,6 +451,18 @@ async def create_asset(
     await _assert_owner_in_org(db, scope.organization_id, payload.owner_user_id)
     await _assert_team_in_org(db, scope.organization_id, payload.team_id)
 
+    # An it_developer's own row-level write access is "owns it or is on
+    # its team" (_can_write_asset) -- if they create an asset without
+    # picking an owner or a team, it would come out the other end
+    # immediately uneditable by them. Default the owner to themselves in
+    # that one case so creating an asset never orphans it from its
+    # creator; every other write role (organization_admin,
+    # security_manager) has unrestricted row-level write anyway, so this
+    # default only ever changes behavior for it_developer.
+    owner_user_id = payload.owner_user_id
+    if owner_user_id is None and payload.team_id is None and scope.role == UserRole.it_developer.value:
+        owner_user_id = scope.user_id
+
     asset = Asset(
         organization_id=scope.organization_id,
         name=payload.name.strip(),
@@ -460,7 +472,7 @@ async def create_asset(
         operating_system=payload.operating_system,
         environment=environment,
         criticality=criticality,
-        owner_user_id=payload.owner_user_id,
+        owner_user_id=owner_user_id,
         team_id=payload.team_id,
         description=payload.description,
         status="active",
