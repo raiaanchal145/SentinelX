@@ -136,19 +136,15 @@ async def _assert_under_member_limit(db: AsyncSession, org: Organization) -> Non
 
 
 # ---------------------------------------------------------------------------
-# Overview -- the one member-data endpoint that works while pending.
+# Overview -- deliberately NOT require_active_organization-gated, so the
+# frontend always has something to read to show the right status screen
+# (suspended/archived) instead of a broken dashboard.
 # ---------------------------------------------------------------------------
 
 
 @router.get("")
 async def get_overview(db: AsyncSession = Depends(get_db), scope: Scope = Depends(require_org_owner)):
     org = await _require_org(db, scope)
-
-    if org.status == OrganizationStatus.pending:
-        return {
-            "id": str(org.id), "name": org.name, "status": org.status.value,
-            "soc_mode": org.soc_mode.value, "message": "Your organization is awaiting platform approval.",
-        }
 
     counts = await compute_org_counts(db, org.id)
     recent_activity = (

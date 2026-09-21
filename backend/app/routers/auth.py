@@ -1,16 +1,26 @@
 """
-Auth endpoints: register/verify-email/resend-verification/login/me/
-forgot-password/reset-password.
+Auth endpoints: verify-email/resend-verification/login/me/forgot-password/
+reset-password.
 
-The shared get_current_account/org_scope/require_admin/require_roles
-dependencies other routers use now live in app/scope.py, not here --
-see that module. This file only keeps the email-lookup helpers
-(_account_by_email, _role_value) that its own endpoints use for
-password-based login/reset, which is a different lookup path than the
-token-based one in app/scope.py.
+SentinelX is invite-only (see docs/DECISIONS.md): accounts are created
+exclusively by accepting an invitation (app/routers/invitations.py) or by
+the one-time `python -m app.create_super_admin` command. There is no
+public registration.
+
+verify-email and resend-verification exist for exactly one flow: the
+3-wrong-passwords lockout. Login flips is_verified to False, emails a
+10-minute one-time code, and the account (admin or user, either table)
+must verify with that code before it can log in again.
+
+Every endpoint here that takes an email answers unknown/known emails with
+the same generic response shapes -- none of them reveal whether an
+address has an account. verify/resend are additionally rate-limited
+(per-email resend throttle + capped verify attempts) since they are
+anonymous.
 """
 
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,7 +28,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.access import get_effective_access, seed_default_modules
+from app.access import get_effective_access
 from app.database import get_db
 from app.email_utils import (
     generate_verification_code,
@@ -28,44 +38,27 @@ from app.email_utils import (
 from app.models import (
     AccountEmail,
     Admin,
-    AdminLevel,
     Organization,
     OrganizationStatus,
-    PendingRegistration,
-    SocMode,
     User,
 )
 from app.scope import Scope, org_scope
 from app.security import create_access_token, hash_password, verify_password
-from app.validators import is_valid_email_format, is_valid_name_format
+from app.validators import is_valid_email_format
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
-# Emails that are always assigned the super_admin role, no matter what role
-# they pick at registration. Decided on the server so it can't be bypassed
-# from the browser. Since the admins/users split, these become `admins`
-# rows with admin_level=super_admin (organization_id NULL) instead of
-# `users` rows -- see register()/verify_email() below.
-SUPER_ADMIN_EMAILS = {
-    "anchal01@gmail.com",
-    "anshpatel4204@gmail.com",
-    "retika03@gmail.com",
-}
+CODE_TTL_MINUTES = 10
+RESEND_THROTTLE_SECONDS = 60
+MAX_VERIFY_ATTEMPTS = 5
 
-
-class RegisterRequest(BaseModel):
-    """
-    Self-signup is organization-owner-only: there is no role choice and
-    no "join an existing organization" path. organization_name is
-    required (ignored for the hardcoded SUPER_ADMIN_EMAILS accounts,
-    which get no organization at all -- see register() below).
-    """
-
-    name: str
-    email: str
-    password: str
-    organization_name: str
-    industry: str | None = None
+# Anonymous, in-memory, best-effort throttles -- enough to blunt code
+# guessing and email-bombing from this surface without introducing a
+# dependency. Codes are 6 random digits, single-use and short-lived, so
+# the real brute-force defense is the code itself; this only stops a
+# client from hammering resend/verify in a tight loop.
+_resend_last_sent: dict[str, float] = {}
+_verify_attempts: dict[str, tuple[int, float]] = {}
 
 
 class LoginRequest(BaseModel):
@@ -99,11 +92,6 @@ class UserOut(BaseModel):
     effective_modules: dict[str, str] | None = None
 
 
-class RegisterResponse(BaseModel):
-    email: str
-    message: str
-
-
 class VerifyEmailRequest(BaseModel):
     email: str
     code: str
@@ -129,6 +117,14 @@ class LoginResponse(BaseModel):
     user: UserOut
 
 
+# The ONE generic message every unknown-email / no-code-on-file /
+# wrong-code answer on the anonymous verify/resend surface uses. Deliberately
+# identical across every failure shape so an attacker probing emails learns
+# nothing -- same principle as login's generic invalid-credentials message
+# (docs/DECISIONS.md).
+_GENERIC_CODE_RESPONSE = {"message": "If a verification code was sent to this email, it is in your inbox."}
+_GENERIC_CODE_400 = HTTPException(status_code=400, detail=_GENERIC_CODE_RESPONSE["message"])
+
 
 async def _account_by_email(db: AsyncSession, email: str) -> tuple[Admin | User | None, str | None]:
     """
@@ -150,235 +146,64 @@ def _role_value(account: Admin | User, account_type: str) -> str:
     return account.admin_level.value if account_type == "admin" else account.role.value
 
 
+def _throttled(key: str, table: dict[str, float], seconds: int) -> bool:
+    """True when `key` fired within the last `seconds` (records this fire)."""
+    now = time.monotonic()
+    last = table.get(key)
+    table[key] = now
+    return last is not None and (now - last) < seconds
 
-@router.post("/register", response_model=RegisterResponse)
-async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)):
-    """
-    Stores the submission as a pending registration and emails an OTP.
 
-    No row is created in `admins` or `users` here -- that only happens in
-    verify_email() once the code is confirmed, so an account someone
-    never verifies leaves nothing behind but an expired pending row.
-    """
-    email = payload.email.strip().lower()
-    name = payload.name.strip()
-
-    if not name or not email or not payload.password:
-        raise HTTPException(status_code=400, detail="Please complete all fields.")
-
-    if not is_valid_name_format(name):
-        raise HTTPException(
-            status_code=400,
-            detail="Name can only contain letters, spaces, apostrophes and hyphens.",
-        )
-
-    if not is_valid_email_format(email):
-        raise HTTPException(
-            status_code=400,
-            detail="Please enter a valid email address (letters, numbers, and . _ % + - only).",
-        )
-
-    if len(payload.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must contain at least 6 characters.")
-
-    organization_name = payload.organization_name.strip()
-    industry = (payload.industry or "").strip() or None
-
-    # Nobody can self-assign super_admin -- decided purely by the
-    # configured email allow-list, which also gets no organization at
-    # all (same as before this change).
-    is_super_admin_email = email in SUPER_ADMIN_EMAILS
-
-    if not is_super_admin_email and not organization_name:
-        raise HTTPException(status_code=400, detail="Please enter your organization's name.")
-
-    # account_emails is the cross-table ("admins" + "users") uniqueness
-    # check -- a plain "does users or admins have this email" query would
-    # miss whichever table it's not looking at. See AccountEmail's
-    # docstring in models.py.
-    existing = await db.execute(select(AccountEmail).where(AccountEmail.email == email))
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="An account already exists with this email.")
-
-    admin_level = AdminLevel.super_admin if is_super_admin_email else AdminLevel.organization_admin
-
-    code = generate_verification_code()
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
-    password_hash = hash_password(payload.password)
-
-    existing_pending = await db.execute(
-        select(PendingRegistration).where(PendingRegistration.email == email)
-    )
-    pending = existing_pending.scalar_one_or_none()
-
-    if pending:
-        # Re-registering before verifying just refreshes the pending
-        # submission (new details, new code) rather than erroring out.
-        pending.name = name
-        pending.password_hash = password_hash
-        pending.account_type = "admin"
-        pending.role = None
-        pending.admin_level = admin_level
-        pending.organization_name = None if is_super_admin_email else organization_name
-        pending.organization_industry = None if is_super_admin_email else industry
-        pending.verification_code = code
-        pending.verification_code_expires_at = expires_at
-    else:
-        pending = PendingRegistration(
-            name=name,
-            email=email,
-            password_hash=password_hash,
-            account_type="admin",
-            role=None,
-            admin_level=admin_level,
-            organization_name=None if is_super_admin_email else organization_name,
-            organization_industry=None if is_super_admin_email else industry,
-            verification_code=code,
-            verification_code_expires_at=expires_at,
-        )
-        db.add(pending)
-
-    await db.commit()
-
-    try:
-        await asyncio.to_thread(send_verification_email, email, name, code)
-    except Exception as exc:  # SMTP misconfigured/unreachable -- don't block registration
-        print(f"[SentinelX] Failed to send verification email to {email}: {exc}")
-
-    return RegisterResponse(
-        email=email,
-        message="Check your email for a 6-digit verification code to finish creating your account.",
-    )
+def _verify_attempts_exhausted(email: str) -> bool:
+    """Capped verify attempts per email within a 10-minute window."""
+    now = time.monotonic()
+    count, window_start = _verify_attempts.get(email, (0, now))
+    if now - window_start > CODE_TTL_MINUTES * 60:
+        count, window_start = 0, now
+    count += 1
+    _verify_attempts[email] = (count, window_start)
+    return count > MAX_VERIFY_ATTEMPTS
 
 
 @router.post("/verify-email", response_model=UserOut)
 async def verify_email(payload: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
     """
-    Handles two different situations with the same code+email form:
+    Re-verifies an existing account (either table) after the
+    3-failed-attempts lockout in login() flipped is_verified back to
+    False: checks the emailed one-time code and clears the lockout.
 
-    1. Finishing a brand-new registration (a row in pending_registrations
-       exists) -- the real `admins` or `users` row gets created here,
-       whichever pending.account_type points to.
-    2. Re-verifying an existing account (either table) after the
-       3-failed-attempts lockout below flipped is_verified back to False
-       -- no new row, just clears the lockout.
+    This is deliberately the ONLY thing this endpoint does now -- it no
+    longer creates accounts (invite-only; see the module docstring).
+    Unknown emails, verified accounts, missing codes and wrong codes all
+    answer with the same generic 400 so nothing here reveals whether an
+    email exists.
     """
     email = payload.email.strip().lower()
     code = payload.code.strip()
 
-    result = await db.execute(
-        select(PendingRegistration).where(PendingRegistration.email == email)
-    )
-    pending = result.scalar_one_or_none()
+    if _verify_attempts_exhausted(email):
+        raise _GENERIC_CODE_400
 
-    if pending:
-        if datetime.now(timezone.utc) > pending.verification_code_expires_at:
-            raise HTTPException(status_code=400, detail="This code has expired. Please request a new one.")
-
-        if code != pending.verification_code:
-            raise HTTPException(status_code=400, detail="Incorrect verification code.")
-
-        # The code is correct -- this is the moment the real account (and,
-        # for an organization_admin or plain user, its organization) is
-        # created.
-        if pending.account_type == "admin":
-            organization_id = None
-            org: Organization | None = None
-
-            if pending.admin_level == AdminLevel.organization_admin:
-                # Self-registering as an organization admin always creates
-                # a brand-new organization, pending platform approval --
-                # there's no "join an existing org" flow. Every module
-                # starts enabled (the platform admin narrows later, if at
-                # all); the owner can't do anything with the organization
-                # itself until a super_admin approves it (see access.py's
-                # require_active_organization).
-                org = Organization(
-                    name=pending.organization_name or f"{pending.name}'s Organization",
-                    industry=pending.organization_industry,
-                    status=OrganizationStatus.pending,
-                    soc_mode=SocMode.managed,
-                    created_via="self_signup",
-                )
-                db.add(org)
-                await db.flush()  # need org.id before the admin row references it
-                organization_id = org.id
-
-            account: Admin | User = Admin(
-                organization_id=organization_id,
-                name=pending.name,
-                email=pending.email,
-                password_hash=pending.password_hash,
-                admin_level=pending.admin_level,
-                is_verified=True,
-            )
-            db.add(account)
-            await db.flush()  # need account.id for organizations.created_by_admin_id
-
-            if org is not None:
-                org.created_by_admin_id = account.id
-                await seed_default_modules(db, org.id)
-
-            account_type = "admin"
-        else:
-            # A plain user has no "pick your org" UI yet either -- give
-            # them a personal organization, same as a self-registered
-            # organization_admin.
-            org = Organization(name=pending.organization_name or f"{pending.name}'s Organization")
-            db.add(org)
-            await db.flush()
-
-            account = User(
-                organization_id=org.id,
-                name=pending.name,
-                email=pending.email,
-                password_hash=pending.password_hash,
-                role=pending.role,
-                is_verified=True,
-            )
-            db.add(account)
-            await db.flush()  # need account.id for the AccountEmail row below
-            account_type = "user"
-
-        db.add(AccountEmail(email=pending.email, account_type=account_type, account_id=account.id))
-        await db.delete(pending)
-        await db.commit()
-        await db.refresh(account)
-
-        return UserOut(
-            id=str(account.id), name=account.name, email=account.email,
-            role=_role_value(account, account_type), account_type=account_type,
-        )
-
-    # No pending registration -- this must be an existing account
-    # re-verifying (e.g. after a login lockout). Could be either table.
     account, account_type = await _account_by_email(db, email)
 
+    # Generic on every failure path -- same response for a known and an
+    # unknown email, for a wrong code and a missing one.
     if not account:
-        raise HTTPException(
-            status_code=404,
-            detail="No pending registration found for this email. Please register again.",
-        )
-
+        raise _GENERIC_CODE_400
     if account.is_verified:
-        raise HTTPException(status_code=400, detail="This account is already verified.")
-
+        raise _GENERIC_CODE_400
     if not account.verification_code or not account.verification_code_expires_at:
-        raise HTTPException(
-            status_code=400,
-            detail="No verification code on file. Please request a new one.",
-        )
-
+        raise _GENERIC_CODE_400
     if datetime.now(timezone.utc) > account.verification_code_expires_at:
-        raise HTTPException(status_code=400, detail="This code has expired. Please request a new one.")
-
+        raise _GENERIC_CODE_400
     if code != account.verification_code:
-        raise HTTPException(status_code=400, detail="Incorrect verification code.")
+        raise _GENERIC_CODE_400
 
     account.is_verified = True
     account.verification_code = None
     account.verification_code_expires_at = None
     account.failed_login_attempts = 0
+    _verify_attempts.pop(email, None)
     await db.commit()
     await db.refresh(account)
 
@@ -390,50 +215,33 @@ async def verify_email(payload: VerifyEmailRequest, db: AsyncSession = Depends(g
 
 @router.post("/resend-verification")
 async def resend_verification(payload: ResendVerificationRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Emails a fresh 10-minute code to a locked (is_verified=False)
+    account -- the resend half of the lockout flow. Throttled per email
+    and deliberately silent about whether the email has an account:
+    every outcome a client can observe is the same generic message.
+    """
     email = payload.email.strip().lower()
 
-    result = await db.execute(
-        select(PendingRegistration).where(PendingRegistration.email == email)
-    )
-    pending = result.scalar_one_or_none()
+    if _throttled(email, _resend_last_sent, RESEND_THROTTLE_SECONDS):
+        # Identical body to the success path -- the throttle itself must
+        # not be observable (and definitely must not confirm existence).
+        return _GENERIC_CODE_RESPONSE
 
-    if pending:
+    account, _account_type = await _account_by_email(db, email)
+
+    if account and not account.is_verified:
         code = generate_verification_code()
-        pending.verification_code = code
-        pending.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+        account.verification_code = code
+        account.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=CODE_TTL_MINUTES)
         await db.commit()
 
         try:
-            await asyncio.to_thread(send_verification_email, pending.email, pending.name, code)
+            await asyncio.to_thread(send_verification_email, account.email, account.name, code)
         except Exception as exc:
-            print(f"[SentinelX] Failed to send verification email to {pending.email}: {exc}")
+            print(f"[SentinelX] Failed to send verification email to {account.email}: {exc}")
 
-        return {"message": "A new verification code has been sent."}
-
-    # No pending registration -- this must be an existing account (either
-    # table) that needs to re-verify (e.g. after a login lockout).
-    account, _account_type = await _account_by_email(db, email)
-
-    if not account:
-        raise HTTPException(
-            status_code=404,
-            detail="No pending registration found for this email. Please register again.",
-        )
-
-    if account.is_verified:
-        raise HTTPException(status_code=400, detail="This account is already verified.")
-
-    code = generate_verification_code()
-    account.verification_code = code
-    account.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
-    await db.commit()
-
-    try:
-        await asyncio.to_thread(send_verification_email, account.email, account.name, code)
-    except Exception as exc:
-        print(f"[SentinelX] Failed to send verification email to {account.email}: {exc}")
-
-    return {"message": "A new verification code has been sent."}
+    return _GENERIC_CODE_RESPONSE
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -456,11 +264,14 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
             account.failed_login_attempts += 1
 
             if account.failed_login_attempts >= 3:
+                # The lockout: counter resets, the account is flipped to
+                # unverified, and a fresh 10-minute one-time code goes
+                # out -- the account must verify before logging in again.
                 account.failed_login_attempts = 0
                 account.is_verified = False
                 code = generate_verification_code()
                 account.verification_code = code
-                account.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+                account.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=CODE_TTL_MINUTES)
                 await db.commit()
 
                 try:
@@ -487,14 +298,12 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
     if not account.is_verified:
         raise HTTPException(status_code=403, detail="Please verify your email before logging in.")
 
-    # Organization status rules: suspended/archived block login outright
-    # (owner included); pending is allowed through, since the owner needs
-    # to be able to log in and see the "waiting for approval" screen.
+    # Organization status rules: suspended/archived block login outright.
     # Only relevant for an organization_admin or a `users` account --
     # super_admin/platform_soc_analyst aren't scoped to one organization.
     organization: Organization | None = None
-    if (account_type == "admin" and account.admin_level == AdminLevel.organization_admin) or account_type == "user":
-        organization = await db.get(Organization, account.organization_id)
+    if account_type == "admin" or account_type == "user":
+        organization = await db.get(Organization, account.organization_id) if account.organization_id else None
 
     if organization is not None:
         if organization.status == OrganizationStatus.suspended:
@@ -537,7 +346,7 @@ async def me(scope: Scope = Depends(org_scope), db: AsyncSession = Depends(get_d
     """
     Deliberately does NOT depend on require_active_organization -- this
     is one of the two endpoints (with the owner's GET /organization
-    overview) that must keep working for a pending/suspended/archived
+    overview) that must keep working for a suspended/archived
     organization, so the frontend has something to read in order to
     show the right screen at all.
     """
@@ -569,30 +378,28 @@ async def me(scope: Scope = Depends(org_scope), db: AsyncSession = Depends(get_d
 
 @router.post("/forgot-password")
 async def forgot_password(payload: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Emails a 10-minute password-reset code. Deliberately answers a
+    known and an unknown email with the same generic message -- the old
+    explicit 404 "No account found with this email" enabled email
+    enumeration on an anonymous endpoint.
+    """
     email = payload.email.strip().lower()
 
     account, _account_type = await _account_by_email(db, email)
 
-    if not account:
-        raise HTTPException(status_code=404, detail="No account found with this email.")
+    if account and account.is_verified:
+        code = generate_verification_code()
+        account.password_reset_code = code
+        account.password_reset_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=CODE_TTL_MINUTES)
+        await db.commit()
 
-    if not account.is_verified:
-        raise HTTPException(
-            status_code=400,
-            detail="Please verify your email before resetting your password.",
-        )
+        try:
+            await asyncio.to_thread(send_password_reset_email, account.email, account.name, code)
+        except Exception as exc:
+            print(f"[SentinelX] Failed to send password reset email to {account.email}: {exc}")
 
-    code = generate_verification_code()
-    account.password_reset_code = code
-    account.password_reset_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
-    await db.commit()
-
-    try:
-        await asyncio.to_thread(send_password_reset_email, account.email, account.name, code)
-    except Exception as exc:
-        print(f"[SentinelX] Failed to send password reset email to {account.email}: {exc}")
-
-    return {"message": "Check your email for a 6-digit password reset code."}
+    return {"message": "If that email has an account, a password reset code is in your inbox."}
 
 
 @router.post("/reset-password")
@@ -606,7 +413,7 @@ async def reset_password(payload: ResetPasswordRequest, db: AsyncSession = Depen
     account, _account_type = await _account_by_email(db, email)
 
     if not account:
-        raise HTTPException(status_code=404, detail="No account found with this email.")
+        raise HTTPException(status_code=400, detail="Invalid or expired code.")
 
     if not account.password_reset_code or not account.password_reset_code_expires_at:
         raise HTTPException(
@@ -627,4 +434,3 @@ async def reset_password(payload: ResetPasswordRequest, db: AsyncSession = Depen
     await db.commit()
 
     return {"message": "Password reset. You can now log in with your new password."}
-

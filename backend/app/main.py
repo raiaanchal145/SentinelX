@@ -4,7 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.routers import admin_organizations, admin_soc, assets, auth, invitations, organization, organizations, stats
+from app.routers import admin_organizations, admin_soc, assets, auth, invitations, organization, stats
 
 app = FastAPI(title="SentinelX API")
 
@@ -37,7 +37,6 @@ async def health(db: AsyncSession = Depends(get_db)):
 
 
 app.include_router(auth.router)
-app.include_router(organizations.router)
 app.include_router(stats.router)
 app.include_router(admin_organizations.router)
 app.include_router(admin_soc.router)

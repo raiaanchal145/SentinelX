@@ -123,10 +123,11 @@ SOC_MODE_GATED_MODULES: dict[UserRole, set[str]] = {
 async def seed_default_modules(db: AsyncSession, organization_id: uuid.UUID) -> None:
     """
     Every module key enabled -- called once, when a new organization is
-    created (self-signup or platform-admin-created), so
-    organization_modules always has a full set of rows and
-    get_effective_access() never treats a brand-new organization as
-    having nothing turned on (a missing row reads as disabled).
+    created (always platform-admin-created since self-signup was
+    removed; see docs/DECISIONS.md), so organization_modules always has
+    a full set of rows and get_effective_access() never treats a
+    brand-new organization as having nothing turned on (a missing row
+    reads as disabled).
     """
     for key in ALL_MODULE_KEYS:
         db.add(OrganizationModule(organization_id=organization_id, module_key=key, enabled=True))
@@ -231,13 +232,13 @@ async def require_active_organization(
     """
     403s an organization_admin or `users` account whose own organization
     isn't active. Platform admin accounts (organization_id is always
-    None for them) are exempt -- they reach pending/suspended/archived
+    None for them) are exempt -- they reach suspended/archived
     organizations through /admin/* endpoints, which don't depend on this.
 
     GET /auth/me and the owner's GET /organization overview deliberately
     do NOT use this dependency: they're the two endpoints that must keep
     working regardless of status, so the frontend has something to read
-    in order to show the right pending/suspended/archived screen at all.
+    in order to show the right suspended/archived screen at all.
     """
     if scope.organization_id is None:
         return scope
@@ -246,8 +247,6 @@ async def require_active_organization(
     if organization is None:
         raise HTTPException(status_code=404, detail={"code": "organization_not_found", "message": "Organization not found."})
 
-    if organization.status == OrganizationStatus.pending:
-        raise _forbidden("organization_pending", "Your organization is awaiting platform approval.")
     if organization.status == OrganizationStatus.suspended:
         raise _forbidden("organization_suspended", "Your organization has been suspended.")
     if organization.status == OrganizationStatus.archived:
