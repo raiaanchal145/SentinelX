@@ -129,6 +129,11 @@ function Sidebar() {
       path: "/organization/teams",
     },
     {
+      name: "Assets",
+      icon: Server,
+      path: "/organization/assets",
+    },
+    {
       name: "Access",
       icon: ShieldCheck,
       path: "/organization/access",

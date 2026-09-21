@@ -23,6 +23,7 @@ import OwnerDashboard from "./features/owner/pages/OwnerDashboard"
 import OwnerMembers from "./features/owner/pages/OwnerMembers"
 import OwnerTeams from "./features/owner/pages/OwnerTeams"
 import OwnerAccess from "./features/owner/pages/OwnerAccess"
+import OwnerAssets from "./features/owner/pages/OwnerAssets"
 import OwnerSettings from "./features/owner/pages/OwnerSettings"
 
 import UserLayout from "./layouts/UserLayout"
@@ -52,6 +53,7 @@ import ManagerAudit from "./features/manager/pages/ManagerAudit"
 import AuditorOverview from "./features/auditor/pages/AuditorOverview"
 import AuditorAuditLogs from "./features/auditor/pages/AuditorAuditLogs"
 import AuditorIncidents from "./features/auditor/pages/AuditorIncidents"
+import AuditorAssets from "./features/auditor/pages/AuditorAssets"
 import AuditorReports from "./features/auditor/pages/AuditorReports"
 
 import { getSession, homePathFor } from "./lib/auth"
@@ -264,6 +266,15 @@ function App() {
       />
 
       <Route
+        path="/organization/assets"
+        element={
+          <ProtectedRoute allowedRoles={["organization_admin"]}>
+            <OwnerAssets />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
         path="/organization/settings"
         element={
           <ProtectedRoute allowedRoles={["organization_admin"]}>
@@ -391,6 +402,7 @@ function App() {
         <Route path="/auditor" element={<AuditorOverview />} />
         <Route path="/auditor/audit-logs" element={<ModuleGuard module="audit_logs"><AuditorAuditLogs /></ModuleGuard>} />
         <Route path="/auditor/incidents" element={<ModuleGuard module="incidents"><AuditorIncidents /></ModuleGuard>} />
+        <Route path="/auditor/assets" element={<ModuleGuard module="assets"><AuditorAssets /></ModuleGuard>} />
         <Route path="/auditor/reports" element={<ModuleGuard module="reports"><AuditorReports /></ModuleGuard>} />
       </Route>
 

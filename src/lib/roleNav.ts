@@ -60,6 +60,7 @@ export const ROLE_NAV: Partial<Record<Role, NavItem[]>> = {
     { label: "Overview", path: "/auditor", icon: LayoutDashboard, end: true },
     { label: "Audit Logs", path: "/auditor/audit-logs", icon: ScrollText, module: "audit_logs" },
     { label: "Incidents", path: "/auditor/incidents", icon: ShieldAlert, module: "incidents" },
+    { label: "Assets", path: "/auditor/assets", icon: Server, module: "assets" },
     { label: "Reports", path: "/auditor/reports", icon: FileText, module: "reports" },
   ],
 }
