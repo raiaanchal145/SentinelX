@@ -21,6 +21,7 @@ import SocTeam from "./features/admin/pages/SocTeam"
 import SocQueue from "./features/admin/pages/SocQueue"
 import OwnerDashboard from "./features/owner/pages/OwnerDashboard"
 import OwnerMembers from "./features/owner/pages/OwnerMembers"
+import OwnerTeams from "./features/owner/pages/OwnerTeams"
 
 import UserLayout from "./layouts/UserLayout"
 
@@ -237,6 +238,15 @@ function App() {
         element={
           <ProtectedRoute allowedRoles={["organization_admin"]}>
             <OwnerMembers />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/organization/teams"
+        element={
+          <ProtectedRoute allowedRoles={["organization_admin"]}>
+            <OwnerTeams />
           </ProtectedRoute>
         }
       />
