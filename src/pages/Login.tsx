@@ -11,7 +11,7 @@ import {
 
 import { useNavigate } from "react-router-dom"
 
-import { apiLogin } from "../lib/api"
+import { apiLogin, ApiError } from "../lib/api"
 import { homePathFor } from "../lib/auth"
 
 // Same allow-list the backend enforces: only the standard set of
@@ -88,24 +88,43 @@ function Login() {
         user.account_type,
       )
 
-      navigate(homePathFor(user.role))
-    } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : "Invalid email or password."
-
-      if (message.toLowerCase().includes("verify")) {
-        navigate("/verify-email", {
-          state: {
-            email: email.trim().toLowerCase(),
-            notice: message,
-          },
-        })
+      // A pending organization's owner is allowed to log in (the
+      // backend needs a session for /auth/me), but sees only the
+      // "waiting for approval" screen -- never the real dashboard.
+      // Suspended/archived organizations are rejected by /auth/login
+      // itself (see the ApiError handling below), so those two
+      // statuses can't reach this branch.
+      if (user.organization?.status === "pending") {
+        navigate("/organization-pending")
         return
       }
 
-      setError(message)
+      navigate(homePathFor(user.role))
+    } catch (err) {
+      if (err instanceof ApiError) {
+        if (err.code === "organization_suspended" || err.code === "organization_archived") {
+          navigate("/organization-suspended", {
+            state: {
+              status: err.code === "organization_archived" ? "archived" : "suspended",
+            },
+          })
+          return
+        }
+
+        if (err.message.toLowerCase().includes("verify")) {
+          navigate("/verify-email", {
+            state: {
+              email: email.trim().toLowerCase(),
+              notice: err.message,
+            },
+          })
+          return
+        }
+
+        setError(err.message)
+      } else {
+        setError("Invalid email or password.")
+      }
     } finally {
       setSubmitting(false)
     }

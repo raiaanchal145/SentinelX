@@ -5,6 +5,10 @@ import Register from "./pages/Register"
 import VerifyEmail from "./pages/VerifyEmail"
 import ForgotPassword from "./pages/ForgotPassword"
 import ResetPassword from "./pages/ResetPassword"
+import AcceptInvite from "./pages/AcceptInvite"
+import OrganizationPending from "./pages/OrganizationPending"
+import OrganizationSuspended from "./pages/OrganizationSuspended"
+import NoAccess from "./pages/NoAccess"
 
 import AdminDashboard from "./pages/AdminDashboard"
 import OrganizationDashboard from "./pages/OrganizationDashboard"
@@ -142,6 +146,32 @@ function App() {
       <Route
         path="/reset-password"
         element={<ResetPassword />}
+      />
+
+      <Route
+        path="/accept-invite"
+        element={<AcceptInvite />}
+      />
+
+      {/* ORGANIZATION STATUS SCREENS -- reachable with or without an
+          active session (Login redirects here on organization_pending/
+          organization_suspended/organization_archived; a later guard
+          on protected routes will also redirect here if an
+          already-logged-in session's organization changes status). */}
+
+      <Route
+        path="/organization-pending"
+        element={<OrganizationPending />}
+      />
+
+      <Route
+        path="/organization-suspended"
+        element={<OrganizationSuspended />}
+      />
+
+      <Route
+        path="/no-access"
+        element={<NoAccess />}
       />
 
       {/* SUPER ADMIN DASHBOARD (admin side -- unchanged) */}

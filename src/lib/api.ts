@@ -177,3 +177,25 @@ export function apiGetStatsOverview() {
 export function apiGetMe() {
   return request<ApiUser>("/auth/me")
 }
+
+export type InvitationKind = "owner" | "platform_soc" | "member"
+
+export type InvitationDetail = {
+  kind: InvitationKind
+  // null for a platform_soc invitation -- it isn't scoped to an organization.
+  organization_name: string | null
+  role: string
+  email: string
+  expires_at: string
+}
+
+export function apiGetInvitation(token: string) {
+  return request<InvitationDetail>(`/invitations/${encodeURIComponent(token)}`)
+}
+
+export function apiAcceptInvitation(token: string, fullName: string, password: string) {
+  return request<LoginResponse>("/invitations/accept", {
+    method: "POST",
+    body: JSON.stringify({ token, full_name: fullName, password }),
+  })
+}
