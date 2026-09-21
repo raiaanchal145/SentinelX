@@ -1,5 +1,6 @@
 type SegmentedControlProps<T extends string> = {
-  options: { value: T; label: string }[]
+  // readonly so `as const` option tables can be passed straight in
+  options: readonly { value: T; label: string }[]
   value: T
   onChange: (value: T) => void
   ariaLabel: string
