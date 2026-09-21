@@ -7,6 +7,7 @@ export type AccountType = "admin" | "user"
 export type Role =
   | "super_admin"
   | "organization_admin"
+  | "platform_soc_analyst"
   | "soc_analyst"
   | "security_manager"
   | "it_developer"
@@ -24,15 +25,23 @@ export type Session = {
 const ROLE_LABELS: Record<Role, string> = {
   super_admin: "Super Administrator",
   organization_admin: "Organization Admin",
+  platform_soc_analyst: "Platform SOC Analyst",
   soc_analyst: "SOC Analyst",
   security_manager: "Security Manager",
   it_developer: "IT / Developer",
   auditor: "Auditor",
 }
 
+// Where a login/register redirect sends each role BY DEFAULT -- for
+// organization_admin and every `users` role this is only correct while
+// their organization is active; Login.tsx checks organization status
+// itself and overrides this for pending/suspended/archived before ever
+// calling homePathFor(). See docs/API_CONTRACT.md and the
+// organization_pending/suspended/no-access screens.
 const ROLE_HOME: Record<Role, string> = {
-  super_admin: "/admin",
-  organization_admin: "/organization-dashboard",
+  super_admin: "/admin/organizations",
+  organization_admin: "/organization",
+  platform_soc_analyst: "/admin/soc-queue",
   soc_analyst: "/soc",
   security_manager: "/manager",
   it_developer: "/it",
@@ -78,7 +87,7 @@ export function homePathFor(role: string | null | undefined): string {
 }
 
 export function isAdmin(role: string | null | undefined): boolean {
-  return role === "super_admin" || role === "organization_admin"
+  return role === "super_admin" || role === "organization_admin" || role === "platform_soc_analyst"
 }
 
 export function logout() {

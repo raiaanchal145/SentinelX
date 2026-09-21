@@ -5,6 +5,7 @@ import { BrowserRouter } from "react-router-dom"
 import App from "./App"
 import { MockStoreProvider } from "./mocks/store"
 import { ToastProvider } from "./components/ui/Toast"
+import { MeProvider } from "./lib/me"
 import "./index.css"
 
 ReactDOM.createRoot(
@@ -14,7 +15,9 @@ ReactDOM.createRoot(
     <BrowserRouter>
       <MockStoreProvider>
         <ToastProvider>
-          <App />
+          <MeProvider>
+            <App />
+          </MeProvider>
         </ToastProvider>
       </MockStoreProvider>
     </BrowserRouter>

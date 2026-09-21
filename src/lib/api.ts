@@ -1,13 +1,49 @@
 const API_BASE = "http://localhost:8000/api/v1"
 
+export type OrganizationSummary = {
+  id: string
+  name: string
+  status: "pending" | "active" | "suspended" | "archived"
+  soc_mode: "managed" | "in_house"
+}
+
+export type ModuleAccessLevel = "read" | "write"
+
 export type ApiUser = {
   id: string
   name: string
   email: string
   role: string
-  // "admin" (super_admin/organization_admin) or "user" (soc_analyst,
-  // security_manager, it_developer, auditor) -- see backend UserOut.
+  // "admin" (super_admin/organization_admin/platform_soc_analyst) or
+  // "user" (soc_analyst, security_manager, it_developer, auditor) --
+  // see backend UserOut.
   account_type: string
+  // Both null for super_admin/platform_soc_analyst, who aren't scoped
+  // to a single organization. See docs/API_CONTRACT.md.
+  organization?: OrganizationSummary | null
+  effective_modules?: Record<string, ModuleAccessLevel> | null
+}
+
+/**
+ * Thrown for any non-OK response. Every new organization-management
+ * endpoint (see docs/API_CONTRACT.md) raises a structured
+ * `{code, message}` detail rather than a bare string -- `code` is
+ * stable and meant for the frontend to switch on (e.g. to redirect, or
+ * to disable a specific control), `message` is already a human-readable
+ * string straight from the backend and safe to show as-is. A handful of
+ * older auth endpoints still raise a bare string `detail`; those come
+ * through here with `code` left undefined.
+ */
+export class ApiError extends Error {
+  status: number
+  code?: string
+
+  constructor(message: string, status: number, code?: string) {
+    super(message)
+    this.name = "ApiError"
+    this.status = status
+    this.code = code
+  }
 }
 
 type LoginResponse = {
@@ -56,17 +92,21 @@ async function request<T>(
 
   if (!response.ok) {
     let message = "Something went wrong. Please try again."
+    let code: string | undefined
 
     try {
       const data = await response.json()
-      if (data?.detail) {
+      if (typeof data?.detail === "string") {
         message = data.detail
+      } else if (data?.detail && typeof data.detail === "object") {
+        message = data.detail.message ?? message
+        code = data.detail.code
       }
     } catch {
       // response had no JSON body -- keep the default message
     }
 
-    throw new Error(message)
+    throw new ApiError(message, response.status, code)
   }
 
   return response.json() as Promise<T>
@@ -132,4 +172,8 @@ export function apiResetPassword(
 
 export function apiGetStatsOverview() {
   return request<StatsOverview>("/stats/overview")
+}
+
+export function apiGetMe() {
+  return request<ApiUser>("/auth/me")
 }
