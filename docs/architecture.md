@@ -28,21 +28,51 @@ Two different shells exist for two different kinds of role:
 
 - **`UserLayout`** (top navigation) — for `soc_analyst`, `it_developer`,
   `security_manager` ("manager"), and `auditor`. Which nav items each
-  role sees is defined in `src/lib/roleNav.ts`.
-- **`Sidebar`** (left sidebar, inside the admin pages under `src/pages/`)
-  — for `super_admin` and `organization_admin`.
+  role sees is defined in `src/lib/roleNav.ts`, filtered further by
+  each item's optional `module` against `useMe().effective_modules`
+  (module-less items, i.e. each role's own overview, always show).
+- **`Sidebar`** (left sidebar, composed directly by each page under
+  `src/pages/` and `src/features/{admin,owner}/pages/` — it is not a
+  layout route) — for `super_admin`, `organization_admin` (the
+  organization owner), and `platform_soc_analyst`.
 
-Current routes (see `App.tsx` for the authoritative list):
+Every route inside the four `UserLayout` roles above, except each
+role's own overview/home route, is additionally wrapped in
+`ModuleGuard` (`src/components/ModuleGuard.tsx`): it reads
+`effective_modules` from `useMe()` and redirects to `/no-access` if
+the route's required module isn't in that map. This is a second,
+independent check behind the nav filtering above, for anyone who
+still has a direct URL to a module their organization or owner has
+turned off. Separately, `UserLayout` and `OwnerDashboard` both watch
+`useMe()`'s `organization.status` on every render and redirect to
+`/organization-suspended` if it becomes `suspended`/`archived` —
+an already-logged-in session's token and cached `effective_modules`
+stay valid until the next `/auth/me` call, so without this an
+employee or owner could sit on a stale page after their organization
+is suspended mid-session.
+
+Current routes / screens (see `App.tsx` for the authoritative list):
 
 | Path | Role(s) | Notes |
 |---|---|---|
 | `/login`, `/register`, `/verify-email`, `/forgot-password`, `/reset-password` | anyone | real backend auth |
-| `/admin` | super_admin, organization_admin | admin dashboard |
-| `/organization-dashboard` | super_admin, organization_admin | org-scoped admin view |
-| `/soc`, `/soc/alerts`, `/soc/incidents(/:id)`, `/soc/events`, `/soc/assets`, `/soc/reports` | soc_analyst | mock-data dashboards |
-| `/it`, `/it/tickets(/:id)`, `/it/assets`, `/it/runbooks` | it_developer | mock-data dashboards |
-| `/manager/*` | security_manager | mock-data dashboards |
-| `/auditor/*` | auditor | mock-data dashboards |
+| `/accept-invite` | anyone (token from the invite link) | `src/pages/AcceptInvite.tsx` — sets a name/password for an owner-, member-, or platform-SOC-kind invitation and signs the new account in |
+| `/organization-pending`, `/organization-suspended`, `/no-access` | any authenticated account | `src/pages/OrganizationPending.tsx` / `OrganizationSuspended.tsx` / `NoAccess.tsx` — status/guard screens from Prompt B section C; each offers sign-out |
+| `/admin/organizations`, `/admin/organizations/:id` | super_admin | `src/features/admin/pages/Organizations.tsx` (search/filter/sort/approve/reject/suspend/reactivate/archive, create-org dialog) and `OrganizationDetail.tsx` (Overview/Members/Access-and-modules/SOC/Activity/Settings tabs) |
+| `/admin/soc-team` | super_admin | `src/features/admin/pages/SocTeam.tsx` — invite/list/deactivate platform SOC analysts, edit each one's assigned `managed` organizations |
+| `/admin/soc-queue` | platform_soc_analyst | `src/features/admin/pages/SocQueue.tsx` — restricted nav (SOC Queue only), placeholder queue over this analyst's own assigned organizations |
+| `/admin` | super_admin, organization_admin | admin dashboard (unchanged) |
+| `/organization-dashboard` | super_admin, organization_admin | legacy org-scoped admin view, kept reachable for compatibility; the owner's real home is now `/organization` below |
+| `/organization` | organization_admin | `src/features/owner/pages/OwnerDashboard.tsx` — reads `GET /organization` live and redirects to the pending/suspended screen if the organization isn't active |
+| `/organization/members` | organization_admin | `OwnerMembers.tsx` — Members / Pending invitations tabs, invite-member dialog |
+| `/organization/teams` | organization_admin | `OwnerTeams.tsx` — team CRUD, per-team membership drawer |
+| `/organization/access` | organization_admin | `OwnerAccess.tsx` — role x module access matrix, per-member override drawer |
+| `/organization/settings` | organization_admin | `OwnerSettings.tsx` — read-only organization settings |
+| `/admin/soc-oversight`, `/admin/it-oversight` | super_admin, organization_admin | aggregate rollups (unchanged) |
+| `/soc`, `/soc/alerts`, `/soc/incidents(/:id)`, `/soc/events`, `/soc/assets`, `/soc/reports` | soc_analyst | mock-data dashboards; every route but `/soc` itself is `ModuleGuard`-wrapped (`soc`/`incidents`/`assets`/`reports`) |
+| `/it`, `/it/tickets(/:id)`, `/it/assets`, `/it/runbooks` | it_developer | mock-data dashboards; every route but `/it` itself is `ModuleGuard`-wrapped (`it_tickets`/`assets`) |
+| `/manager/*` | security_manager | mock-data dashboards; every route but `/manager` itself is `ModuleGuard`-wrapped (`incidents`/`approvals`/`reports`/`assets`/`audit_logs`) |
+| `/auditor/*` | auditor | mock-data dashboards; every route but `/auditor` itself is `ModuleGuard`-wrapped (`audit_logs`/`incidents`/`reports`) |
 | `/soc-dashboard`, `/it-dashboard` | -- | legacy paths, redirect to `/soc`/`/it` |
 
 ## Backend
@@ -201,13 +231,17 @@ lib/data.ts      getSocKpis(state, scope), getTriageQueue(...), etc. --
 
 ## Known gaps
 
-- The frontend's mock-data dashboards (SOC/IT/manager/auditor pages)
-  are still pinned to one hardcoded demo organization/session shape and
-  don't yet read the real `organization`/`effective_modules` fields
-  `GET /auth/me` now returns, or drive navigation from them -- that
-  wiring, plus the platform admin/organization owner/public UI for
-  this feature, is a separate, explicitly-gated frontend task (not yet
-  started as of this section being written).
+- The platform admin, organization owner, and public UI for this
+  feature is now built (organizations list + 6-tab detail, platform
+  SOC team + queue, owner dashboard/members/teams/access/settings,
+  accept-invite, and the pending/suspended/no-access screens -- see
+  the routes table above), and `UserLayout`'s nav plus `ModuleGuard`
+  now drive navigation and route access from the real
+  `organization`/`effective_modules` fields `GET /auth/me` returns.
+  What's still mock-backed is the *content* inside the SOC/IT/manager/
+  auditor dashboards themselves (KPIs, queues, tables) -- gating
+  decides which routes are reachable, not what data appears inside
+  them once you're on one. See the pipeline-tables bullet below.
 - The register page's role picker was removed as a small, approved
   frontend exception ahead of that larger task (self-signup is now
   organization-owner-only) -- see `src/pages/Register.tsx`.
