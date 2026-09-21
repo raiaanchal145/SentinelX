@@ -142,6 +142,7 @@ async def _main() -> None:
         if len(env_password) < MIN_PASSWORD_LENGTH:
             print(f"Error: SEED_SUPER_ADMIN_PASSWORD must contain at least {MIN_PASSWORD_LENGTH} characters.")
             sys.exit(2)
+        password = env_password
         print(f"Non-interactive mode: creating super_admin for {email} from SEED_SUPER_ADMIN_* variables.")
     elif env_email or env_password:
         print("Error: SEED_SUPER_ADMIN_EMAIL and SEED_SUPER_ADMIN_PASSWORD must be set together.")

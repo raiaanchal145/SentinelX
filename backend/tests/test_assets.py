@@ -535,11 +535,17 @@ async def test_mutating_actions_write_audit_entries(client, db_session):
     assert actions.count("asset.retire") == 1
 
 
-async def test_organization_pending_blocks_assets_access(client, db_session):
-    org = await make_organization(db_session, status=OrganizationStatus.pending)
+async def test_suspended_organization_blocks_assets_access(client, db_session):
+    # Log in while the org is active, then suspend: a suspended org's
+    # owner cannot log in at all, but an existing session is still
+    # rejected by require_active_organization on every asset endpoint.
+    org = await make_organization(db_session)
     admin = await make_admin(db_session, email="owner@example.com", organization_id=org.id)
     token = await login(client, admin.email)
 
+    org.status = OrganizationStatus.suspended
+    await db_session.commit()
+
     resp = await client.get(ASSETS_BASE, headers=auth(token))
     assert resp.status_code == 403
-    assert resp.json()["detail"]["code"] == "organization_pending"
+    assert resp.json()["detail"]["code"] == "organization_suspended"

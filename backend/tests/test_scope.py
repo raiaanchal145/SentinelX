@@ -130,15 +130,15 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def test_organizations_list_is_super_admin_only(client, db_session):
+async def test_legacy_organizations_router_is_gone(client, db_session):
     """
-    GET /api/v1/organizations used to be tenant-scoped for everyone (any
-    authenticated account saw its own organization); it's now
-    super_admin-only per the org-management spec's "no anonymous endpoint
-    may list organizations" rule -- an organization's own owner reads it
-    through GET /organization instead, and a platform admin manages every
-    organization through /admin/organizations. Only a super_admin still
-    has any reason to call this legacy endpoint at all.
+    GET /api/v1/organizations used to be tenant-scoped, then
+    super_admin-only; with self-signup removed the legacy router is
+    deleted entirely (invite-only, docs/DECISIONS.md). An organization's
+    owner reads its data through GET /organization, and the platform
+    admin manages every organization through /admin/organizations. The
+    401s below pin that the route cannot be reached unauthenticated,
+    either -- no anonymous way in, ever.
     """
     org_a = Organization(name="Aurora Health")
     org_b = Organization(name="Blackridge Logistics")
@@ -167,14 +167,18 @@ async def test_organizations_list_is_super_admin_only(client, db_session):
     token_root = await _login(client, "root@example.com")
     token_analyst_a = await _login(client, "analyst.a@example.com")
 
-    assert (await client.get("/api/v1/organizations", headers=_auth(token_a))).status_code == 403
-    assert (await client.get("/api/v1/organizations", headers=_auth(token_b))).status_code == 403
-    assert (await client.get("/api/v1/organizations", headers=_auth(token_analyst_a))).status_code == 403
+    assert (await client.get("/api/v1/organizations", headers=_auth(token_a))).status_code == 404
+    assert (await client.get("/api/v1/organizations", headers=_auth(token_b))).status_code == 404
+    assert (await client.get("/api/v1/organizations", headers=_auth(token_analyst_a))).status_code == 404
+    assert (await client.get("/api/v1/organizations", headers=_auth(token_root))).status_code == 404
+    assert (await client.get("/api/v1/organizations")).status_code == 404
 
-    root_resp = await client.get("/api/v1/organizations", headers=_auth(token_root))
-    assert root_resp.status_code == 200
-    names_root = {o["name"] for o in root_resp.json()}
-    assert names_root == {"Aurora Health", "Blackridge Logistics"}
+    # The replacement surfaces both still exist and behave.
+    admin_list = await client.get(
+        "/api/v1/admin/organizations", headers=_auth(token_root)
+    )
+    assert admin_list.status_code == 200
+    assert admin_list.json()["total"] == 2
 
 
 async def test_stats_overview_counts_are_isolated_by_tenant(client, db_session):
@@ -228,9 +232,10 @@ async def test_stats_overview_counts_are_isolated_by_tenant(client, db_session):
 
 
 async def test_only_super_admin_can_create_an_organization(client, db_session):
-    """Role guard: POST /organizations is super_admin-only -- a plain
-    `users` account AND an organization's own owner (organization_admin)
-    are both rejected before either gets to write a new row."""
+    """Role guard: the platform-admin endpoint is the only way to create
+    an organization (invite-only, docs/DECISIONS.md). The legacy public
+    POST /organizations is gone; a `users` account, an organization's
+    own owner, and an anonymous caller are all kept out."""
     org_a = Organization(name="Aurora Health")
     db_session.add(org_a)
     await db_session.flush()
@@ -247,24 +252,31 @@ async def test_only_super_admin_can_create_an_organization(client, db_session):
     token_admin_a = await _login(client, "admin.a@example.com")
 
     resp_user = await client.post(
-        "/api/v1/organizations",
-        json={"name": "Shouldn't Exist"},
+        "/api/v1/admin/organizations",
+        json={"name": "Shouldn't Exist", "owner_email": "x@example.com", "soc_mode": "managed"},
         headers=_auth(token_analyst_a),
     )
     assert resp_user.status_code == 403
 
     resp_owner = await client.post(
-        "/api/v1/organizations",
-        json={"name": "Shouldn't Exist Either"},
+        "/api/v1/admin/organizations",
+        json={"name": "Shouldn't Exist Either", "owner_email": "y@example.com", "soc_mode": "managed"},
         headers=_auth(token_admin_a),
     )
     assert resp_owner.status_code == 403
 
+    resp_anonymous = await client.post(
+        "/api/v1/admin/organizations",
+        json={"name": "Nope", "owner_email": "z@example.com", "soc_mode": "managed"},
+    )
+    assert resp_anonymous.status_code == 401
+
 
 async def test_organizations_and_stats_reject_unauthenticated_requests(client):
     """Regression coverage for the pre-scope-module bug: both endpoints
-    used to be readable with no token at all."""
-    assert (await client.get("/api/v1/organizations")).status_code == 401
+    used to be readable with no token at all. GET /organizations is now
+    deleted outright; stats remains and stays auth-gated."""
+    assert (await client.get("/api/v1/organizations")).status_code in (401, 404)
     assert (await client.get("/api/v1/stats/overview")).status_code == 401
 
 

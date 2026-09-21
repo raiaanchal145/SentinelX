@@ -107,7 +107,14 @@ def downgrade() -> None:
         sa.Column("verification_code", sa.String(length=10), nullable=False),
         sa.Column("verification_code_expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("created_at", sa.DateTime(), server_default=sa.text("now()"), nullable=False),
-        sa.ForeignKeyConstraint(["organization_id"], ["organizations.id"], ondelete="CASCADE"),
+        # The FK carries the exact name the f2a3b4c5d6e7 migration gave
+        # it, because that migration's own downgrade drops it BY NAME --
+        # an auto-generated name here would break downgrade chains that
+        # pass through f2a3b4c5d6e7.
+        sa.ForeignKeyConstraint(
+            ["organization_id"], ["organizations.id"], ondelete="CASCADE",
+            name="fk_pending_registrations_organization",
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("email"),
         sa.CheckConstraint(

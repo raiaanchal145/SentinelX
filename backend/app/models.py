@@ -342,9 +342,9 @@ class AccountEmail(Base):
     level. Postgres has no way to put a single UNIQUE constraint across
     two different tables, so every admin/user row also gets exactly one
     row here, written in the same transaction as the admin/user insert.
-    The register endpoint checks/reserves an email here instead of
-    querying admins and users separately, which is also what makes the
-    cross-table check race-safe under concurrent signups.
+    All account-creation paths (invitation accept, create_super_admin)
+    reserve the email here instead of querying admins and users
+    separately, which makes the cross-table check race-safe.
     """
 
     __tablename__ = "account_emails"
