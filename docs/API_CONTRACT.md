@@ -124,6 +124,7 @@ organization gets `403` with code `organization_pending` /
 | `PUT /teams/{id}/members` | `{user_ids: [...]}`. Replaces the team's membership set (via `users.team_id` -- see `docs/DECISIONS.md` on why this is single-team, not many-to-many). |
 | `GET /access` | The full role x module matrix: `{platform_enabled, role_has_default, owner_enabled, soc_gated, effective}` per `(role, module)` cell. |
 | `PUT /access` | `{updates: [{role, module_key, enabled}, ...]}`. Rejects a module that isn't a default for that role (`422 module_not_default_for_role`) or that the platform has disabled for this organization (`422 module_disabled_by_platform`). |
+| `GET /members/{user_id}/access` | Per-module `{role_has_default, platform_enabled, owner_enabled, soc_gated, denied, effective}` for this one member, layering their individual `UserAccessOverride` rows on top of the role-level picture `GET /access` returns. Added for the owner's per-member access drawer (Prompt B section B4), which needs to read a member's current state before showing the live effective preview -- there was previously no read endpoint, only the PUT below. |
 | `PUT /members/{user_id}/access` | `{denied_modules: [module_key, ...]}`. Replaces that member's full override set to exactly the given list (an omitted previously-denied key is un-denied). |
 
 ## Public: `/api/v1/invitations` (no authentication)

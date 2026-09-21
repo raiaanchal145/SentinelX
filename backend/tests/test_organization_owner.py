@@ -330,6 +330,35 @@ async def test_access_matrix_put_rejects_non_default_and_platform_disabled(clien
     assert row.enabled is False
 
 
+async def test_get_member_access_reflects_role_defaults_and_own_overrides(client, db_session):
+    org, _owner, token = await _owner_token(db_session, client)
+    dev = await make_user(db_session, email="dev@example.com", role=UserRole.it_developer, organization_id=org.id)
+
+    before = await client.get(f"{ORG_BASE}/members/{dev.id}/access", headers=auth(token))
+    assert before.status_code == 200
+    body = before.json()
+    assert body["role"] == "it_developer"
+    assert body["modules"]["assets"]["role_has_default"] is True
+    assert body["modules"]["assets"]["denied"] is False
+    assert body["modules"]["assets"]["effective"] is True
+    assert body["modules"]["soc"]["role_has_default"] is False
+    assert body["modules"]["soc"]["effective"] is False
+
+    await client.put(f"{ORG_BASE}/members/{dev.id}/access", json={"denied_modules": ["assets"]}, headers=auth(token))
+
+    after = await client.get(f"{ORG_BASE}/members/{dev.id}/access", headers=auth(token))
+    assert after.status_code == 200
+    assert after.json()["modules"]["assets"]["denied"] is True
+    assert after.json()["modules"]["assets"]["effective"] is False
+
+
+async def test_get_member_access_unknown_member_is_404(client, db_session):
+    _org, _owner, token = await _owner_token(db_session, client)
+    resp = await client.get(f"{ORG_BASE}/members/00000000-0000-0000-0000-000000000000/access", headers=auth(token))
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "member_not_found"
+
+
 async def test_member_access_override_put_sets_and_clears_denied_modules(client, db_session):
     org, _owner, token = await _owner_token(db_session, client)
     dev = await make_user(db_session, email="dev@example.com", role=UserRole.it_developer, organization_id=org.id)

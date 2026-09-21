@@ -600,6 +600,67 @@ async def update_access_matrix(
     return {"updates": applied}
 
 
+@router.get("/members/{user_id}/access")
+async def get_member_access(
+    user_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db), scope: Scope = Depends(require_active_organization), _owner: Scope = Depends(require_org_owner),
+):
+    """
+    One member's per-module state, layering their individual overrides
+    on top of the role-level picture GET /access already returns --
+    added alongside the owner's per-member access drawer (Prompt B
+    section B4), which needs to show a member's CURRENT denied modules
+    and live effective access before saving, and had no read endpoint
+    to do that from (PUT /members/{user_id}/access below only writes).
+    """
+    org = await _require_org(db, scope)
+    user = (
+        await db.execute(select(User).where(User.id == user_id, User.organization_id == scope.organization_id))
+    ).scalar_one_or_none()
+    if user is None:
+        raise _err("member_not_found", "Member not found in this organization.", status_code=404)
+
+    module_rows = (
+        await db.execute(select(OrganizationModule).where(OrganizationModule.organization_id == org.id))
+    ).scalars().all()
+    platform_enabled = {row.module_key: row.enabled for row in module_rows}
+
+    role_access_rows = (
+        await db.execute(
+            select(OrganizationRoleAccess).where(
+                OrganizationRoleAccess.organization_id == org.id, OrganizationRoleAccess.role == user.role,
+            )
+        )
+    ).scalars().all()
+    owner_settings = {row.module_key: row.enabled for row in role_access_rows}
+
+    override_rows = (
+        await db.execute(select(UserAccessOverride).where(UserAccessOverride.user_id == user_id))
+    ).scalars().all()
+    denied = {row.module_key for row in override_rows if not row.allowed}
+
+    role_defaults = ROLE_DEFAULT_MODULES.get(user.role, {})
+    gated = SOC_MODE_GATED_MODULES.get(user.role, set())
+
+    modules = {}
+    for key in ALL_MODULE_KEYS:
+        has_default = key in role_defaults
+        plat_on = platform_enabled.get(key, False)
+        owner_on = owner_settings.get(key, True)
+        soc_gated = key in gated and org.soc_mode != SocMode.in_house
+        is_denied = key in denied
+        modules[key] = {
+            "role_has_default": has_default,
+            "platform_enabled": plat_on,
+            "owner_enabled": owner_on,
+            "soc_gated": soc_gated,
+            "denied": is_denied,
+            "effective": bool(has_default and plat_on and owner_on and not soc_gated and not is_denied),
+        }
+
+    return {"user_id": str(user.id), "role": user.role.value, "modules": modules}
+
+
 @router.put("/members/{user_id}/access")
 async def update_member_access(
     user_id: uuid.UUID, payload: MemberAccessRequest, request: Request,
