@@ -83,6 +83,20 @@ function UserLayout() {
   const orgName = me?.organization?.name ?? "Your Organization"
   const health = useHealthStatus()
 
+  // An employee who was already logged in when their organization got
+  // suspended/archived still holds a valid token (nothing here revokes
+  // it), so GET /auth/me keeps succeeding -- this is what catches that
+  // and sends them to the matching status screen instead of leaving
+  // them on a page that will just start failing its own API calls.
+  // (There's no "pending" case for a `users` account: a pending
+  // organization has no members yet, only its owner.)
+  useEffect(() => {
+    const status = me?.organization?.status
+    if (status === "suspended" || status === "archived") {
+      navigate("/organization-suspended", { replace: true, state: { status } })
+    }
+  }, [me, navigate])
+
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [customCrumbs, setCustomCrumbs] = useState<Crumb[] | null>(null)
   const [actions, setActions] = useState<ReactNode>(null)
