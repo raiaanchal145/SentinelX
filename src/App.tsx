@@ -26,6 +26,7 @@ import OwnerAccess from "./features/owner/pages/OwnerAccess"
 import OwnerSettings from "./features/owner/pages/OwnerSettings"
 
 import UserLayout from "./layouts/UserLayout"
+import ModuleGuard from "./components/ModuleGuard"
 
 import SocOverview from "./features/soc/pages/SocOverview"
 import SocAlerts from "./features/soc/pages/SocAlerts"
@@ -337,12 +338,12 @@ function App() {
         }
       >
         <Route path="/soc" element={<SocOverview />} />
-        <Route path="/soc/alerts" element={<SocAlerts />} />
-        <Route path="/soc/incidents" element={<SocIncidents />} />
-        <Route path="/soc/incidents/:id" element={<IncidentDetail />} />
-        <Route path="/soc/events" element={<SocEvents />} />
-        <Route path="/soc/assets" element={<SocAssets />} />
-        <Route path="/soc/reports" element={<SocReports />} />
+        <Route path="/soc/alerts" element={<ModuleGuard module="soc"><SocAlerts /></ModuleGuard>} />
+        <Route path="/soc/incidents" element={<ModuleGuard module="incidents"><SocIncidents /></ModuleGuard>} />
+        <Route path="/soc/incidents/:id" element={<ModuleGuard module="incidents"><IncidentDetail /></ModuleGuard>} />
+        <Route path="/soc/events" element={<ModuleGuard module="soc"><SocEvents /></ModuleGuard>} />
+        <Route path="/soc/assets" element={<ModuleGuard module="assets"><SocAssets /></ModuleGuard>} />
+        <Route path="/soc/reports" element={<ModuleGuard module="reports"><SocReports /></ModuleGuard>} />
       </Route>
 
       {/* IT / DEVELOPER -- top navigation shell */}
@@ -355,10 +356,10 @@ function App() {
         }
       >
         <Route path="/it" element={<ItMyTasks />} />
-        <Route path="/it/tickets" element={<ItTickets />} />
-        <Route path="/it/tickets/:id" element={<TicketDetail />} />
-        <Route path="/it/assets" element={<ItAssets />} />
-        <Route path="/it/runbooks" element={<ItRunbooks />} />
+        <Route path="/it/tickets" element={<ModuleGuard module="it_tickets"><ItTickets /></ModuleGuard>} />
+        <Route path="/it/tickets/:id" element={<ModuleGuard module="it_tickets"><TicketDetail /></ModuleGuard>} />
+        <Route path="/it/assets" element={<ModuleGuard module="assets"><ItAssets /></ModuleGuard>} />
+        <Route path="/it/runbooks" element={<ModuleGuard module="it_tickets"><ItRunbooks /></ModuleGuard>} />
       </Route>
 
       {/* SECURITY MANAGER -- top navigation shell */}
@@ -371,11 +372,11 @@ function App() {
         }
       >
         <Route path="/manager" element={<ManagerOverview />} />
-        <Route path="/manager/incidents" element={<ManagerIncidents />} />
-        <Route path="/manager/approvals" element={<ManagerApprovals />} />
-        <Route path="/manager/reports" element={<ManagerReports />} />
-        <Route path="/manager/assets" element={<ManagerAssets />} />
-        <Route path="/manager/audit" element={<ManagerAudit />} />
+        <Route path="/manager/incidents" element={<ModuleGuard module="incidents"><ManagerIncidents /></ModuleGuard>} />
+        <Route path="/manager/approvals" element={<ModuleGuard module="approvals"><ManagerApprovals /></ModuleGuard>} />
+        <Route path="/manager/reports" element={<ModuleGuard module="reports"><ManagerReports /></ModuleGuard>} />
+        <Route path="/manager/assets" element={<ModuleGuard module="assets"><ManagerAssets /></ModuleGuard>} />
+        <Route path="/manager/audit" element={<ModuleGuard module="audit_logs"><ManagerAudit /></ModuleGuard>} />
       </Route>
 
       {/* AUDITOR -- top navigation shell */}
@@ -388,9 +389,9 @@ function App() {
         }
       >
         <Route path="/auditor" element={<AuditorOverview />} />
-        <Route path="/auditor/audit-logs" element={<AuditorAuditLogs />} />
-        <Route path="/auditor/incidents" element={<AuditorIncidents />} />
-        <Route path="/auditor/reports" element={<AuditorReports />} />
+        <Route path="/auditor/audit-logs" element={<ModuleGuard module="audit_logs"><AuditorAuditLogs /></ModuleGuard>} />
+        <Route path="/auditor/incidents" element={<ModuleGuard module="incidents"><AuditorIncidents /></ModuleGuard>} />
+        <Route path="/auditor/reports" element={<ModuleGuard module="reports"><AuditorReports /></ModuleGuard>} />
       </Route>
 
       {/* LEGACY URL REDIRECTS */}

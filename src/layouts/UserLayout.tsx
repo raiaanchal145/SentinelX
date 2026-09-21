@@ -26,10 +26,7 @@ import ConnectivityBanner from "../components/shared/ConnectivityBanner"
 import { useHealthStatus } from "../hooks/useHealthStatus"
 import { ROLE_NAV } from "../lib/roleNav"
 import { getSession, logout, roleLabel } from "../lib/auth"
-
-// TODO: replace with the real organization name once the session/API
-// exposes one -- a switcher is explicitly not needed for this task.
-const ORG_NAME_PLACEHOLDER = "Your Organization"
+import { useMe } from "../lib/me"
 
 type PageChromeContextValue = {
   setBreadcrumbs: (crumbs: Crumb[] | null) => void
@@ -71,7 +68,19 @@ function UserLayout() {
   const navigate = useNavigate()
   const session = getSession()
   const role = session.role
-  const navItems = useMemo(() => (role ? ROLE_NAV[role] ?? [] : []), [role])
+  const { me } = useMe()
+  const effectiveModules = me?.effective_modules
+  // A nav item with no `module` (every role's Overview/home) is always
+  // shown; one that names a module needs it in the account's
+  // effective_modules (docs/API_CONTRACT.md's GET /auth/me) -- this is
+  // what keeps a disabled module's link from appearing at all, per
+  // Prompt B section C4 ("Top-nav shows only permitted modules").
+  const navItems = useMemo(() => {
+    const items = role ? ROLE_NAV[role] ?? [] : []
+    if (!effectiveModules) return items
+    return items.filter((item) => !item.module || item.module in effectiveModules)
+  }, [role, effectiveModules])
+  const orgName = me?.organization?.name ?? "Your Organization"
   const health = useHealthStatus()
 
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -151,7 +160,7 @@ function UserLayout() {
               Sentinel<span className="text-brand-400">X</span>
             </p>
             <p className="text-[11px] text-fg-muted">
-              Security Operations · {ORG_NAME_PLACEHOLDER}
+              Security Operations · {orgName}
             </p>
           </div>
         </div>
