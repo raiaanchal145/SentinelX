@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from_name: str = "SentinelX"
 
+    # Base URL of the deployed frontend -- used to build the link inside
+    # invitation emails ({frontend_url}/accept-invite?token=...). The dev
+    # default matches Vite's default port, same as CORS in app/main.py.
+    frontend_url: str = "http://localhost:5173"
+
 
 DEFAULT_SECRET_KEY = "sentinelx-dev-secret-change-me"
 

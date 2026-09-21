@@ -1,3 +1,5 @@
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from jose import jwt
@@ -29,3 +31,22 @@ def create_access_token(data: dict) -> str:
 
 def decode_access_token(token: str) -> dict:
     return jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
+
+
+def generate_invitation_token() -> tuple[str, str]:
+    """
+    32 random urlsafe bytes for the link the invitee actually clicks,
+    and its SHA-256 hex digest for what gets stored (invitations.token_hash).
+    A raw token is never written to the database -- same principle as a
+    password, deliberately a different, much cheaper mechanism than
+    bcrypt above: a bare SHA-256 lookup key that's fine to hash on every
+    read (validating a token on GET /invitations/{token}, potentially
+    unauthenticated and rate-limited by nothing yet) as long as the raw
+    value is unguessable, which 32 bytes of secrets.token_urlsafe is.
+    """
+    raw = secrets.token_urlsafe(32)
+    return raw, hash_invitation_token(raw)
+
+
+def hash_invitation_token(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()

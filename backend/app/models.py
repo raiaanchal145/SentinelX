@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -44,6 +45,25 @@ def _by_value(enum_cls):
 class AdminLevel(str, enum.Enum):
     super_admin = "super_admin"
     organization_admin = "organization_admin"
+    # Platform-side SOC staff -- an admin_level, not a UserRole, since
+    # they authenticate through the same table/flow as super_admin and
+    # are never scoped to a single organization by a foreign key (their
+    # organization_id is NULL, same check-constraint shape as
+    # super_admin). Which organizations they can see comes from
+    # soc_organization_assignments, not from organization_id.
+    platform_soc_analyst = "platform_soc_analyst"
+
+
+class OrganizationStatus(str, enum.Enum):
+    pending = "pending"
+    active = "active"
+    suspended = "suspended"
+    archived = "archived"
+
+
+class SocMode(str, enum.Enum):
+    managed = "managed"
+    in_house = "in_house"
 
 
 class UserRole(str, enum.Enum):
@@ -214,7 +234,29 @@ class Organization(Base):
     industry: Mapped[str | None] = mapped_column(String(120))
     environment: Mapped[str | None] = mapped_column(String(60))
     timezone: Mapped[str | None] = mapped_column(String(60))
-    status: Mapped[str] = mapped_column(String(30), default="active")
+    status: Mapped[OrganizationStatus] = mapped_column(
+        Enum(OrganizationStatus, name="organization_status"),
+        nullable=False,
+        default=OrganizationStatus.active,
+        index=True,
+    )
+    # managed: this organization's alerts/incidents are worked by
+    # platform SOC staff (soc_organization_assignments). in_house: the
+    # organization's own soc_analyst users work them, and the soc/
+    # incidents modules become assignable to that role.
+    soc_mode: Mapped[SocMode] = mapped_column(
+        Enum(SocMode, name="soc_mode"), nullable=False, default=SocMode.managed
+    )
+    # NULL = unlimited. Counts active members + owners + pending invitations.
+    max_members: Mapped[int | None] = mapped_column(Integer)
+    # "self_signup" | "platform_admin" -- how the organization came to exist.
+    created_via: Mapped[str] = mapped_column(String(20), nullable=False, default="self_signup")
+    approved_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("admins.id", ondelete="SET NULL")
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    suspension_reason: Mapped[str | None] = mapped_column(Text)
     # Nullable: orgs created before this column existed (or a hypothetical
     # future system-seeded org) have no creating admin on file.
     created_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -273,7 +315,7 @@ class Admin(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "(admin_level = 'super_admin' AND organization_id IS NULL) OR "
+            "(admin_level IN ('super_admin', 'platform_soc_analyst') AND organization_id IS NULL) OR "
             "(admin_level = 'organization_admin' AND organization_id IS NOT NULL)",
             name="ck_admins_level_matches_org",
         ),
@@ -390,6 +432,187 @@ class PendingRegistration(Base):
             "(account_type = 'user' AND role IS NOT NULL AND admin_level IS NULL)",
             name="ck_pending_registrations_type_matches_fields",
         ),
+    )
+
+
+class OrganizationModule(Base):
+    """
+    Which modules a platform admin has switched on for an organization --
+    the first (widest) layer of the effective-access calculation in
+    access.py. A module with no row here is treated as disabled; the
+    migration backfills every existing organization with every module
+    key enabled so nothing regresses when this table is introduced.
+    """
+
+    __tablename__ = "organization_modules"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    module_key: Mapped[str] = mapped_column(String(40), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("admins.id", ondelete="SET NULL")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "module_key", name="uq_organization_modules_org_key"),
+    )
+
+
+class OrganizationRoleAccess(Base):
+    """
+    The owner's per-role overrides of the role default map (access.py),
+    bounded above by OrganizationModule. A missing row means "use the
+    role default" -- rows only exist where the owner changed one.
+    """
+
+    __tablename__ = "organization_role_access"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[UserRole] = mapped_column(Enum(UserRole, name="user_role"), nullable=False)
+    module_key: Mapped[str] = mapped_column(String(40), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("admins.id", ondelete="SET NULL")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "role", "module_key", name="uq_org_role_access_org_role_key"
+        ),
+    )
+
+
+class UserAccessOverride(Base):
+    """
+    A single person's deny-only override of their role's access, the
+    narrowest layer of access.py's effective-access calculation. A row
+    can only ever narrow: allowed=False removes a module that org+role
+    would otherwise grant; allowed=True (or no row at all) means "use
+    the default" and can never grant a module the organization or the
+    role does not already allow -- enforced in the service layer, since
+    a bare column can't express "no wider than the layer below it."
+    """
+
+    __tablename__ = "user_access_overrides"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    module_key: Mapped[str] = mapped_column(String(40), nullable=False)
+    allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    set_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("admins.id", ondelete="SET NULL")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "module_key", name="uq_user_access_overrides_user_key"),
+    )
+
+
+class Invitation(Base):
+    """
+    The only path to create a member account, an owner account created
+    by the platform, or a platform SOC analyst account. kind/status are
+    plain strings (not Postgres enums) -- same lightweight-state-field
+    convention as organizations.created_via and account_emails.account_type
+    elsewhere in this schema.
+
+    organization_id is NULL only for kind == "platform_soc" (a platform
+    SOC analyst isn't scoped to one organization). accepted_account_type/
+    accepted_account_id are a polymorphic pointer with no FK, same
+    pattern as AuditLog.actor_id/target_id -- which table they point
+    into depends on accepted_account_type.
+    """
+
+    __tablename__ = "invitations"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE")
+    )
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # owner | member | platform_soc
+    role: Mapped[UserRole | None] = mapped_column(Enum(UserRole, name="user_role"))
+    team_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("teams.id", ondelete="SET NULL")
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    invited_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("admins.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    accepted_account_type: Mapped[str | None] = mapped_column(String(10))
+    accepted_account_id: Mapped[uuid.UUID | None] = mapped_column()
+
+    __table_args__ = (
+        Index("ix_invitations_organization_id", "organization_id"),
+        # One pending invitation per (organization_id, email) for a
+        # member/owner invite ...
+        Index(
+            "uq_invitations_pending_org_email",
+            "organization_id",
+            "email",
+            unique=True,
+            postgresql_where=text("status = 'pending' AND organization_id IS NOT NULL"),
+        ),
+        # ... and, since platform_soc invitations have organization_id
+        # NULL, one pending platform_soc invitation per email.
+        Index(
+            "uq_invitations_pending_email_platform",
+            "email",
+            unique=True,
+            postgresql_where=text("status = 'pending' AND organization_id IS NULL"),
+        ),
+    )
+
+
+class SocOrganizationAssignment(Base):
+    """
+    Which platform_soc_analyst admins are assigned to which (managed)
+    organizations -- this is what soc_visible_organization_ids() in
+    access.py reads. That admin_id actually belongs to a
+    platform_soc_analyst is enforced in the service layer: a bare FK to
+    admins can't express "and admin_level = platform_soc_analyst".
+    """
+
+    __tablename__ = "soc_organization_assignments"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    admin_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("admins.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    assigned_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("admins.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("admin_id", "organization_id", name="uq_soc_org_assignments_admin_org"),
     )
 
 

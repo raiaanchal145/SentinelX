@@ -38,7 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Admin, User
+from app.models import Admin, AdminLevel, User
 from app.security import decode_access_token
 
 
@@ -85,6 +85,12 @@ async def get_current_account(
 
     if not account:
         raise HTTPException(status_code=401, detail="Invalid or expired session. Please log in again.")
+
+    # Re-checked on every request, not just at login -- a token stays
+    # syntactically valid until it expires, but a deactivated account
+    # must stop being able to do anything with it on its very next call.
+    if not account.is_active:
+        raise HTTPException(status_code=401, detail="This account has been deactivated.")
 
     return account
 
@@ -143,12 +149,22 @@ def require_roles(*roles: str):
 def scoped_to_org(stmt, model, scope: Scope):
     """
     Adds `.where(model.organization_id == scope.organization_id)` to a
-    SQLAlchemy select() unless scope.organization_id is None (a
-    super_admin, who can see every organization). `model` is the mapped
-    class being selected from (or joined in) -- it must have an
-    organization_id column, which is true of every organization-scoped
-    table in app/models.py.
+    SQLAlchemy select() unless the caller is a super_admin (who can see
+    every organization). `model` is the mapped class being selected from
+    (or joined in) -- it must have an organization_id column, which is
+    true of every organization-scoped table in app/models.py.
+
+    A platform_soc_analyst also has organization_id None (same as
+    super_admin, same check-constraint shape) but must NOT get the same
+    "see everything" treatment here -- their visibility is a specific,
+    assigned set of organizations (access.soc_visible_organization_ids),
+    which this synchronous helper has no way to look up. Falling through
+    to `model.organization_id == None` below for them deliberately
+    matches zero rows: any endpoint meant to be reachable by a
+    platform_soc_analyst must use soc_visible_organization_ids() itself
+    rather than this helper, so failing closed here is the safe default
+    rather than accidentally granting platform-admin-wide visibility.
     """
-    if scope.organization_id is None:
+    if scope.role == AdminLevel.super_admin.value:
         return stmt
     return stmt.where(model.organization_id == scope.organization_id)
