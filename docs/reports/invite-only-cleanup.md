@@ -98,3 +98,52 @@ Database (one new migration):
 
 Dependencies: none added or removed (report-only rule respected; vulture was
 not installed and was not installed for this task).
+
+## Test coverage after the cleanup
+
+- `tests/test_auth.py` (13 tests): the lockout flow end to end -- 3rd
+  wrong password trips it, correct password refused until verified,
+  wrong code, expiry, resend rotation, single use, capped verify
+  attempts -- plus byte-identical known/unknown-email responses on
+  verify and resend, register 404, and the authz regression tests.
+- `tests/test_org_lifecycle.py` (4 tests): platform admin creates an
+  active org + owner invitation; owner accepts and reaches the
+  dashboard; module denial; managed->in_house switch and full
+  soc_analyst access; owner-invitation list/resend (token rotation,
+  expired reads as expired)/revoke (link 404s); suspended/archived
+  login and endpoint behavior.
+- `tests/test_anonymous_routes.py` (3 tests): enumerates every route,
+  walks the FULL dependency tree, and fails on any anonymous endpoint
+  outside the allowed list; pins that no anonymous route can create an
+  account or organization.
+- `tests/test_super_admin.py` (6 tests): the bootstrap transaction
+  (admins + account_emails + system audit row in one), duplicate-email
+  refusal, second-super-admin refusal, password never printed, and the
+  non-interactive SEED_SUPER_ADMIN_* path -- which exposed a real bug
+  (the env-var branch never assigned the password;
+  `UnboundLocalError`) that is fixed here.
+- `tests/test_migration_invite_only.py` (1 test): d5e6f7a8b9c0 on a
+  scratch database -- empty upgrade (enum + table state), downgrade -1
+  (structures recreated), populated upgrade (pending org converted,
+  registration row discarded). It exposed a downgrade FK-name mismatch
+  in the recreated table (now carries the original
+  `fk_pending_registrations_organization` name) and a missing role on
+  the seed row.
+- `tests/test_scope.py` / `test_admin_organizations.py` /
+  `test_organization_owner.py` / `test_assets.py`: legacy
+  `/organizations` tests re-pointed at `/admin/organizations` or
+  rewritten to pin the router's removal; `organization_pending`
+  coverage replaced with suspended/archived equivalents.
+
+Full suite: 135 passed. Frontend gates after the cleanup: `tsc -b`
+clean, oxlint 0 errors (26 pre-existing-style warnings), `npm run build`
+ok.
+
+## Dev launcher first-run path
+
+`scripts/dev.mjs` checks for an active super_admin after migrations
+(inline Python probe; a broken probe only skips the offer, never blocks
+the dev flow). On a first run it offers to run
+`python -m app.create_super_admin` interactively (stdio inherited so
+getpass works) or prints the exact command for later; once a super_admin
+exists, every run is completely silent.

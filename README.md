@@ -35,12 +35,40 @@ does everything automatically:
 - creates `backend/.env` from `backend/.env.example` the first time (never touches it again after that),
 - makes sure PostgreSQL is reachable — using an already-running local install if it finds one, otherwise starting just the `postgres` service via Docker Compose,
 - applies any pending Alembic migrations,
+- on a **first run only**: if the database has no super_admin yet, offers to create it right there (invite-only platform -- see below),
 - starts the FastAPI backend (`uvicorn app.main:app --reload --port 8000`) in a **new terminal window** titled "SentinelX Backend",
 - starts the Vite frontend in the terminal you're already in.
 
 The first run on a laptop takes a little while (installs + Docker image pull); every run after that is quick, since each step is skipped once it's already done. You never need to type `uvicorn`, `alembic`, `pip`, `docker compose`, or venv-activation commands by hand.
 
 When it's ready, you'll see a summary with the frontend URL, the API URL, the API docs URL, and whether the database came from Docker or a local install.
+
+### Creating the first account (invite-only platform)
+
+SentinelX has **no public registration** -- there is no sign-up page.
+The platform's first account, the `super_admin`, is created by a
+one-time, server-side command:
+
+```
+cd backend
+.venv\Scripts\python -m app.create_super_admin   (Windows)
+.venv/bin/python -m app.create_super_admin       (macOS/Linux)
+```
+
+It prompts for email, full name and password (input hidden, never on
+the command line or in any log), or read
+`SEED_SUPER_ADMIN_EMAIL` / `SEED_SUPER_ADMIN_PASSWORD` /
+`SEED_SUPER_ADMIN_NAME` from the environment for non-interactive dev
+use. It refuses to run twice and never prints the password.
+
+`npm run dev` runs this for you on a first run: when the database has
+no active super_admin, the launcher offers to create it before starting
+the servers. Once one exists, every later account -- organization
+owners, members, platform SOC analysts -- is created by **invitation**:
+log in as the super_admin, create an organization (its owner gets an
+invitation link), or invite members/platform SOC analysts from the
+organization pages. Access to SentinelX is by invitation; contact your
+organization administrator if you don't have an account.
 
 Press **Ctrl+C** in that terminal to stop the frontend and the backend window this command started. It does **not** stop the Postgres container (so the next `npm run dev` is fast) — see `npm run dev:stop` below if you want to stop that too.
 
