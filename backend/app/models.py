@@ -251,8 +251,15 @@ class Organization(Base):
     max_members: Mapped[int | None] = mapped_column(Integer)
     # "self_signup" | "platform_admin" -- how the organization came to exist.
     created_via: Mapped[str] = mapped_column(String(20), nullable=False, default="self_signup")
+    # Both admin FKs point admins <- organizations while admins.organization_id
+    # points organizations <- admins -- a cycle Base.metadata can't sort on its
+    # own, which made create_all/drop_all (the entire pytest fixture) raise
+    # CircularDependencyError. use_alter + the migration's exact constraint
+    # names fix the metadata sort; the hand-written migrations already create
+    # these via ALTER TABLE with these names, so the test schema now matches
+    # the real one. No migration is added or changed by this.
     approved_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("admins.id", ondelete="SET NULL")
+        ForeignKey("admins.id", ondelete="SET NULL", name="fk_organizations_approved_by_admin", use_alter=True)
     )
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -260,7 +267,7 @@ class Organization(Base):
     # Nullable: orgs created before this column existed (or a hypothetical
     # future system-seeded org) have no creating admin on file.
     created_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("admins.id", ondelete="SET NULL")
+        ForeignKey("admins.id", ondelete="SET NULL", name="fk_organizations_created_by_admin", use_alter=True)
     )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
