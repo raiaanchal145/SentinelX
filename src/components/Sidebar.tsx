@@ -34,14 +34,18 @@ function Sidebar() {
       path: "/organization-dashboard",
     },
     {
-      name: "SOC Dashboard",
+      // Was "/soc-dashboard", which only ever redirected into the
+      // analyst-only /soc route and bounced an admin straight back home.
+      // Now points at the real admin-side oversight page (P22).
+      name: "SOC Oversight",
       icon: ShieldAlert,
-      path: "/soc-dashboard",
+      path: "/admin/soc-oversight",
     },
     {
-      name: "IT Dashboard",
+      // Same fix as above, for the IT side.
+      name: "IT Oversight",
       icon: Wrench,
-      path: "/it-dashboard",
+      path: "/admin/it-oversight",
     },
     {
       name: "Users & Access",
@@ -57,6 +61,32 @@ function Sidebar() {
       name: "Security Overview",
       icon: ShieldCheck,
       path: "/admin",
+    },
+  ]
+
+  /*
+    ORGANIZATION ADMIN
+    Was previously falling through to itItems below (there was no branch
+    for this role at all) -- a pre-existing gap, not something introduced
+    here. Gets its own dashboard plus the same two oversight pages, scoped
+    to their one organization by scopeFor() rather than "all".
+  */
+
+  const organizationAdminItems = [
+    {
+      name: "Organization Dashboard",
+      icon: Building2,
+      path: "/organization-dashboard",
+    },
+    {
+      name: "SOC Oversight",
+      icon: ShieldAlert,
+      path: "/admin/soc-oversight",
+    },
+    {
+      name: "IT Oversight",
+      icon: Wrench,
+      path: "/admin/it-oversight",
     },
   ]
 
@@ -114,9 +144,11 @@ function Sidebar() {
   const items =
     role === "super_admin"
       ? superAdminItems
-      : role === "soc_analyst"
-        ? socItems
-        : itItems
+      : role === "organization_admin"
+        ? organizationAdminItems
+        : role === "soc_analyst"
+          ? socItems
+          : itItems
 
   return (
     <aside className="flex min-h-screen w-72 flex-col border-r border-white/10 bg-surface-sunken">
