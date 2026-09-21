@@ -419,3 +419,162 @@ export function apiUpdateSocAnalystOrganizations(adminId: string, organizationId
 export function apiGetMyAssignedOrganizations() {
   return request<{ assigned_organizations: SocAnalystAssignedOrg[] }>("/admin/soc-analysts/me")
 }
+
+// ---------------------------------------------------------------------
+// Organization owner (organization_admin-only, own organization only).
+// See docs/API_CONTRACT.md ("Organization owner: /api/v1/organization").
+// Every endpoint below except apiGetOrganizationOverview() 403s with a
+// structured organization_pending/organization_suspended/
+// organization_archived code unless the organization is active.
+// ---------------------------------------------------------------------
+
+export type OrganizationOverview = {
+  id: string
+  name: string
+  status: "pending" | "active" | "suspended" | "archived"
+  soc_mode: "managed" | "in_house"
+  // Only present while pending (see backend get_overview()).
+  message?: string
+  // Only present once active.
+  industry?: string | null
+  max_members?: number | null
+  members?: number
+  pending_invitations?: number
+  assets?: number
+  open_incidents?: number
+  open_tickets?: number
+  last_activity_at?: string | null
+  recent_activity?: { id: string; action: string; created_at: string | null }[]
+}
+
+export function apiGetOrganizationOverview() {
+  return request<OrganizationOverview>("/organization")
+}
+
+export type OwnerMember = {
+  id: string
+  name: string
+  email: string
+  role: string
+  team_id: string | null
+  is_active: boolean
+  last_login_at: string | null
+}
+
+export function apiGetOwnerMembers() {
+  return request<{ members: OwnerMember[] }>("/organization/members")
+}
+
+export function apiPatchOwnerMember(
+  userId: string,
+  payload: { role?: string; is_active?: boolean; team_id?: string },
+) {
+  return request<{ id: string; role: string; is_active: boolean; team_id: string | null }>(
+    `/organization/members/${userId}`,
+    { method: "PATCH", body: JSON.stringify(payload) },
+  )
+}
+
+export function apiRemoveOwnerMember(userId: string) {
+  return request<{ id: string; deleted: boolean; deactivated: boolean }>(`/organization/members/${userId}`, {
+    method: "DELETE",
+  })
+}
+
+export type OwnerInvitation = {
+  id: string
+  email: string
+  kind: string
+  role: string | null
+  status: string
+  created_at: string | null
+  expires_at: string | null
+}
+
+export function apiCreateMemberInvitation(email: string, role: string, teamId?: string) {
+  return request<{ id: string; email: string; role: string; status: string; expires_at: string }>(
+    "/organization/invitations",
+    { method: "POST", body: JSON.stringify({ email, role, team_id: teamId }) },
+  )
+}
+
+export function apiListOwnerInvitations() {
+  return request<{ invitations: OwnerInvitation[] }>("/organization/invitations")
+}
+
+export function apiResendInvitation(invitationId: string) {
+  return request<{ id: string; status: string; expires_at: string }>(
+    `/organization/invitations/${invitationId}/resend`,
+    { method: "POST" },
+  )
+}
+
+export function apiRevokeInvitation(invitationId: string) {
+  return request<{ id: string; status: string }>(`/organization/invitations/${invitationId}`, {
+    method: "DELETE",
+  })
+}
+
+export type Team = {
+  id: string
+  name: string
+  description: string | null
+  member_count: number
+}
+
+export function apiListTeams() {
+  return request<{ teams: Team[] }>("/organization/teams")
+}
+
+export function apiCreateTeam(name: string, description?: string) {
+  return request<Team>("/organization/teams", {
+    method: "POST",
+    body: JSON.stringify({ name, description: description || undefined }),
+  })
+}
+
+export function apiPatchTeam(teamId: string, payload: { name?: string; description?: string }) {
+  return request<Team>(`/organization/teams/${teamId}`, { method: "PATCH", body: JSON.stringify(payload) })
+}
+
+export function apiDeleteTeam(teamId: string) {
+  return request<{ id: string; deleted: boolean }>(`/organization/teams/${teamId}`, { method: "DELETE" })
+}
+
+export function apiSetTeamMembers(teamId: string, userIds: string[]) {
+  return request<{ id: string; member_ids: string[] }>(`/organization/teams/${teamId}/members`, {
+    method: "PUT",
+    body: JSON.stringify({ user_ids: userIds }),
+  })
+}
+
+export type AccessCell = {
+  platform_enabled: boolean
+  role_has_default: boolean
+  owner_enabled: boolean
+  soc_gated: boolean
+  effective: boolean
+}
+
+export type AccessMatrixResponse = {
+  organization: { soc_mode: "managed" | "in_house" }
+  matrix: Record<string, Record<string, AccessCell>>
+}
+
+export function apiGetAccessMatrix() {
+  return request<AccessMatrixResponse>("/organization/access")
+}
+
+export function apiUpdateAccessMatrix(updates: { role: string; module_key: string; enabled: boolean }[]) {
+  return request<{ updates: { role: string; module_key: string; enabled: boolean }[] }>("/organization/access", {
+    method: "PUT",
+    body: JSON.stringify({ updates }),
+  })
+}
+
+export function apiUpdateMemberAccess(userId: string, deniedModules: string[]) {
+  return request<{ id: string; denied_modules: string[] }>(`/organization/members/${userId}/access`, {
+    method: "PUT",
+    body: JSON.stringify({ denied_modules: deniedModules }),
+  })
+}
