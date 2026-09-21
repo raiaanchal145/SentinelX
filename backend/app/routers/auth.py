@@ -1,16 +1,19 @@
 """
-Auth endpoints and the shared auth dependencies (get_current_user,
-get_current_admin, require_roles) other routers depend on.
+Auth endpoints: register/verify-email/resend-verification/login/me/
+forgot-password/reset-password.
 
-Split out of app/main.py -- see that file's history for the original,
-single-file version if you need the pre-split diff.
+The shared get_current_account/org_scope/require_admin/require_roles
+dependencies other routers use now live in app/scope.py, not here --
+see that module. This file only keeps the email-lookup helpers
+(_account_by_email, _role_value) that its own endpoints use for
+password-based login/reset, which is a different lookup path than the
+token-based one in app/scope.py.
 """
 
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Header, HTTPException
-from jose import JWTError
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +25,8 @@ from app.email_utils import (
     send_verification_email,
 )
 from app.models import AccountEmail, Admin, AdminLevel, Organization, PendingRegistration, User, UserRole
-from app.security import create_access_token, decode_access_token, hash_password, verify_password
+from app.scope import Scope, org_scope
+from app.security import create_access_token, hash_password, verify_password
 from app.validators import is_valid_email_format, is_valid_name_format
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -120,71 +124,6 @@ async def _account_by_email(db: AsyncSession, email: str) -> tuple[Admin | User 
 
 def _role_value(account: Admin | User, account_type: str) -> str:
     return account.admin_level.value if account_type == "admin" else account.role.value
-
-
-async def get_current_user(
-    authorization: str | None = Header(default=None),
-    db: AsyncSession = Depends(get_db),
-) -> Admin | User:
-    """
-    Resolves the bearer token to whichever table (admins or users) its
-    account_type claim points into. Despite the name (kept because most
-    existing call sites just want "whoever is logged in"), this can
-    return either an Admin or a User -- use get_current_admin or
-    require_roles below where an endpoint needs to restrict which kind.
-    """
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated.")
-
-    token = authorization.removeprefix("Bearer ").strip()
-
-    try:
-        payload = decode_access_token(token)
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid or expired session. Please log in again.")
-
-    account_id = payload.get("sub")
-    account_type = payload.get("account_type")
-
-    if not account_id or account_type not in ("admin", "user"):
-        raise HTTPException(status_code=401, detail="Invalid or expired session. Please log in again.")
-
-    model = Admin if account_type == "admin" else User
-    result = await db.execute(select(model).where(model.id == account_id))
-    account = result.scalar_one_or_none()
-
-    if not account:
-        raise HTTPException(status_code=401, detail="Invalid or expired session. Please log in again.")
-
-    return account
-
-
-async def get_current_admin(current_account: Admin | User = Depends(get_current_user)) -> Admin:
-    """Like get_current_user, but rejects anything that isn't an admin."""
-    if not isinstance(current_account, Admin):
-        raise HTTPException(status_code=403, detail="This action requires an administrator account.")
-    return current_account
-
-
-def require_roles(*roles: str):
-    """
-    Dependency factory restricting an endpoint to `users` accounts whose
-    role is one of `roles` (UserRole values, e.g. "soc_analyst"). Admin
-    accounts always pass -- they aren't restricted by UserRole.
-
-    Not used by any endpoint yet: this migration doesn't add the
-    ticket/incident/etc. endpoints themselves, only the tables and the
-    auth plumbing they'll need.
-    """
-
-    async def _check(current_account: Admin | User = Depends(get_current_user)) -> Admin | User:
-        if isinstance(current_account, Admin):
-            return current_account
-        if isinstance(current_account, User) and current_account.role.value in roles:
-            return current_account
-        raise HTTPException(status_code=403, detail="You do not have permission to perform this action.")
-
-    return _check
 
 
 
@@ -547,14 +486,13 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/me", response_model=UserOut)
-async def me(current_account: Admin | User = Depends(get_current_user)):
-    account_type = "admin" if isinstance(current_account, Admin) else "user"
+async def me(scope: Scope = Depends(org_scope)):
     return UserOut(
-        id=str(current_account.id),
-        name=current_account.name,
-        email=current_account.email,
-        role=_role_value(current_account, account_type),
-        account_type=account_type,
+        id=str(scope.account.id),
+        name=scope.account.name,
+        email=scope.account.email,
+        role=scope.role,
+        account_type=scope.account_type,
     )
 
 

@@ -1,20 +1,26 @@
 """
 Organization endpoints.
 
-Split out of app/main.py. GET /organizations now requires an
-authenticated account (any admin or user) -- it used to be open to
-anyone, which leaked every organization's name/industry/environment to
-unauthenticated callers. POST already required an admin.
+Split out of app/main.py. Both endpoints now go through app/scope.py:
+
+- POST requires an admin (require_admin) and records the creator, same
+  as before.
+- GET used to return every organization in the platform to anyone
+  merely authenticated -- a real tenant-isolation gap, since an
+  organization_admin (or any `users` account) could see every other
+  organization's name/industry/environment. It's now filtered by the
+  caller's own organization_id: a super_admin still sees all of them,
+  everyone else sees only their own.
 """
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Admin, Organization, User
-from app.routers.auth import get_current_admin, get_current_user
+from app.models import Organization
+from app.scope import Scope, org_scope, require_admin
 
 router = APIRouter(prefix="/api/v1/organizations", tags=["organizations"])
 
@@ -38,12 +44,11 @@ class OrganizationOut(BaseModel):
         from_attributes = True
 
 
-
 @router.post("", response_model=OrganizationOut)
 async def create_organization(
     payload: OrganizationCreate,
     db: AsyncSession = Depends(get_db),
-    current_admin: Admin = Depends(get_current_admin),
+    scope: Scope = Depends(require_admin),
 ):
     """
     Admin-only. Per the schema split, every organization should know
@@ -56,7 +61,7 @@ async def create_organization(
         industry=payload.industry,
         environment=payload.environment,
         timezone=payload.timezone,
-        created_by_admin_id=current_admin.id,
+        created_by_admin_id=scope.account.id,
     )
     db.add(org)
     await db.commit()
@@ -74,25 +79,25 @@ async def create_organization(
 @router.get("")
 async def list_organizations(
     db: AsyncSession = Depends(get_db),
-    current_account: Admin | User = Depends(get_current_user),
+    scope: Scope = Depends(org_scope),
 ):
-    result = await db.execute(
-        text(
-            "SELECT id, name, industry, environment, timezone, status, created_at "
-            "FROM organizations ORDER BY created_at DESC"
-        )
-    )
-    rows = result.mappings().all()
+    # scoped_to_org() doesn't apply here: it filters child tables by their
+    # organization_id foreign key, but Organization's own primary key IS
+    # the organization id -- so the equivalent filter is `Organization.id
+    # == scope.organization_id` directly, not scoped_to_org().
+    stmt = select(Organization).order_by(Organization.created_at.desc())
+    if scope.organization_id is not None:
+        stmt = stmt.where(Organization.id == scope.organization_id)
+    rows = (await db.execute(stmt)).scalars().all()
     return [
         {
-            "id": str(r["id"]),
-            "name": r["name"],
-            "industry": r["industry"],
-            "environment": r["environment"],
-            "timezone": r["timezone"],
-            "status": r["status"],
-            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            "id": str(org.id),
+            "name": org.name,
+            "industry": org.industry,
+            "environment": org.environment,
+            "timezone": org.timezone,
+            "status": org.status,
+            "created_at": org.created_at.isoformat() if org.created_at else None,
         }
-        for r in rows
+        for org in rows
     ]
-

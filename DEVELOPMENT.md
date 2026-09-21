@@ -35,6 +35,9 @@ src/
 
 backend/
   app/main.py           FastAPI app setup, CORS, security headers, /health, router mounting
+  app/scope.py           THE ONE PLACE current account/role/organization is resolved and
+                         enforced -- Scope, org_scope, require_admin, require_roles,
+                         scoped_to_org(). Every organization-scoped endpoint depends on this.
   app/routers/          auth.py, organizations.py, stats.py -- one file per resource
   app/models.py         every SQLAlchemy model + enum (single source of truth for the schema)
   app/config.py         Settings (env vars), SECRET_KEY enforcement outside ENV=dev
@@ -109,23 +112,44 @@ When wiring a new page, check `lib/data.ts` first — if the function you
 need already exists, use it; don't reach into `mocks/store.tsx` state
 directly from a page component.
 
-## Backend: routers and auth
+## Backend: routers, scope, and tenant isolation
 
 `app/main.py` only does app setup (CORS, security headers, `/health`)
 and mounts three routers:
 
 - `app/routers/auth.py` — register/verify-email/resend-verification/
-  login/me/forgot-password/reset-password, plus the shared
-  `get_current_user` / `get_current_admin` / `require_roles` dependencies
-  that other routers import from here.
+  login/me/forgot-password/reset-password. Its own `_account_by_email` /
+  `_role_value` helpers are for the email+password login path only.
 - `app/routers/organizations.py` — create (admin-only) and list
-  (any authenticated account) organizations.
-- `app/routers/stats.py` — `/stats/overview` (any authenticated
-  account).
+  organizations, both tenant-scoped (see below).
+- `app/routers/stats.py` — `/stats/overview`, tenant-scoped.
+
+**`app/scope.py` is the one place "who is calling, what role, which
+organization" is resolved and enforced.** Any endpoint that reads or
+writes organization-scoped data must depend on one of:
+
+- `org_scope` — resolves the bearer token into a `Scope` (account, role,
+  `organization_id`, where `None` means "all organizations" and only
+  ever applies to a `super_admin`).
+- `require_admin` — like `org_scope`, but 403s anything that isn't an
+  admin account.
+- `require_roles(*roles)` — like `org_scope`, but 403s a `users` account
+  whose role isn't one of `roles` (admins always pass).
+
+...and filter its queries with `scoped_to_org(stmt, model, scope)`
+rather than trusting a client-supplied organization id. The frontend has
+a same-shaped `src/lib/scope.ts`, but that one is UI-only and explicitly
+says so in its own comments -- `app/scope.py` is what actually enforces
+the tenant boundary. See `backend/tests/test_scope.py` for the
+tenant-isolation matrix (org A can never read org B's organizations/
+stats) and role-guard tests -- extend that file with a case for every
+new organization-scoped endpoint.
 
 If you add a new resource (e.g. alerts, tickets), give it its own
-`app/routers/<name>.py` following this pattern rather than growing
-`main.py` again.
+`app/routers/<name>.py`, depend on `org_scope`/`require_admin`/
+`require_roles` from `app/scope.py`, and add its isolation cases to
+`test_scope.py` -- rather than growing `main.py` or inventing a new
+auth pattern.
 
 `SECRET_KEY` has a safe hardcoded default, but only while `ENV=dev`
 (the default). Setting `ENV` to anything else and leaving `SECRET_KEY`

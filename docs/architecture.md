@@ -61,16 +61,26 @@ Postgres can't put a single UNIQUE constraint across two tables.
 `/health`) and mounts routers from `backend/app/routers/`:
 
 - `auth.py` — registration (OTP-verified), login (JWT), forgot/reset
-  password, `/me`; also exports the `get_current_user` /
-  `get_current_admin` / `require_roles` dependencies every other router
-  uses.
-- `organizations.py` — create (admin-only) / list (any authenticated
-  account).
-- `stats.py` — `/stats/overview` (any authenticated account).
+  password, `/me`.
+- `organizations.py` — create (admin-only) / list, both tenant-scoped.
+- `stats.py` — `/stats/overview`, tenant-scoped.
 
-Both `organizations` list and `stats/overview` require authentication;
-they did not originally, which was an information-leak (org names,
-user/asset counts) to anyone who could reach the API unauthenticated.
+`backend/app/scope.py` is the one place "who is calling, what role,
+which organization" is resolved and enforced: `Scope` (account, role,
+`organization_id` -- `None` means "all organizations", only for
+`super_admin`), and the dependencies `org_scope` / `require_admin` /
+`require_roles(*roles)` that every organization-scoped endpoint depends
+on, plus `scoped_to_org(stmt, model, scope)` to filter a query by the
+caller's own organization.
+
+Both `organizations` list and `stats/overview` require authentication
+and are tenant-scoped; originally neither check existed, which was both
+an information-leak (readable with no token at all) and a
+tenant-isolation gap (any authenticated account, in any organization,
+saw every organization's data). `backend/tests/test_scope.py` is the
+regression suite for both: a tenant-isolation matrix (org A can never
+read org B's organizations or stats, a super_admin sees everything) and
+role-guard unit tests for `require_admin`/`require_roles`.
 
 ## The mock data layer (frontend)
 

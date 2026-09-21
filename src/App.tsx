@@ -9,6 +9,9 @@ import ResetPassword from "./pages/ResetPassword"
 import AdminDashboard from "./pages/AdminDashboard"
 import OrganizationDashboard from "./pages/OrganizationDashboard"
 
+import SocOversightAdmin from "./features/admin/pages/SocOversight"
+import ItOversightAdmin from "./features/admin/pages/ItOversight"
+
 import UserLayout from "./layouts/UserLayout"
 
 import SocOverview from "./features/soc/pages/SocOverview"
@@ -171,6 +174,28 @@ function App() {
             ]}
           >
             <OrganizationDashboard />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* SOC / IT OVERSIGHT (admin side, P22 -- aggregates/workload/coverage/SLA
+          rollups for super_admin and organization_admin; distinct from the
+          analyst/IT-developer dashboards at /soc and /it) */}
+
+      <Route
+        path="/admin/soc-oversight"
+        element={
+          <ProtectedRoute allowedRoles={["super_admin", "organization_admin"]}>
+            <SocOversightAdmin />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/admin/it-oversight"
+        element={
+          <ProtectedRoute allowedRoles={["super_admin", "organization_admin"]}>
+            <ItOversightAdmin />
           </ProtectedRoute>
         }
       />

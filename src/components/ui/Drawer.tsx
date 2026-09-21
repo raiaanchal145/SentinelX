@@ -7,9 +7,20 @@ type DrawerProps = {
   onClose: () => void
   title: string
   children: ReactNode
+  /** Which edge it slides from. Defaults to "left" (the mobile nav usage). */
+  side?: "left" | "right"
+  /** Panel width classes. Defaults to the narrow nav-menu size. */
+  widthClassName?: string
 }
 
-function Drawer({ open, onClose, title, children }: DrawerProps) {
+function Drawer({
+  open,
+  onClose,
+  title,
+  children,
+  side = "left",
+  widthClassName = "w-72 max-w-[85vw]",
+}: DrawerProps) {
   useEffect(() => {
     if (!open) return
 
@@ -30,7 +41,7 @@ function Drawer({ open, onClose, title, children }: DrawerProps) {
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex">
+    <div className={`fixed inset-0 z-50 flex ${side === "right" ? "justify-end" : ""}`}>
       <div
         className="absolute inset-0 bg-canvas/70"
         onClick={onClose}
@@ -41,14 +52,16 @@ function Drawer({ open, onClose, title, children }: DrawerProps) {
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="relative flex h-full w-72 max-w-[85vw] flex-col border-r border-line bg-sidebar p-4 shadow-2xl"
+        className={`relative flex h-full ${widthClassName} flex-col ${
+          side === "right" ? "border-l" : "border-r"
+        } border-line bg-sidebar p-4 shadow-2xl`}
       >
         <div className="mb-4 flex items-center justify-between">
           <span className="text-sm font-semibold text-fg-primary">{title}</span>
-          <IconButton icon={X} label="Close menu" onClick={onClose} />
+          <IconButton icon={X} label={`Close ${title}`} onClick={onClose} />
         </div>
 
-        {children}
+        <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
       </div>
     </div>
   )
