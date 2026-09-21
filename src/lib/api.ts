@@ -85,8 +85,19 @@ async function request<T>(
       },
     })
   } catch {
-    throw new Error(
+    // fetch() itself failed (backend down, wrong port, CORS, offline --
+    // there was no HTTP response at all). This has to be an ApiError,
+    // not a plain Error: every call site across the app does
+    // `err instanceof ApiError ? err.message : "<generic fallback>"`,
+    // so a plain Error here used to get silently replaced by whatever
+    // generic string that call site had, hiding the one message that
+    // actually explains what's wrong. Status 0 is a safe sentinel --
+    // real HTTP responses are always 200-599, and nothing in the app
+    // branches on ApiError.status or .code === "network_error".
+    throw new ApiError(
       "Could not reach the SentinelX server. Make sure the backend is running (uvicorn) on port 8000.",
+      0,
+      "network_error",
     )
   }
 
