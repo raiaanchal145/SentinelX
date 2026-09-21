@@ -526,31 +526,38 @@ async def patch_asset(
 
     status_changed = False
 
-    if payload.name is not None:
-        if not payload.name.strip():
+    # An explicitly-provided null clears the field (the UI's edit dialog
+    # needs that to unassign an owner/team or blank a hostname); a field
+    # simply absent from the payload is left untouched.
+    # model_fields_set is Pydantic v2's "which keys did the client actually
+    # send" -- plain `is not None` checks can't tell the two apart.
+    provided = payload.model_fields_set
+
+    if "name" in provided:
+        if not payload.name or not payload.name.strip():
             raise _err("name_required", "Asset name is required.")
         asset.name = payload.name.strip()
-    if payload.asset_type is not None:
+    if "asset_type" in provided and payload.asset_type is not None:
         asset.asset_type = _validate_asset_type(payload.asset_type)
-    if payload.hostname is not None:
-        hostname = payload.hostname.strip() or None
+    if "hostname" in provided:
+        hostname = (payload.hostname or "").strip() or None
         await _assert_hostname_available(db, scope.organization_id, hostname, exclude_asset_id=asset.id)
         asset.hostname = hostname
-    if payload.ip_address is not None:
+    if "ip_address" in provided:
         asset.ip_address = _validate_ip_address(payload.ip_address)
-    if payload.operating_system is not None:
+    if "operating_system" in provided:
         asset.operating_system = payload.operating_system
-    if payload.environment is not None:
+    if "environment" in provided:
         asset.environment = _validate_environment(payload.environment)
-    if payload.criticality is not None:
+    if "criticality" in provided and payload.criticality is not None:
         asset.criticality = _validate_criticality(payload.criticality)
-    if payload.owner_user_id is not None:
+    if "owner_user_id" in provided:
         await _assert_owner_in_org(db, scope.organization_id, payload.owner_user_id)
         asset.owner_user_id = payload.owner_user_id
-    if payload.team_id is not None:
+    if "team_id" in provided:
         await _assert_team_in_org(db, scope.organization_id, payload.team_id)
         asset.team_id = payload.team_id
-    if payload.description is not None:
+    if "description" in provided:
         asset.description = payload.description
     if payload.status is not None and payload.status != asset.status:
         asset.status = _validate_status(payload.status)
@@ -561,11 +568,15 @@ async def patch_asset(
         "owner_user_id": str(asset.owner_user_id) if asset.owner_user_id else None,
         "team_id": str(asset.team_id) if asset.team_id else None,
     }
+    # Only write the audit entry when something actually changed -- a
+    # no-op PATCH (or one that just re-sent current values) isn't a
+    # state change worth an append-only row.
 
-    await audit_from_scope(
-        db, scope, "asset.update", target_type="asset", target_id=asset.id, request=request,
-        before=before, after=after,
-    )
+    if before != after:
+        await audit_from_scope(
+            db, scope, "asset.update", target_type="asset", target_id=asset.id, request=request,
+            before=before, after=after,
+        )
     if status_changed:
         await audit_from_scope(
             db, scope, "asset.status_change", target_type="asset", target_id=asset.id, request=request,
