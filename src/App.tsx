@@ -15,6 +15,7 @@ import OrganizationDashboard from "./pages/OrganizationDashboard"
 
 import SocOversightAdmin from "./features/admin/pages/SocOversight"
 import ItOversightAdmin from "./features/admin/pages/ItOversight"
+import Organizations from "./features/admin/pages/Organizations"
 
 import UserLayout from "./layouts/UserLayout"
 
@@ -172,6 +173,18 @@ function App() {
       <Route
         path="/no-access"
         element={<NoAccess />}
+      />
+
+      {/* PLATFORM ADMIN: ORGANIZATIONS (Prompt B section A -- super_admin's
+          new home; see homePathFor() in lib/auth.ts) */}
+
+      <Route
+        path="/admin/organizations"
+        element={
+          <ProtectedRoute allowedRoles={["super_admin"]}>
+            <Organizations />
+          </ProtectedRoute>
+        }
       />
 
       {/* SUPER ADMIN DASHBOARD (admin side -- unchanged) */}

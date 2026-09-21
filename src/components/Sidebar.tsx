@@ -10,28 +10,66 @@ import {
   Wrench,
 } from "lucide-react"
 
+import type { LucideIcon } from "lucide-react"
+import { useEffect, useState } from "react"
 import { NavLink } from "react-router-dom"
+
+import { apiListOrganizations } from "../lib/api"
+import Badge from "./ui/Badge"
+
+type NavItem = {
+  name: string
+  icon: LucideIcon
+  path: string
+  /** Rendered as a Badge next to the label -- omit for no badge. */
+  badgeCount?: number | null
+}
 
 function Sidebar() {
   const role = localStorage.getItem(
     "sentinelx_role",
   )
 
+  // Cheap "how many organizations need my attention" count for the nav
+  // badge -- fetched once per Sidebar mount (every admin page renders
+  // its own Sidebar, so this refreshes on every admin-side navigation,
+  // including right after approving/rejecting one). super_admin-only:
+  // the endpoint is 403 for anyone else.
+  const [pendingOrgCount, setPendingOrgCount] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (role !== "super_admin") return
+    let cancelled = false
+    apiListOrganizations({ status: "pending", page_size: 1 })
+      .then((res) => {
+        if (!cancelled) setPendingOrgCount(res.total)
+      })
+      .catch(() => {
+        if (!cancelled) setPendingOrgCount(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [role])
+
   /*
     SUPER ADMIN
     Can see everything
   */
 
-  const superAdminItems = [
+  const superAdminItems: NavItem[] = [
+    {
+      name: "Organizations",
+      icon: Building2,
+      path: "/admin/organizations",
+      // Rendered as a Badge next to the label below -- how many
+      // organizations are waiting on platform approval right now.
+      badgeCount: pendingOrgCount,
+    },
     {
       name: "Admin Dashboard",
       icon: LayoutDashboard,
       path: "/admin",
-    },
-    {
-      name: "Organization Dashboard",
-      icon: Building2,
-      path: "/organization-dashboard",
     },
     {
       // Was "/soc-dashboard", which only ever redirected into the
@@ -72,7 +110,7 @@ function Sidebar() {
     to their one organization by scopeFor() rather than "all".
   */
 
-  const organizationAdminItems = [
+  const organizationAdminItems: NavItem[] = [
     {
       name: "Organization Dashboard",
       icon: Building2,
@@ -95,7 +133,7 @@ function Sidebar() {
     Only SOC-related information
   */
 
-  const socItems = [
+  const socItems: NavItem[] = [
     {
       name: "SOC Dashboard",
       icon: LayoutDashboard,
@@ -123,7 +161,7 @@ function Sidebar() {
     Only IT-related information
   */
 
-  const itItems = [
+  const itItems: NavItem[] = [
     {
       name: "IT Dashboard",
       icon: LayoutDashboard,
@@ -195,6 +233,7 @@ function Sidebar() {
 
         {items.map((item) => {
           const Icon = item.icon
+          const badgeCount = item.badgeCount
 
           return (
             <NavLink
@@ -211,7 +250,9 @@ function Sidebar() {
 
               <Icon size={19} />
 
-              {item.name}
+              <span className="flex-1">{item.name}</span>
+
+              {!!badgeCount && <Badge tone="brand">{badgeCount}</Badge>}
 
             </NavLink>
           )

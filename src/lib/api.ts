@@ -199,3 +199,88 @@ export function apiAcceptInvitation(token: string, fullName: string, password: s
     body: JSON.stringify({ token, full_name: fullName, password }),
   })
 }
+
+// ---------------------------------------------------------------------
+// Platform admin: organizations (super_admin-only). See
+// docs/API_CONTRACT.md ("Platform admin: /api/v1/admin/organizations").
+// ---------------------------------------------------------------------
+
+export type OrganizationRow = {
+  id: string
+  name: string
+  industry: string | null
+  status: "pending" | "active" | "suspended" | "archived"
+  soc_mode: "managed" | "in_house"
+  max_members: number | null
+  created_via: string | null
+  created_at: string | null
+  owner: { name: string; email: string } | null
+  members: number
+  pending_invitations: number
+  assets: number
+  open_incidents: number
+  open_tickets: number
+  last_activity_at: string | null
+}
+
+export type OrganizationListResponse = {
+  total: number
+  page: number
+  page_size: number
+  organizations: OrganizationRow[]
+}
+
+export type OrganizationListParams = {
+  q?: string
+  status?: string
+  soc_mode?: string
+  sort?: string
+  page?: number
+  page_size?: number
+}
+
+export function apiListOrganizations(params: OrganizationListParams = {}) {
+  const query = new URLSearchParams()
+  if (params.q) query.set("q", params.q)
+  if (params.status) query.set("status", params.status)
+  if (params.soc_mode) query.set("soc_mode", params.soc_mode)
+  if (params.sort) query.set("sort", params.sort)
+  if (params.page) query.set("page", String(params.page))
+  if (params.page_size) query.set("page_size", String(params.page_size))
+  const qs = query.toString()
+  return request<OrganizationListResponse>(`/admin/organizations${qs ? `?${qs}` : ""}`)
+}
+
+export type OrganizationCreatePayload = {
+  name: string
+  owner_email: string
+  soc_mode: "managed" | "in_house"
+  industry?: string
+  max_members?: number
+}
+
+export function apiCreateOrganization(payload: OrganizationCreatePayload) {
+  return request<OrganizationRow>("/admin/organizations", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function apiApproveOrganization(organizationId: string) {
+  return request<OrganizationRow>(`/admin/organizations/${organizationId}/approve`, { method: "POST" })
+}
+
+export function apiSuspendOrganization(organizationId: string, reason: string) {
+  return request<OrganizationRow>(`/admin/organizations/${organizationId}/suspend`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  })
+}
+
+export function apiReactivateOrganization(organizationId: string) {
+  return request<OrganizationRow>(`/admin/organizations/${organizationId}/reactivate`, { method: "POST" })
+}
+
+export function apiArchiveOrganization(organizationId: string) {
+  return request<OrganizationRow>(`/admin/organizations/${organizationId}/archive`, { method: "POST" })
+}
