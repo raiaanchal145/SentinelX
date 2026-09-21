@@ -7,15 +7,20 @@ import Badge from "../../../components/ui/Badge"
 import EmptyState from "../../../components/EmptyState"
 import Skeleton from "../../../components/ui/Skeleton"
 import { apiGetMyAssignedOrganizations, ApiError, type SocAnalystAssignedOrg } from "../../../lib/api"
+import AssetsPage from "../../assets/AssetsPage"
 
-/** platform_soc_analyst's home page (Prompt B section A5) -- a
- * placeholder for now (the real triage queue arrives with the alerts
- * work), plus the analyst's own assigned organizations, read from the
- * self-service GET /admin/soc-analysts/me endpoint. */
+/** platform_soc_analyst's home page (Prompt B section A5). The real
+ * triage queue arrives with the alerts work; for now this lists the
+ * analyst's assigned organizations (self-service
+ * GET /admin/soc-analysts/me) and gives a read-only assets view of
+ * whichever one is selected -- the same /assets endpoints an
+ * organization-side reader uses, with organization_id picking the org
+ * and the backend checking it against the analyst's assignments. */
 function SocQueue() {
   const [orgs, setOrgs] = useState<SocAnalystAssignedOrg[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState("")
+  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null)
 
   function load() {
     setLoading(true)
@@ -27,6 +32,8 @@ function SocQueue() {
   }
 
   useEffect(load, [])
+
+  const selectedOrg = orgs?.find((org) => org.id === selectedOrgId) ?? null
 
   return (
     <div className="flex min-h-screen bg-canvas text-white">
@@ -59,20 +66,42 @@ function SocQueue() {
             ) : (
               <ul className="mt-3 space-y-2">
                 {orgs.map((org) => (
-                  <li
-                    key={org.id}
-                    className="flex items-center justify-between rounded-control border border-line bg-surface-sunken p-2.5 text-sm"
-                  >
-                    <span className="flex items-center gap-2 font-medium text-fg-primary">
-                      <Radar size={14} className="text-brand-400" aria-hidden="true" />
-                      {org.name}
-                    </span>
-                    <Badge tone={org.status === "active" ? "success" : "brand"}>{org.status}</Badge>
+                  <li key={org.id}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedOrgId(org.id === selectedOrgId ? null : org.id)}
+                      aria-pressed={org.id === selectedOrgId}
+                      className={`flex w-full items-center justify-between rounded-control border p-2.5 text-sm transition ${
+                        org.id === selectedOrgId
+                          ? "border-brand-500/40 bg-brand-500/10"
+                          : "border-line bg-surface-sunken hover:border-line-strong"
+                      }`}
+                    >
+                      <span className="flex items-center gap-2 font-medium text-fg-primary">
+                        <Radar size={14} className="text-brand-400" aria-hidden="true" />
+                        {org.name}
+                      </span>
+                      <span className="flex items-center gap-2">
+                        <Badge tone={org.status === "active" ? "success" : "brand"}>{org.status}</Badge>
+                        <Badge tone="neutral">Managed SOC</Badge>
+                      </span>
+                    </button>
                   </li>
                 ))}
               </ul>
             )}
           </section>
+
+          {!loading && !loadError && selectedOrg && (
+            <section aria-label={`Assets of ${selectedOrg.name}`}>
+              <AssetsPage
+                access="read"
+                organizationId={selectedOrg.id}
+                title={`Assets — ${selectedOrg.name}`}
+                description="Read-only view of this assigned organization's assets."
+              />
+            </section>
+          )}
         </div>
       </main>
     </div>

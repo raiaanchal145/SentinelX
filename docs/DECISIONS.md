@@ -1,9 +1,9 @@
-# Decisions: Organizations, Access Control, Invitations
+# Decisions: Organizations, Access Control, Invitations, Assets
 
 Ambiguities and non-obvious choices made while implementing the
-organization-management/SOC-mode/invitations/layered-access-control
-feature, recorded here so they're auditable and easy to revisit rather
-than only living in code comments.
+organization-management/SOC-mode/invitations/layered-access-control and
+asset-inventory features, recorded here so they're auditable and easy
+to revisit rather than only living in code comments.
 
 ## Role default module read/write split
 
@@ -128,6 +128,89 @@ structurally cannot be, covered by the pytest suite as it exists today.
 It needs a manual `alembic upgrade head` / `alembic downgrade -1`
 run against a real Postgres database -- see the final manual checklist
 for the exact commands.
+
+## Assets: DELETE is soft-only; there is no hard-delete path at all
+
+The brief said "DELETE: soft (status=retired); block hard delete when
+events/incidents/tickets reference it." Rather than build a hard-delete
+path guarded by three reference checks, `DELETE /assets/{id}` only ever
+sets `status=retired` -- there is no code path in the assets router that
+issues a SQL DELETE on an `assets` row, so there is nothing that could
+orphan an event's, alert's, incident's or ticket's `asset_id`, now or
+after those routers exist. Same observable behavior for the caller, one
+less way to lose referenced history. Revisit only if a real "purge"
+requirement shows up.
+
+## Assets: it_developer's write is row-scoped, not module-scoped
+
+The role map gives it_developer module-level `assets: write`, but the
+spec's intent ("IT: own/team assets") is narrower than the module flag:
+`_can_write_asset()` in `app/routers/assets.py` additionally requires
+the caller to own the asset or sit on its team (organization_admin and
+security_manager are unrestricted). The list endpoint stamps each row
+with the caller's per-row `can_edit` so the UI can mirror the rule
+without a second round-trip; the backend, not the flag, is the
+authority on every write. As a corollary, an it_developer creating an
+asset with no owner and no team gets themselves as the owner, so a
+create never produces a row its own creator immediately can't edit.
+
+## Assets: hostname is optional but unique per organization when set
+
+An `application` or `cloud_resource` asset may have no hostname, so the
+column is nullable; but when it IS set it's unique per organization,
+case-insensitively -- enforced twice: an API check (`409
+duplicate_hostname`) and a partial unique index
+`(organization_id, lower(hostname)) WHERE hostname IS NOT NULL`
+(migration `b8c9d0e1f2a3`) so a race can't sneak a duplicate past the
+API check. Two assets with no hostname never collide.
+
+## Assets: platform SOC reads via an explicit organization_id, 404 on what it can't see
+
+A platform_soc_analyst has no organization of their own, so every
+assets GET takes `?organization_id=` and checks it against
+`soc_visible_organization_ids()`. An assigned-but-not-managed,
+unassigned, or unknown id is a **404** `organization_not_found`, not a
+403 -- a guessed id reveals nothing (same convention as the rest of the
+org-scoped endpoints). super_admin is deliberately barred from this
+router entirely and reads through
+`GET /admin/organizations/{id}/assets` instead, matching every other
+admin-side view of one organization's data.
+
+## Assets: PATCH distinguishes "omitted" from "explicitly null"
+
+`PATCH /assets/{id}` uses Pydantic's `model_fields_set`: a field the
+client omitted is untouched, a field the client sent as `null` clears
+the value (unassign an owner/team, blank a hostname). A plain
+`is not None` chain can't tell those apart, and the edit dialog needs
+both. `name` can never be cleared. Relatedly, a PATCH that results in
+no actual change writes no `asset.update` audit row -- the audit log is
+for state, not keystrokes.
+
+## Assets: one shared frontend page, write controls from effective access
+
+Every organization-side role renders the same
+`src/features/assets/AssetsPage.tsx`; the role differences live in two
+props/facts: module-level access (`read`/`write` from
+`effective_modules`) deciding whether write controls render at all, and
+the backend's per-row `can_edit` deciding whether a row shows edit/
+retire. The UI only mirrors what the server already decided -- no
+frontend role list to drift out of sync with `access.py`.
+
+## The pytest fixture needed models.py changes the migrations didn't
+
+The test schema is built with `Base.metadata.create_all` (never alembic,
+see the earlier note on migration testing), and the
+`organizations.approved_by_admin_id`/`created_by_admin_id` FKs back to
+`admins` created a dependency cycle `create_all`/`drop_all` cannot sort
+(`CircularDependencyError` on every fixture setup). The hand-written
+migrations create these via ALTER TABLE with named constraints; the
+models now name them identically and mark them `use_alter=True` so
+metadata can order the DDL. No migration file was added or changed by
+this -- it only makes the test schema match the real one. Separately,
+the test engine now uses `NullPool`: pytest-asyncio runs each test on a
+fresh event loop, and a pooled asyncpg connection created on one test's
+loop is unusable on the next test's (failures that only appeared after
+the first test in a session).
 
 ## Login's "Invalid email or password." stays deliberately generic
 

@@ -53,7 +53,11 @@ async def compute_org_counts(db: AsyncSession, organization_id: uuid.UUID) -> di
         )
     ).scalar() or 0
     assets = (
-        await db.execute(select(func.count(Asset.id)).where(Asset.organization_id == organization_id))
+        await db.execute(
+            select(func.count(Asset.id)).where(
+                Asset.organization_id == organization_id, Asset.status != "retired"
+            )
+        )
     ).scalar() or 0
     open_incidents = (
         await db.execute(

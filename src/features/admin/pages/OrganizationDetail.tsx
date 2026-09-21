@@ -14,6 +14,7 @@ import OverviewTab from "../components/org-detail/OverviewTab"
 import MembersTab from "../components/org-detail/MembersTab"
 import AccessModulesTab from "../components/org-detail/AccessModulesTab"
 import SocTab from "../components/org-detail/SocTab"
+import AssetsTab from "../components/org-detail/AssetsTab"
 import ActivityTab from "../components/org-detail/ActivityTab"
 import SettingsTab from "../components/org-detail/SettingsTab"
 
@@ -86,6 +87,7 @@ function OrganizationDetail() {
                     content: <AccessModulesTab detail={detail} onSaved={reload} />,
                   },
                   { id: "soc", label: "SOC", content: <SocTab detail={detail} onSaved={reload} /> },
+                  { id: "assets", label: "Assets", content: <AssetsTab organizationId={detail.id} /> },
                   { id: "activity", label: "Activity", content: <ActivityTab organizationId={detail.id} /> },
                   { id: "settings", label: "Settings", content: <SettingsTab detail={detail} onSaved={reload} /> },
                 ]}

@@ -1,9 +1,8 @@
 import AssetsPage from "../../assets/AssetsPage"
 import { useMe } from "../../../lib/me"
 
-/** IT developer's assets: module-level write, row-scoped by the backend
- * to assets they own or that sit on their team (per-row can_edit). */
-function ItAssets() {
+/** Auditor's assets: read-only (backend role default). */
+function AuditorAssets() {
   const { me } = useMe()
   const access = me?.effective_modules?.assets === "write" ? "write" : "read"
 
@@ -12,10 +11,10 @@ function ItAssets() {
       <AssetsPage
         access={access}
         title="Assets"
-        description="Assets you own or that belong to your team are editable; everything else is read-only."
+        description="A read-only view of the organization's asset inventory."
       />
     </div>
   )
 }
 
-export default ItAssets
+export default AuditorAssets

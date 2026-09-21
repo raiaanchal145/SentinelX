@@ -84,15 +84,23 @@ ROLE_DEFAULT_MODULES: dict[UserRole, dict[str, str]] = {
         ModuleKey.approvals.value: ACCESS_WRITE,
         ModuleKey.reports.value: ACCESS_WRITE,
     },
+    # assets: read, not write -- the Assets feature (app/routers/
+    # assets.py) reserves module-level write on assets for
+    # organization_admin/security_manager/it_developer only;
+    # soc_analyst investigates assets but doesn't manage the inventory.
     UserRole.soc_analyst: {
-        ModuleKey.assets.value: ACCESS_WRITE,
+        ModuleKey.assets.value: ACCESS_READ,
         ModuleKey.soc.value: ACCESS_WRITE,
         ModuleKey.incidents.value: ACCESS_WRITE,
         ModuleKey.ai_agents.value: ACCESS_WRITE,
         ModuleKey.reports.value: ACCESS_WRITE,
     },
+    # assets: write, not read -- scoped further at the row level in
+    # app/routers/assets.py to only the assets it_developer owns or
+    # that belong to their team; the module-level flag here is just the
+    # floor that get_effective_access()/require_module() can check.
     UserRole.it_developer: {
-        ModuleKey.assets.value: ACCESS_READ,
+        ModuleKey.assets.value: ACCESS_WRITE,
         ModuleKey.it_tickets.value: ACCESS_WRITE,
     },
     UserRole.auditor: {

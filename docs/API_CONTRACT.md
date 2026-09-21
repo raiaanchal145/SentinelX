@@ -1,7 +1,8 @@
-# API Contract: Organizations, Access Control, Invitations
+# API Contract: Organizations, Access Control, Invitations, Assets
 
 This documents the endpoints added/changed for the organization
-management, SOC-mode, invitations and layered access-control feature.
+management, SOC-mode, invitations, layered access-control and asset
+inventory features.
 It does not re-document the pre-existing auth endpoints
 (`/auth/register`, `/verify-email`, `/login`, `/forgot-password`,
 `/reset-password`) beyond what changed on them below -- see
@@ -143,6 +144,78 @@ The 9 keys used throughout `organization_modules` /
 ```
 assets, soc, incidents, it_tickets, approvals, ai_agents, device_agents, reports, audit_logs
 ```
+
+## Assets: `/api/v1/assets`
+
+The first real (non-mock) pipeline data: events, alerts, incidents and
+tickets all point at an asset, so the inventory exists first. Router:
+`app/routers/assets.py`.
+
+| Method & path | Who | Notes |
+|---|---|---|
+| `GET /` | module `assets` read+ | `organization_id` (platform SOC only), `q` (name/hostname/IP), `asset_type`, `criticality`, `status` (`active\|retired`), `tag`, `owner_user_id`, `team_id`, `sort` (`created_at_desc\|created_at_asc\|name_asc\|name_desc`), `page`, `page_size` (max 100). Returns `{total, page, page_size, assets: [...]}`. Each row carries `can_edit` -- the caller's per-row write permission (it_developer: own or team's assets only; owner/manager: always; read roles: never). |
+| `POST /` | module `assets` write | See create payload below. Returns 201 with the row. |
+| `GET /{asset_id}` | module `assets` read+ | 404 `asset_not_found` for another organization's id (existence is never leaked). |
+| `PATCH /{asset_id}` | module `assets` write + row | Omitted fields stay untouched; an explicitly-sent `null` **clears** the field (unassign owner/team, blank a hostname). `name` can't be blanked. |
+| `DELETE /{asset_id}` | module `assets` write + row | **Soft delete only**: sets `status=retired`. There is no hard-delete path at all -- nothing later can orphan an `asset_id` (see docs/DECISIONS.md). 409 `asset_already_retired` on a second retire. |
+| `PUT /{asset_id}/tags` | module `assets` write + row | Replaces the full tag set. Deduped, trimmed, empty strings dropped. |
+| `GET /summary` | module `assets` read+ | `{by_type, by_criticality, by_status}` counts. |
+| `GET /lookup` | module `assets` read+ | `{users, teams}` for the create/edit form's pickers (GET /organization/members and /teams are owner-only, so a manager/developer filling in this form needs this). Active users and all teams of the target organization. |
+
+A platform_soc_analyst reaches all `GET`s read-only by passing
+`?organization_id=` -- checked against `soc_visible_organization_ids()`
+(assigned + `managed` + `active`); an unassigned or unknown id is 404
+`organization_not_found`, and a missing id is 400
+`organization_id_required`. super_admin does not use this router at all
+(403 `platform_admin_not_supported`); they read through the endpoint
+below instead.
+
+### Asset row shape
+
+```json
+{
+  "id": "uuid", "name": "...", "hostname": null, "ip_address": null,
+  "asset_type": "server", "criticality": "medium",
+  "operating_system": null, "environment": null, "description": null,
+  "owner_user_id": null, "owner_name": null,
+  "team_id": null, "team_name": null,
+  "status": "active", "last_seen_at": null, "created_at": "...",
+  "tags": [], "can_edit": true
+}
+```
+
+Create payload: `name` (required), `asset_type` (required), `hostname`,
+`ip_address` (validated), `operating_system`, `environment`
+(`production|staging|development`), `criticality` (default `medium`),
+`owner_user_id`, `team_id`, `description`, `tags`. All the optional
+strings are nullable -- an `application`/`cloud_resource` asset need not
+have a hostname.
+
+Every mutating action writes an audit entry (`asset.create`,
+`asset.update`, `asset.status_change`, `asset.retire`,
+`asset.tags_change`) with a before/after summary under `details`.
+
+## Platform admin: `GET /api/v1/admin/organizations/{id}/assets`
+
+super_admin-only read view of one organization's assets -- same list
+filters, sort and row shape as `GET /assets` above, with `can_edit`
+always `false`. Write endpoints reject platform accounts everywhere
+(`403 platform_admin_not_supported`), matching how every other
+admin-side view of one organization's data is read-only.
+
+## Asset error code reference
+
+| Code | Status | Where |
+|---|---|---|
+| `asset_not_found` | 404 | get/patch/delete/tags, incl. another organization's id |
+| `duplicate_hostname` | 409 | create/patch -- same (organization, lower(hostname)) as another asset; hostname is optional, uniqueness applies only when set |
+| `invalid_asset_type` / `invalid_criticality` / `invalid_environment` / `invalid_status` / `invalid_ip_address` | 400 | field validation on create/patch and list filters |
+| `name_required` | 400 | create/patch with a blank name |
+| `owner_not_found` / `team_not_found` | 404 | owner_user_id/team_id not in this organization |
+| `asset_not_editable` | 403 | caller has module write but not row-level write on this asset |
+| `asset_already_retired` | 409 | double retire |
+| `organization_id_required` | 400 | platform SOC analyst GET without organization_id |
+| `platform_admin_not_supported` | 403 | super_admin on /assets/*, or any platform account on a write endpoint |
 
 ## Error code reference (structured-detail endpoints only)
 

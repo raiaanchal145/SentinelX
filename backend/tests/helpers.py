@@ -17,6 +17,7 @@ from app.models import (
     Organization,
     OrganizationStatus,
     SocMode,
+    Team,
     User,
     UserRole,
 )
@@ -85,6 +86,7 @@ async def make_user(
     name="User",
     role=UserRole.soc_analyst,
     organization_id,
+    team_id=None,
     is_active=True,
     password=TEST_PASSWORD,
 ):
@@ -94,6 +96,7 @@ async def make_user(
         password_hash=hash_password(password),
         role=role,
         organization_id=organization_id,
+        team_id=team_id,
         is_active=is_active,
         is_verified=True,
     )
@@ -103,6 +106,14 @@ async def make_user(
     await db_session.commit()
     await db_session.refresh(user)
     return user
+
+
+async def make_team(db_session, *, organization_id, name="Team"):
+    team = Team(organization_id=organization_id, name=name)
+    db_session.add(team)
+    await db_session.commit()
+    await db_session.refresh(team)
+    return team
 
 
 async def login(client, email, password=TEST_PASSWORD) -> str:

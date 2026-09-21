@@ -24,9 +24,7 @@ Two roughly independent layers exist on the frontend today:
 (role + account_type, currently stored in `localStorage` after login)
 and redirects unauthenticated or wrong-role visitors.
 
-Two different shells exist for two different kinds of role:
-
-- **`UserLayout`** (top navigation) — for `soc_analyst`, `it_developer`,
+Two different shells exist for two different kinds of role:- **`UserLayout`** (top navigation) — for `soc_analyst`, `it_developer`,
   `security_manager` ("manager"), and `auditor`. Which nav items each
   role sees is defined in `src/lib/roleNav.ts`, filtered further by
   each item's optional `module` against `useMe().effective_modules`
@@ -58,21 +56,22 @@ Current routes / screens (see `App.tsx` for the authoritative list):
 | `/login`, `/register`, `/verify-email`, `/forgot-password`, `/reset-password` | anyone | real backend auth |
 | `/accept-invite` | anyone (token from the invite link) | `src/pages/AcceptInvite.tsx` — sets a name/password for an owner-, member-, or platform-SOC-kind invitation and signs the new account in |
 | `/organization-pending`, `/organization-suspended`, `/no-access` | any authenticated account | `src/pages/OrganizationPending.tsx` / `OrganizationSuspended.tsx` / `NoAccess.tsx` — status/guard screens from Prompt B section C; each offers sign-out |
-| `/admin/organizations`, `/admin/organizations/:id` | super_admin | `src/features/admin/pages/Organizations.tsx` (search/filter/sort/approve/reject/suspend/reactivate/archive, create-org dialog) and `OrganizationDetail.tsx` (Overview/Members/Access-and-modules/SOC/Activity/Settings tabs) |
+| `/admin/organizations`, `/admin/organizations/:id` | super_admin | `src/features/admin/pages/Organizations.tsx` (search/filter/sort/approve/reject/suspend/reactivate/archive, create-org dialog) and `OrganizationDetail.tsx` (Overview/Members/Access-and-modules/SOC/Assets/Activity/Settings tabs) |
 | `/admin/soc-team` | super_admin | `src/features/admin/pages/SocTeam.tsx` — invite/list/deactivate platform SOC analysts, edit each one's assigned `managed` organizations |
-| `/admin/soc-queue` | platform_soc_analyst | `src/features/admin/pages/SocQueue.tsx` — restricted nav (SOC Queue only), placeholder queue over this analyst's own assigned organizations |
+| `/admin/soc-queue` | platform_soc_analyst | `src/features/admin/pages/SocQueue.tsx` — restricted nav (SOC Queue only), placeholder queue over this analyst's own assigned organizations, plus a read-only assets view of whichever assigned organization is selected |
 | `/admin` | super_admin, organization_admin | admin dashboard (unchanged) |
 | `/organization-dashboard` | super_admin, organization_admin | legacy org-scoped admin view, kept reachable for compatibility; the owner's real home is now `/organization` below |
 | `/organization` | organization_admin | `src/features/owner/pages/OwnerDashboard.tsx` — reads `GET /organization` live and redirects to the pending/suspended screen if the organization isn't active |
 | `/organization/members` | organization_admin | `OwnerMembers.tsx` — Members / Pending invitations tabs, invite-member dialog |
 | `/organization/teams` | organization_admin | `OwnerTeams.tsx` — team CRUD, per-team membership drawer |
+| `/organization/assets` | organization_admin | `OwnerAssets.tsx` — real asset inventory (write) over the shared AssetsPage |
 | `/organization/access` | organization_admin | `OwnerAccess.tsx` — role x module access matrix, per-member override drawer |
 | `/organization/settings` | organization_admin | `OwnerSettings.tsx` — read-only organization settings |
 | `/admin/soc-oversight`, `/admin/it-oversight` | super_admin, organization_admin | aggregate rollups (unchanged) |
-| `/soc`, `/soc/alerts`, `/soc/incidents(/:id)`, `/soc/events`, `/soc/assets`, `/soc/reports` | soc_analyst | mock-data dashboards; every route but `/soc` itself is `ModuleGuard`-wrapped (`soc`/`incidents`/`assets`/`reports`) |
-| `/it`, `/it/tickets(/:id)`, `/it/assets`, `/it/runbooks` | it_developer | mock-data dashboards; every route but `/it` itself is `ModuleGuard`-wrapped (`it_tickets`/`assets`) |
-| `/manager/*` | security_manager | mock-data dashboards; every route but `/manager` itself is `ModuleGuard`-wrapped (`incidents`/`approvals`/`reports`/`assets`/`audit_logs`) |
-| `/auditor/*` | auditor | mock-data dashboards; every route but `/auditor` itself is `ModuleGuard`-wrapped (`audit_logs`/`incidents`/`reports`) |
+| `/soc`, `/soc/alerts`, `/soc/incidents(/:id)`, `/soc/events`, `/soc/assets`, `/soc/reports` | soc_analyst | `/soc/assets` is the real, read-only asset inventory; every other route is a mock-data dashboard; every route but `/soc` itself is `ModuleGuard`-wrapped (`soc`/`incidents`/`assets`/`reports`) |
+| `/it`, `/it/tickets(/:id)`, `/it/assets`, `/it/runbooks` | it_developer | `/it/assets` is the real asset inventory (write; the backend scopes the IT developer's writes to assets they own or that belong to their team); every other route is a mock-data dashboard; every route but `/it` itself is `ModuleGuard`-wrapped (`it_tickets`/`assets`) |
+| `/manager/*` | security_manager | `/manager/assets` is the real asset inventory (write); every other route is a mock-data dashboard; every route but `/manager` itself is `ModuleGuard`-wrapped (`incidents`/`approvals`/`reports`/`assets`/`audit_logs`) |
+| `/auditor/*` | auditor | `/auditor/assets` is the real, read-only asset inventory; every other route is a mock-data dashboard; every route but `/auditor` itself is `ModuleGuard`-wrapped (`audit_logs`/`incidents`/`assets`/`reports`) |
 | `/soc-dashboard`, `/it-dashboard` | -- | legacy paths, redirect to `/soc`/`/it` |
 
 ## Backend
@@ -104,6 +103,13 @@ Postgres can't put a single UNIQUE constraint across two tables.
 - `organization.py` — an organization owner's own organization: members,
   invitations, teams, the access matrix. organization_admin-only, own
   organization only.
+- `assets.py` — the asset inventory, the first real pipeline data (see
+  docs/API_CONTRACT.md "Assets"): organization-side CRUD + tags +
+  summary + lookup, with per-row `can_edit` on every row and full audit
+  coverage. organization_admin/security_manager write; it_developer
+  writes only its own/team's assets; soc_analyst/auditor read;
+  platform_soc_analyst reads assigned organizations via an explicit
+  `organization_id` checked against `soc_visible_organization_ids()`.
 - `invitations.py` — public (no auth) invitation validate/accept; the
   only way to create a member account, a platform-created owner
   account, or a platform SOC analyst account.
@@ -204,6 +210,39 @@ full endpoint-by-endpoint reference and error code table, and
 `docs/DECISIONS.md` for the ambiguities resolved and trade-offs made
 while building it.
 
+## Assets: the first real pipeline feature
+
+`app/routers/assets.py` serves the asset inventory everything else
+(events → alerts → incidents → tickets) will point at. Deletion is
+**soft only** (`status=retired`; there is no hard-delete path in the API
+at all), hostnames are optional but unique per organization when set
+(partial unique index `(organization_id, lower(hostname))` in migration
+`b8c9d0e1f2a3`), and every create/update/status-change/tag-change/retire
+writes an `asset.*` audit entry with a before/after summary.
+
+Role access (module floor via `require_module("assets", ...)` plus
+row-level checks in `_can_write_asset`):
+
+| Role | Access |
+|---|---|
+| organization_admin (owner) | write |
+| security_manager | write |
+| it_developer | write, row-scoped to assets they own or that sit on their team |
+| soc_analyst, auditor | read |
+| platform_soc_analyst | read, assigned `managed` organizations only, via `?organization_id=` |
+| super_admin | `GET /admin/organizations/{id}/assets`, read-only |
+
+On the frontend, one shared component —
+`src/features/assets/AssetsPage.tsx` — is reused by the owner
+(`/organization/assets`, write), IT (`/it/assets`, write with per-row
+own/team scoping), manager (`/manager/assets`, write), SOC
+(`/soc/assets`, read) and auditor (`/auditor/assets`, read). Write
+controls render only when `effective_modules.assets` is `write`, and
+per-row actions follow the backend-computed `can_edit`. The platform
+admin's organization detail has a read-only Assets tab backed by
+`GET /admin/organizations/{id}/assets`, and the platform SOC queue embeds
+a read-only assets view of the selected assigned organization.
+
 ## The mock data layer (frontend)
 
 ```
@@ -227,9 +266,7 @@ lib/data.ts      getSocKpis(state, scope), getTriageQueue(...), etc. --
                  through. Each already takes (state, scope) and is
                  latency-simulated, so swapping in real API calls later
                  is a signature-preserving change.
-```
-
-## Known gaps
+```## Known gaps
 
 - The platform admin, organization owner, and public UI for this
   feature is now built (organizations list + 6-tab detail, platform
@@ -239,13 +276,17 @@ lib/data.ts      getSocKpis(state, scope), getTriageQueue(...), etc. --
   now drive navigation and route access from the real
   `organization`/`effective_modules` fields `GET /auth/me` returns.
   What's still mock-backed is the *content* inside the SOC/IT/manager/
-  auditor dashboards themselves (KPIs, queues, tables) -- gating
-  decides which routes are reachable, not what data appears inside
-  them once you're on one. See the pipeline-tables bullet below.
+  auditor dashboards themselves (KPIs, queues, tables) -- with one
+  exception: **assets are real end to end** (see the section above);
+  every role's Assets page talks to the actual `/assets` API. The
+  remaining mock-backed content is alerts/incidents/events/tickets
+  queues and KPIs. See the pipeline-tables bullet below.
 - The register page's role picker was removed as a small, approved
   frontend exception ahead of that larger task (self-signup is now
   organization-owner-only) -- see `src/pages/Register.tsx`.
 - The pipeline tables (`alerts`, `incidents`, `tickets`, etc.) exist in
   the schema and migrations but have no real API endpoints yet -- the
   dashboards that display this data are still backed entirely by the
-  mock layer described above.
+  mock layer described above. `assets` is the exception: its endpoints
+  (`app/routers/assets.py`) and UI are real, which is what the events,
+  alerts, incidents and tickets work will point at.

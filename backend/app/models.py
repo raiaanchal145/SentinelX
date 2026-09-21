@@ -251,8 +251,15 @@ class Organization(Base):
     max_members: Mapped[int | None] = mapped_column(Integer)
     # "self_signup" | "platform_admin" -- how the organization came to exist.
     created_via: Mapped[str] = mapped_column(String(20), nullable=False, default="self_signup")
+    # Both admin FKs point admins <- organizations while admins.organization_id
+    # points organizations <- admins -- a cycle Base.metadata can't sort on its
+    # own, which made create_all/drop_all (the entire pytest fixture) raise
+    # CircularDependencyError. use_alter + the migration's exact constraint
+    # names fix the metadata sort; the hand-written migrations already create
+    # these via ALTER TABLE with these names, so the test schema now matches
+    # the real one. No migration is added or changed by this.
     approved_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("admins.id", ondelete="SET NULL")
+        ForeignKey("admins.id", ondelete="SET NULL", name="fk_organizations_approved_by_admin", use_alter=True)
     )
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -260,7 +267,7 @@ class Organization(Base):
     # Nullable: orgs created before this column existed (or a hypothetical
     # future system-seeded org) have no creating admin on file.
     created_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("admins.id", ondelete="SET NULL")
+        ForeignKey("admins.id", ondelete="SET NULL", name="fk_organizations_created_by_admin", use_alter=True)
     )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
@@ -738,7 +745,13 @@ class Asset(Base):
     team_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("teams.id", ondelete="SET NULL")
     )
-    hostname: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Human display name -- required. hostname is a separate, OPTIONAL
+    # technical identifier (an "application"/"cloud_resource" asset may
+    # not have one) -- see uq_assets_org_lower_hostname in the
+    # b8c9d0e1f2a3 migration for the partial unique index that only
+    # applies when it's set.
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    hostname: Mapped[str | None] = mapped_column(String(200))
     ip_address: Mapped[str | None] = mapped_column(String(64))
     asset_type: Mapped[AssetType] = mapped_column(Enum(AssetType, name="asset_type"))
     criticality: Mapped[AssetCriticality] = mapped_column(
@@ -747,14 +760,21 @@ class Asset(Base):
     )
     operating_system: Mapped[str | None] = mapped_column(String(120))
     location: Mapped[str | None] = mapped_column(String(150))
+    # Free-text, but validated at the API layer to production/staging/
+    # development -- see app/routers/assets.py's ASSET_ENVIRONMENTS.
     environment: Mapped[str | None] = mapped_column(String(60))
-    # Free-text owner stays for now (existing data/UI reads it);
-    # owner_user_id is the real FK once a user picker exists in the UI.
+    description: Mapped[str | None] = mapped_column(Text)
+    # Free-text owner stays for now (existing data/UI reads it, and
+    # pre-real-endpoint rows may only have this);  owner_user_id is the
+    # real, now-actually-used-by-the-UI FK -- see app/routers/assets.py.
     owner: Mapped[str | None] = mapped_column(String(150))
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")
     )
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Free-text, but validated at the API layer to active/retired -- see
+    # app/routers/assets.py's ASSET_STATUSES. "retired" is the DELETE
+    # endpoint's soft-delete terminal state.
     status: Mapped[str] = mapped_column(String(30), default="active")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 

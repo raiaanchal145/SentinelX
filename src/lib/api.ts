@@ -601,3 +601,142 @@ export function apiUpdateMemberAccess(userId: string, deniedModules: string[]) {
     body: JSON.stringify({ denied_modules: deniedModules }),
   })
 }
+
+// ---------------------------------------------------------------------
+// Assets -- the first real, non-mock pipeline data (see
+// docs/API_CONTRACT.md "Assets"). Same endpoints serve every role via
+// the shared AssetsPage: organization-level callers hit /assets, a
+// platform SOC analyst passes ?organization_id=, and super_admin reads
+// through the nested /admin/organizations/{id}/assets view.
+// ---------------------------------------------------------------------
+
+export type AssetCriticality = "critical" | "high" | "medium" | "low"
+
+export type AssetRow = {
+  id: string
+  name: string
+  hostname: string | null
+  ip_address: string | null
+  asset_type: string
+  criticality: AssetCriticality
+  operating_system: string | null
+  environment: string | null
+  description: string | null
+  owner_user_id: string | null
+  owner_name: string | null
+  team_id: string | null
+  team_name: string | null
+  status: "active" | "retired"
+  last_seen_at: string | null
+  created_at: string | null
+  tags: string[]
+  /** Per-row write permission the backend computes for the caller
+   * (it_developer is scoped to assets they own or that belong to their
+   * team; everyone with module write gets true; read-only roles false). */
+  can_edit: boolean
+}
+
+export type AssetListResponse = {
+  total: number
+  page: number
+  page_size: number
+  assets: AssetRow[]
+}
+
+export type AssetListParams = {
+  organization_id?: string
+  q?: string
+  asset_type?: string
+  criticality?: string
+  status?: string
+  tag?: string
+  owner_user_id?: string
+  team_id?: string
+  sort?: string
+  page?: number
+  page_size?: number
+}
+
+function assetQuery(params: AssetListParams): string {
+  const query = new URLSearchParams()
+  if (params.organization_id) query.set("organization_id", params.organization_id)
+  if (params.q) query.set("q", params.q)
+  if (params.asset_type) query.set("asset_type", params.asset_type)
+  if (params.criticality) query.set("criticality", params.criticality)
+  if (params.status) query.set("status", params.status)
+  if (params.tag) query.set("tag", params.tag)
+  if (params.owner_user_id) query.set("owner_user_id", params.owner_user_id)
+  if (params.team_id) query.set("team_id", params.team_id)
+  if (params.sort) query.set("sort", params.sort)
+  if (params.page) query.set("page", String(params.page))
+  if (params.page_size) query.set("page_size", String(params.page_size))
+  const qs = query.toString()
+  return qs ? `?${qs}` : ""
+}
+
+export function apiListAssets(params: AssetListParams = {}) {
+  return request<AssetListResponse>(`/assets${assetQuery(params)}`)
+}
+
+export type AssetsSummary = {
+  by_type: Record<string, number>
+  by_criticality: Record<string, number>
+  by_status: Record<string, number>
+}
+
+export function apiGetAssetsSummary(organizationId?: string) {
+  const query = organizationId ? `?organization_id=${encodeURIComponent(organizationId)}` : ""
+  return request<AssetsSummary>(`/assets/summary${query}`)
+}
+
+export type AssetsLookup = {
+  users: { id: string; name: string }[]
+  teams: { id: string; name: string }[]
+}
+
+export function apiGetAssetsLookup(organizationId?: string) {
+  const query = organizationId ? `?organization_id=${encodeURIComponent(organizationId)}` : ""
+  return request<AssetsLookup>(`/assets/lookup${query}`)
+}
+
+export type AssetPayload = {
+  name: string
+  asset_type: string
+  hostname?: string | null
+  ip_address?: string | null
+  operating_system?: string | null
+  environment?: string | null
+  criticality?: string
+  owner_user_id?: string | null
+  team_id?: string | null
+  description?: string | null
+  tags?: string[]
+}
+
+export function apiCreateAsset(payload: AssetPayload) {
+  return request<AssetRow>("/assets", { method: "POST", body: JSON.stringify(payload) })
+}
+
+export function apiGetAsset(assetId: string, organizationId?: string) {
+  const query = organizationId ? `?organization_id=${encodeURIComponent(organizationId)}` : ""
+  return request<AssetRow>(`/assets/${assetId}${query}`)
+}
+
+export function apiUpdateAsset(assetId: string, payload: Partial<AssetPayload> & { status?: string }) {
+  return request<AssetRow>(`/assets/${assetId}`, { method: "PATCH", body: JSON.stringify(payload) })
+}
+
+export function apiRetireAsset(assetId: string) {
+  return request<AssetRow>(`/assets/${assetId}`, { method: "DELETE" })
+}
+
+export function apiSetAssetTags(assetId: string, tags: string[]) {
+  return request<AssetRow>(`/assets/${assetId}/tags`, { method: "PUT", body: JSON.stringify({ tags }) })
+}
+
+/** super_admin-only read view of one organization's assets (the write
+ * endpoints reject platform accounts) -- used by the organization
+ * detail page's Assets tab. */
+export function apiListOrganizationAssets(organizationId: string, params: Omit<AssetListParams, "organization_id"> = {}) {
+  return request<AssetListResponse>(`/admin/organizations/${organizationId}/assets${assetQuery(params)}`)
+}

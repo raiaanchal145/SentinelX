@@ -23,6 +23,10 @@ from app.models import (
     AccountEmail,
     Admin,
     AdminLevel,
+    Asset,
+    AssetCriticality,
+    AssetTag,
+    AssetType,
     AuditLog,
     Organization,
     OrganizationModule,
@@ -35,6 +39,7 @@ from app.models import (
 from app.invite_service import check_invitation_rate_limit, create_invitation
 from app.modules import ALL_MODULE_KEYS
 from app.org_summary import active_owner_count, compute_org_counts
+from app.routers import assets as assets_router
 from app.scope import Scope
 
 router = APIRouter(prefix="/api/v1/admin/organizations", tags=["admin-organizations"])
@@ -540,6 +545,73 @@ async def deactivate_member(
     )
     await db.commit()
     return {"id": str(account.id), "is_active": account.is_active}
+
+
+@router.get("/{organization_id}/assets")
+async def list_organization_assets(
+    organization_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    scope: Scope = Depends(require_super_admin),
+    q: str | None = Query(default=None),
+    asset_type: str | None = Query(default=None),
+    criticality: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    tag: str | None = Query(default=None),
+    sort: str = Query(default="created_at_desc"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+):
+    """Read-only view of one organization's assets for platform admins --
+    the write endpoints (create/edit/retire/tags) live only on
+    /api/v1/assets/*, which super_admin is deliberately barred from
+    (see require_org_assets_write/read in app/routers/assets.py); this
+    mirrors that router's list filters but is scoped by the path
+    organization_id rather than the caller's own, since a super_admin
+    has none."""
+    org = await db.get(Organization, organization_id)
+    if org is None:
+        raise _err("organization_not_found", "Organization not found.", status_code=404)
+
+    stmt = select(Asset).where(Asset.organization_id == organization_id)
+
+    if q:
+        like = f"%{q.strip()}%"
+        stmt = stmt.where((Asset.name.ilike(like)) | (Asset.hostname.ilike(like)) | (Asset.ip_address.ilike(like)))
+    if asset_type:
+        try:
+            stmt = stmt.where(Asset.asset_type == AssetType(asset_type))
+        except ValueError:
+            raise _err("invalid_asset_type", f"Unknown asset type '{asset_type}'.")
+    if criticality:
+        try:
+            stmt = stmt.where(Asset.criticality == AssetCriticality(criticality))
+        except ValueError:
+            raise _err("invalid_criticality", f"Unknown criticality '{criticality}'.")
+    if status:
+        if status not in assets_router.ASSET_STATUSES:
+            raise _err("invalid_status", f"status must be one of {sorted(assets_router.ASSET_STATUSES)}.")
+        stmt = stmt.where(Asset.status == status)
+    if tag:
+        stmt = stmt.where(Asset.id.in_(select(AssetTag.asset_id).where(AssetTag.tag == tag)))
+
+    sort_map = {
+        "created_at_desc": Asset.created_at.desc(),
+        "created_at_asc": Asset.created_at.asc(),
+        "name_asc": Asset.name.asc(),
+        "name_desc": Asset.name.desc(),
+    }
+    stmt = stmt.order_by(sort_map.get(sort, Asset.created_at.desc()))
+
+    total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar() or 0
+    stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+    rows = (await db.execute(stmt)).scalars().all()
+
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "assets": await assets_router._rows_for(db, scope, list(rows), can_edit_all_false=True),
+    }
 
 
 @router.get("/{organization_id}/activity")

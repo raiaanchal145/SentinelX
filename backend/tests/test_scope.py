@@ -197,9 +197,15 @@ async def test_stats_overview_counts_are_isolated_by_tenant(client, db_session):
     )
 
     db_session.add_all([
-        Asset(organization_id=org_a.id, hostname="org-a-web-1", asset_type=AssetType.server),
-        Asset(organization_id=org_a.id, hostname="org-a-web-2", asset_type=AssetType.server),
-        Asset(organization_id=org_b.id, hostname="org-b-db-1", asset_type=AssetType.database),
+        Asset(organization_id=org_a.id, name="org-a-web-1", hostname="org-a-web-1", asset_type=AssetType.server),
+        Asset(organization_id=org_a.id, name="org-a-web-2", hostname="org-a-web-2", asset_type=AssetType.server),
+        # Retired -- excluded from the count, same rule compute_org_counts
+        # (owner dashboard, platform admin org list) applies.
+        Asset(
+            organization_id=org_a.id, name="org-a-old", hostname="org-a-old",
+            asset_type=AssetType.server, status="retired",
+        ),
+        Asset(organization_id=org_b.id, name="org-b-db-1", hostname="org-b-db-1", asset_type=AssetType.database),
     ])
     await db_session.commit()
 
@@ -217,7 +223,7 @@ async def test_stats_overview_counts_are_isolated_by_tenant(client, db_session):
     assert stats_b["assets"] == 1
     assert stats_b["organizations"] == 1
 
-    assert stats_root["assets"] == 3
+    assert stats_root["assets"] == 3  # 2 active in A + 1 in B; the retired one doesn't count
     assert stats_root["organizations"] == 2
 
 
