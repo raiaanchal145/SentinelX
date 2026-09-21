@@ -40,8 +40,16 @@ async def stats_overview(
     users_count = (
         await db.execute(scoped_to_org(select(func.count(User.id)), User, scope))
     ).scalar()
+    # Retired assets are excluded to match compute_org_counts() in
+    # app/org_summary.py (the owner dashboard's and platform admin's
+    # "Assets" count) -- the two surfaces must agree on what a count
+    # means, and a soft-deleted (retired) asset is not inventory anymore.
     assets_count = (
-        await db.execute(scoped_to_org(select(func.count(Asset.id)), Asset, scope))
+        await db.execute(
+            scoped_to_org(
+                select(func.count(Asset.id)).where(Asset.status != "retired"), Asset, scope
+            )
+        )
     ).scalar()
 
     if scope.organization_id is None:
