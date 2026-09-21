@@ -4,9 +4,29 @@ This documents the endpoints added/changed for the organization
 management, SOC-mode, invitations, layered access-control and asset
 inventory features.
 It does not re-document the pre-existing auth endpoints
-(`/auth/register`, `/verify-email`, `/login`, `/forgot-password`,
-`/reset-password`) beyond what changed on them below -- see
+(`/verify-email`, `/login`, `/forgot-password`, `/reset-password`)
+beyond what changed on them below -- see
 `docs/architecture.md` for the overall backend layout.
+
+**SentinelX is invite-only** (docs/DECISIONS.md): there is no public
+registration. `POST /auth/register` and the `pending_registrations`
+flow were removed; accounts are created only by accepting an
+invitation, or by the one-time `python -m app.create_super_admin`
+bootstrap command. The complete anonymous surface is exactly:
+
+```
+POST /api/v1/auth/login
+POST /api/v1/auth/forgot-password
+POST /api/v1/auth/reset-password
+POST /api/v1/auth/verify-email
+POST /api/v1/auth/resend-verification
+GET  /api/v1/invitations/{token}
+POST /api/v1/invitations/accept
+GET  /api/v1/health
+```
+
+`backend/tests/test_anonymous_routes.py` enumerates the app's routes
+and fails the suite if any other anonymous endpoint appears.
 
 Every business-rule/permission rejection anywhere in this feature
 raises `HTTPException` with a **structured detail**:
@@ -16,29 +36,39 @@ raises `HTTPException` with a **structured detail**:
 ```
 
 The frontend should switch on `detail.code`, never parse `detail.message`.
-A handful of pre-existing auth endpoints (`register`, `verify-email`,
+A handful of pre-existing auth endpoints (`verify-email`,
 `login`'s non-organization failures, `resend-verification`,
 `forgot-password`, `reset-password`) still raise a bare string
 `detail` -- those predate this convention and were left alone. `login`'s
-two new organization-status failures (`organization_suspended`,
+two organization-status failures (`organization_suspended`,
 `organization_archived`) do use the structured shape; see below.
 
 ## Auth changes
 
-### `POST /api/v1/auth/register`
+### `POST /api/v1/auth/register` -- REMOVED
 
-Self-signup is now **organization-owner-only** -- there is no role
-picker and no "join an existing organization" path.
+The self-signup endpoint, its schemas, the `PendingRegistration` model
+and the `pending_registrations` table are gone (migration
+`d5e6f7a8b9c0` drops the table; unexpired registration codes in it were
+discarded by design -- no flow can ever consume them). Unauthenticated
+requests now get `404`.
 
-```json
-{ "name": "...", "email": "...", "password": "...", "organization_name": "...", "industry": "optional" }
-```
+### `POST /api/v1/auth/verify-email` and `POST /api/v1/auth/resend-verification` -- lockout only
 
-`organization_name` is required for every email except the hardcoded
-`SUPER_ADMIN_EMAILS` allow-list (which gets no organization at all).
-Creates a `pending_registrations` row only; the real `admins` row and
-its brand-new **pending** organization are created in `verify-email`,
-once the OTP is confirmed.
+These now serve exactly one flow: the **3-wrong-passwords lockout**.
+After the third wrong password, `login` resets
+`failed_login_attempts`, flips `is_verified` to `False`, and emails a
+10-minute, single-use code; the account (admin or user) must verify
+with that code before it can log in again. `resend-verification`
+emails a fresh code to a locked account (throttled per email). Neither
+endpoint creates anything anymore.
+
+Both answer unknown emails, verified accounts, missing codes and wrong
+codes with the **same generic response** (`400` on verify, the same
+200 body on resend) so nothing on the anonymous surface reveals
+whether an address has an account. Verify attempts are capped per
+email (5 per 10-minute window). Codes are single-use and expire in 10
+minutes -- `backend/tests/test_auth.py` pins all of it.
 
 ### `POST /api/v1/auth/login`
 
@@ -50,8 +80,10 @@ the account's own organization is `suspended` or `archived`:
 { "detail": { "code": "organization_archived", "message": "Your organization has been archived." } }
 ```
 
-A **pending** organization's owner is allowed to log in (the frontend
-needs a session to render the "awaiting approval" screen).
+Organization status rules at login: a **suspended** or **archived**
+organization's members are refused outright (`401` with the structured
+codes below) -- a suspended org's owner cannot even log in. There is
+no pending state anymore; organizations are born active.
 
 ### `GET /api/v1/auth/me`
 
@@ -61,7 +93,7 @@ Response gained two fields, both `null` for `super_admin` /
 ```json
 {
   "...": "...",
-  "organization": { "id": "...", "name": "...", "status": "pending|active|suspended|archived", "soc_mode": "managed|in_house" } | null,
+  "organization": { "id": "...", "name": "...", "status": "active|suspended|archived", "soc_mode": "managed|in_house" } | null,
   "effective_modules": { "assets": "read|write", "...": "..." } | null
 }
 ```
@@ -69,7 +101,7 @@ Response gained two fields, both `null` for `super_admin` /
 Deliberately does **not** require an active organization -- this is
 one of the two endpoints (with the owner's `GET /organization`) that
 must keep working regardless of status, so the frontend has something
-to read in order to show the right pending/suspended/archived screen.
+to read in order to show the right suspended/archived screen.
 
 ## Platform admin: `/api/v1/admin/organizations` (super_admin-only)
 
@@ -77,12 +109,14 @@ to read in order to show the right pending/suspended/archived screen.
 |---|---|
 | `GET /` | `q`, `status`, `soc_mode`, `sort` (`created_at_desc\|created_at_asc\|name_asc\|name_desc`), `page`, `page_size`. Returns `{total, page, page_size, organizations: [...]}`. |
 | `GET /{organization_id}` | Full detail: counts, `modules`, `assigned_soc_analysts`, `recent_activity` (last 20). |
-| `POST /` | `{name, owner_email, soc_mode, industry?, max_members?}`. Creates an **active** organization, seeds every module enabled, and sends an `owner`-kind invitation to `owner_email` (the org has no owner account until that invitation is accepted). |
+| `POST /` | `{name, owner_email, soc_mode, industry?, max_members?}`. Creates an **active** organization, seeds every module enabled, and sends an `owner`-kind invitation to `owner_email` (the org has no owner account until that invitation is accepted). `409 email_already_registered` if the email already has an account. |
 | `PATCH /{organization_id}` | `{name?, industry?, max_members?}`. |
-| `POST /{organization_id}/approve` | `pending -> active` only. |
-| `POST /{organization_id}/suspend` | `{reason}` (required, non-empty). `active\|pending -> suspended`. |
+| `GET /{organization_id}/invitations` | The organization's `owner`-kind invitations, any status -- the platform's "has the owner accepted yet?" view. Each row: `{id, email, kind, status, expired, created_at, expires_at, accepted_at}` (`expired: true` when still pending past `expires_at`). |
+| `POST /{organization_id}/invitations/{invitation_id}/resend` | Rotates the pending owner invitation's token/expiry on the same row (the old link stops working) and re-sends the email. `409 invitation_not_pending` for an accepted/revoked row. |
+| `DELETE /{organization_id}/invitations/{invitation_id}` | Revokes a pending owner invitation (`status=revoked`); the link then 404s. |
+| `POST /{organization_id}/suspend` | `{reason}` (required, non-empty). `active -> suspended`. |
 | `POST /{organization_id}/reactivate` | `suspended -> active` only. |
-| `POST /{organization_id}/archive` | `active\|pending\|suspended -> archived`. Terminal -- nothing transitions out of `archived`. |
+| `POST /{organization_id}/archive` | `active\|suspended -> archived`. Terminal -- nothing transitions out of `archived`. |
 | `PUT /{organization_id}/modules` | `{modules: {<all 9 keys>: bool}}` -- the payload must name **every** module key, no more, no fewer. Returns `{modules, changed}`. |
 | `PUT /{organization_id}/soc-mode` | `{soc_mode}`. Returns `{organization, soc_analyst_count, message?, warning?}` -- `message` when switching to `managed` strands existing `soc_analyst` members' soc/incidents access; `warning` when switching to `in_house` with zero `soc_analyst` members yet. |
 | `GET /{organization_id}/members` | Owner(s) + `users` rows, flattened into one list with `account_type`. |
@@ -106,14 +140,14 @@ in this router.
 ## Organization owner: `/api/v1/organization` (organization_admin-only, own organization only)
 
 Every endpoint below except `GET /` (the overview) also requires the
-organization to be `active` -- a `pending`/`suspended`/`archived`
-organization gets `403` with code `organization_pending` /
-`organization_suspended` / `organization_archived` from
+organization to be `active` -- a `suspended`/`archived`
+organization gets `403` with code `organization_suspended` /
+`organization_archived` from
 `require_active_organization`.
 
 | Method & path | Notes |
 |---|---|
-| `GET /` | The one exception above. Returns a minimal `{id, name, status, soc_mode, message}` while `pending`; full counts + `recent_activity` (last 10) once approved. |
+| `GET /` | The one exception above. Always returns the full payload -- counts + `recent_activity` (last 10) -- for the caller's own organization, whatever its status. |
 | `GET /members` | This organization's `users` rows. |
 | `PATCH /members/{user_id}` | `{role?, is_active?, team_id?}`. Setting `role=soc_analyst` while `soc_mode != in_house` is `422 soc_analyst_requires_in_house`. |
 | `DELETE /members/{user_id}` | Hard-deletes if nothing (`audit_logs`, `tickets.assigned_user_id`, `escalations`) references the user; otherwise soft-deactivates instead. Response says which: `{deleted, deactivated}`. |
@@ -221,7 +255,7 @@ admin-side view of one organization's data is read-only.
 
 | Code | Status | Where |
 |---|---|---|
-| `organization_pending` / `organization_suspended` / `organization_archived` | 403 (401 at login) | `require_active_organization`; `login` (401 only) |
+| `organization_suspended` / `organization_archived` | 403 (401 at login) | `require_active_organization`; `login` (401 only) |
 | `super_admin_required` / `platform_admin_required` / `platform_soc_required` / `org_owner_required` | 403 | `app/access.py` role guards |
 | `organization_not_found` | 404 | most `/admin/organizations`, `/organization`, `require_module` |
 | `invalid_status` / `invalid_soc_mode` / `invalid_status_transition` | 400 / 400 / 409 | `admin_organizations.py` |

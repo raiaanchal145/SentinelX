@@ -47,7 +47,7 @@ function VerifyEmail() {
     setSuccess("")
 
     if (!email.trim()) {
-      setError("Please enter the email you registered with.")
+      setError("Please enter the email on your account.")
       return
     }
 
@@ -61,7 +61,7 @@ function VerifyEmail() {
     try {
       await apiVerifyEmail(email.trim().toLowerCase(), code.trim())
 
-      setSuccess("Email verified. You can now sign in.")
+      setSuccess("Account verified. You can now sign in.")
 
       setTimeout(() => {
         navigate("/login")
@@ -82,7 +82,7 @@ function VerifyEmail() {
     setSuccess("")
 
     if (!email.trim()) {
-      setError("Please enter the email you registered with.")
+      setError("Please enter the email on your account.")
       return
     }
 
@@ -121,11 +121,12 @@ function VerifyEmail() {
           <div>
 
             <h1 className="text-2xl font-bold">
-              Verify Your Email
+              Verify Your Account
             </h1>
 
             <p className="text-sm text-fg-muted">
-              Enter the code we emailed you
+              Your account was locked after too many sign-in attempts. Enter the 6-digit code we
+              emailed you to unlock it.
             </p>
 
           </div>

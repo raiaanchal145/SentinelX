@@ -87,13 +87,13 @@ async def test_create_organization_rejects_invalid_soc_mode(client, db_session):
 async def test_list_organizations_filters_and_search(client, db_session):
     token = await _super_admin_token(client, db_session)
     org_a = await make_organization(db_session, name="Aurora Health", status=OrganizationStatus.active, soc_mode=SocMode.managed)
-    await make_organization(db_session, name="Blackridge Logistics", status=OrganizationStatus.pending, soc_mode=SocMode.in_house)
+    await make_organization(db_session, name="Blackridge Logistics", status=OrganizationStatus.archived, soc_mode=SocMode.in_house)
     await make_admin(db_session, email="owner.a@example.com", organization_id=org_a.id)
 
     all_orgs = (await client.get(ADMIN_BASE, headers=auth(token))).json()
     assert all_orgs["total"] == 2
 
-    by_status = (await client.get(ADMIN_BASE, params={"status": "pending"}, headers=auth(token))).json()
+    by_status = (await client.get(ADMIN_BASE, params={"status": "archived"}, headers=auth(token))).json()
     assert by_status["total"] == 1
     assert by_status["organizations"][0]["name"] == "Blackridge Logistics"
 
@@ -131,17 +131,14 @@ async def test_patch_organization_updates_fields(client, db_session):
     assert body["max_members"] == 25
 
 
-async def test_approve_only_from_pending_and_rejects_otherwise(client, db_session):
+async def test_approve_endpoint_was_removed_with_self_signup(client, db_session):
+    """Invite-only: organizations are born active, so the approve
+    endpoint is gone entirely (docs/DECISIONS.md)."""
     token = await _super_admin_token(client, db_session)
-    org = await make_organization(db_session, status=OrganizationStatus.pending)
+    org = await make_organization(db_session, status=OrganizationStatus.active)
 
     resp = await client.post(f"{ADMIN_BASE}/{org.id}/approve", headers=auth(token))
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "active"
-
-    again = await client.post(f"{ADMIN_BASE}/{org.id}/approve", headers=auth(token))
-    assert again.status_code == 409
-    assert again.json()["detail"]["code"] == "invalid_status_transition"
+    assert resp.status_code == 404
 
 
 async def test_suspend_requires_a_reason_and_sets_fields(client, db_session):
@@ -171,9 +168,9 @@ async def test_reactivate_only_from_suspended(client, db_session):
     assert ok.json()["status"] == "active"
 
 
-async def test_archive_allowed_from_active_pending_and_suspended_but_not_twice(client, db_session):
+async def test_archive_allowed_from_active_and_suspended_but_not_twice(client, db_session):
     token = await _super_admin_token(client, db_session)
-    for status in (OrganizationStatus.active, OrganizationStatus.pending, OrganizationStatus.suspended):
+    for status in (OrganizationStatus.active, OrganizationStatus.suspended):
         org = await make_organization(db_session, name=f"Org {status.value}", status=status)
         resp = await client.post(f"{ADMIN_BASE}/{org.id}/archive", headers=auth(token))
         assert resp.status_code == 200, resp.text

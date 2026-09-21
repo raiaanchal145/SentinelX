@@ -120,7 +120,7 @@ function SettingsTab({ detail, onSaved }: SettingsTabProps) {
         <p className="mt-1 text-xs text-fg-muted">Current status: {detail.status}</p>
 
         <div className="mt-3 flex flex-wrap gap-2">
-          {(detail.status === "active" || detail.status === "pending") && (
+          {detail.status === "active" && (
             <Button variant="danger" onClick={() => setLifecycleAction("suspend")}>
               Suspend
             </Button>

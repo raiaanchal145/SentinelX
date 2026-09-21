@@ -227,3 +227,70 @@ existing lockout behavior (3 failed attempts on a real account force
 re-verification -- see `login`'s `failed_login_attempts` handling)
 already gives a legitimate user enough signal that something's wrong
 without telling an attacker which half of their guess was right.
+
+## SentinelX is invite-only (R1)
+
+There is no public registration and no organization self-signup.
+Accounts come from exactly three places: (a) the platform admin
+creates an organization and enters the owner's email -- the owner gets
+an invitation link, sets a password and lands on the organization
+dashboard; (b) an owner invites members by email (SOC analysts only
+while `soc_mode = in_house`); (c) the platform admin invites platform
+SOC analysts. The first `super_admin` is created by the one-time
+server-side command `python -m app.create_super_admin` -- never
+through a public page or endpoint. Email ownership is proven by the
+invitation link itself, so invited users do not do an OTP step at
+signup.
+
+Deleted with self-signup (all confirmed by the usage matrix in
+docs/reports/invite-only-cleanup.md): `POST /auth/register` and its
+schemas, the `PendingRegistration` model and `pending_registrations`
+table (dropped by migration `d5e6f7a8b9c0`; unexpired registration
+codes it held were discarded -- no flow can ever consume them, and the
+emails they reserved are freed), the registration branch of
+`verify-email`/`resend-verification`, the `SUPER_ADMIN_EMAILS`
+allow-list, `POST /admin/organizations/{id}/approve`, the `pending`
+value of `organization_status` (historical rows converted to `active`
+before the enum was rebuilt), the legacy `GET/POST /organizations`
+router, and the frontend `Register.tsx` / `OrganizationPending.tsx`
+pages with their routes and API wrappers. `verify-email` and
+`resend-verification` remain for exactly one flow: the 3-wrong-passwords
+lockout.
+
+## The `pending` enum value was removed, not just orphaned
+
+Postgres cannot `DROP VALUE` from an enum, so migration `d5e6f7a8b9c0`
+rebuilt the type (rename old, create new without `pending`, alter
+column, drop old), converting any `pending` organizations to `active`
+first and logging the count. `downgrade -1` recreates the full
+four-value enum and the empty `pending_registrations` table -- data is
+not restored. The recreated table's FK carries the original name
+(`fk_pending_registrations_organization`) because the older
+`f2a3b4c5d6e7` migration's own downgrade drops it by name; an
+auto-generated name would break downgrade chains through that
+revision. The empty+populated+downgrade paths are pinned by
+`backend/tests/test_migration_invite_only.py` on a scratch database.
+
+## `organizations.approved_by_admin_id`/`approved_at` are kept
+
+With the approve flow gone these could look dead, but
+`POST /admin/organizations` sets both at creation -- they are the
+record of which super_admin created the organization and when. Renaming
+them (e.g. to `created_by_admin_id`/`created_at`) would be pure churn
+against the FK name the migrations and the test-schema `use_alter`
+notes depend on; `created_via` (`always "platform_admin"` now) is kept
+for the same reason and documented here rather than dropped.
+
+## Anonymous verify/resend answers are identical for known and unknown emails
+
+The lockout surface is anonymous, so it follows the same rule as
+login: unknown email, verified account, missing code, expired code and
+wrong code all return the same generic 400 (`verify-email`) or the
+same 200 body (`resend-verification`). This was *added* in R1 -- the
+old registration-serving branch distinguished unknown emails, which
+revealed account existence. Resend is throttled per email and verify
+attempts are capped (5 per 10-minute window); codes stay single-use
+with a 10-minute expiry. `test_auth.py` asserts the known-vs-unknown
+responses are byte-identical, and `test_anonymous_routes.py` pins the
+whole anonymous surface to the allowed list so a future anonymous
+account-creation path fails the suite rather than a security review.

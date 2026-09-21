@@ -53,10 +53,10 @@ Current routes / screens (see `App.tsx` for the authoritative list):
 
 | Path | Role(s) | Notes |
 |---|---|---|
-| `/login`, `/register`, `/verify-email`, `/forgot-password`, `/reset-password` | anyone | real backend auth |
+| `/login`, `/verify-email`, `/forgot-password`, `/reset-password` | anyone | real backend auth. SentinelX is invite-only (docs/DECISIONS.md) -- there is no `/register`; the login page states that access is by invitation |
 | `/accept-invite` | anyone (token from the invite link) | `src/pages/AcceptInvite.tsx` — sets a name/password for an owner-, member-, or platform-SOC-kind invitation and signs the new account in |
-| `/organization-pending`, `/organization-suspended`, `/no-access` | any authenticated account | `src/pages/OrganizationPending.tsx` / `OrganizationSuspended.tsx` / `NoAccess.tsx` — status/guard screens from Prompt B section C; each offers sign-out |
-| `/admin/organizations`, `/admin/organizations/:id` | super_admin | `src/features/admin/pages/Organizations.tsx` (search/filter/sort/approve/reject/suspend/reactivate/archive, create-org dialog) and `OrganizationDetail.tsx` (Overview/Members/Access-and-modules/SOC/Assets/Activity/Settings tabs) |
+| `/organization-suspended`, `/no-access` | any authenticated account | `src/pages/OrganizationSuspended.tsx` / `NoAccess.tsx` — status/guard screens; each offers sign-out (the pending screen died with self-signup; organizations are born active) |
+| `/admin/organizations`, `/admin/organizations/:id` | super_admin | `src/features/admin/pages/Organizations.tsx` (search/filter/sort/suspend/reactivate/archive, create-org dialog with the owner's email) and `OrganizationDetail.tsx` (Overview/Members/Access-and-modules/SOC/Assets/Activity/Settings tabs; the detail page shows the owner invitation's status with resend/revoke) |
 | `/admin/soc-team` | super_admin | `src/features/admin/pages/SocTeam.tsx` — invite/list/deactivate platform SOC analysts, edit each one's assigned `managed` organizations |
 | `/admin/soc-queue` | platform_soc_analyst | `src/features/admin/pages/SocQueue.tsx` — restricted nav (SOC Queue only), placeholder queue over this analyst's own assigned organizations, plus a read-only assets view of whichever assigned organization is selected |
 | `/admin` | super_admin, organization_admin | admin dashboard (unchanged) |
@@ -137,15 +137,43 @@ an is-active-rechecked-on-every-request check.
 
 ## Organizations, access control and invitations
 
-An organization moves through `pending -> active -> suspended/archived`
-(`organizations.status`). Self-signup always creates a **pending**
-organization owned by a brand-new `organization_admin`; a platform
-`super_admin` creates an already-**active** one directly. Only
-`active` organizations can use their own member/invitation/access
-endpoints (`require_active_organization`) -- `GET /auth/me` and the
-owner's `GET /organization` overview are the two deliberate exceptions,
-so the frontend always has something to read to show the right
-pending/suspended/archived screen.
+### How accounts are created (invite-only)
+
+There is no public registration. Accounts come from exactly three
+places, and every one of them is an invitation acceptance or the
+server-side bootstrap command:
+
+1. A platform `super_admin` creates an organization (status `active`
+   immediately) together with the owner's invitation (`kind=owner`);
+   the owner account comes into existence only when that invitation is
+   accepted -- the link proves email ownership, so there is no OTP step
+   at signup.
+2. An organization's owner invites members by email (IT developers,
+   security managers, auditors; SOC analysts only while the
+   organization is `in_house`); they accept the same way.
+3. A platform `super_admin` invites platform SOC analysts
+   (`kind=platform_soc`, no organization).
+
+The **first** `super_admin` is created by the one-time, server-side
+command `python -m app.create_super_admin` (interactive getpass
+prompts, or `SEED_SUPER_ADMIN_EMAIL`/`SEED_SUPER_ADMIN_PASSWORD`/
+`SEED_SUPER_ADMIN_NAME` for non-interactive dev). It refuses a second
+bootstrap and never prints the password. The dev launcher
+(`npm run dev`) checks for an existing active super_admin after
+migrations and offers to run the command on a first run; once one
+exists, it stays silent.
+
+### Organization status
+
+An organization is **active** from the moment the platform admin
+creates it, and moves through `active -> suspended/archived`
+(`organizations.status` -- there is no `pending` value anymore;
+migration `d5e6f7a8b9c0` removed it after converting any historical
+rows to active). Only `active` organizations can use their own
+member/invitation/access endpoints (`require_active_organization`) --
+`GET /auth/me` and the owner's `GET /organization` overview are the two
+deliberate exceptions, so the frontend always has something to read to
+show the right suspended/archived screen.
 
 `organizations.soc_mode` is `managed` (platform SOC staff, assigned via
 `soc_organization_assignments`, work its alerts/incidents; the owner
@@ -196,12 +224,13 @@ New tables (`backend/app/models.py`, migration
 
 Changed columns: `organizations` gained `status` (now a real enum, was
 a plain string), `soc_mode`, `max_members`, `created_via`,
-`approved_by_admin_id`/`approved_at`, `suspended_at`/`suspension_reason`;
-`admins.admin_level` gained `platform_soc_analyst` (its `organization_id`
-is `NULL`, same check-constraint shape as `super_admin`);
-`pending_registrations` gained `organization_industry` (carries the
-register form's optional industry field across to the organization
-created at `verify-email`).
+`approved_by_admin_id`/`approved_at` (kept as the record of which
+super_admin created the organization and when -- the approve flow itself
+is gone), `suspended_at`/`suspension_reason`; `admins.admin_level`
+gained `platform_soc_analyst` (its `organization_id`
+is `NULL`, same check-constraint shape as `super_admin`). The
+`pending_registrations` table was dropped by migration `d5e6f7a8b9c0`
+(invite-only); unexpired registration codes it held were discarded.
 
 Every business-rule/permission rejection in this feature raises a
 structured `{code, message}` detail rather than a bare string, so the
@@ -271,19 +300,21 @@ lib/data.ts      getSocKpis(state, scope), getTriageQueue(...), etc. --
 - The platform admin, organization owner, and public UI for this
   feature is now built (organizations list + 6-tab detail, platform
   SOC team + queue, owner dashboard/members/teams/access/settings,
-  accept-invite, and the pending/suspended/no-access screens -- see
+  accept-invite, and the suspended/no-access screens -- see
   the routes table above), and `UserLayout`'s nav plus `ModuleGuard`
   now drive navigation and route access from the real
   `organization`/`effective_modules` fields `GET /auth/me` returns.
+  Auth pages are invite-only: `/register` and the organization-pending
+  screen are deleted (see docs/DECISIONS.md).
   What's still mock-backed is the *content* inside the SOC/IT/manager/
   auditor dashboards themselves (KPIs, queues, tables) -- with one
   exception: **assets are real end to end** (see the section above);
   every role's Assets page talks to the actual `/assets` API. The
   remaining mock-backed content is alerts/incidents/events/tickets
   queues and KPIs. See the pipeline-tables bullet below.
-- The register page's role picker was removed as a small, approved
-  frontend exception ahead of that larger task (self-signup is now
-  organization-owner-only) -- see `src/pages/Register.tsx`.
+- The register page was removed entirely along with self-signup
+  (invite-only, docs/DECISIONS.md) -- accounts exist only through
+  invitation acceptance or the create_super_admin bootstrap.
 - The pipeline tables (`alerts`, `incidents`, `tickets`, etc.) exist in
   the schema and migrations but have no real API endpoints yet -- the
   dashboards that display this data are still backed entirely by the

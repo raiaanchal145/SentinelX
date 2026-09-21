@@ -1,159 +1,200 @@
 """
-Auth tests: register -> verify -> login -> me for the self-signup
-organization-owner flow, plus a couple of failure paths and a check
-that GET /organizations and GET /stats/overview both require auth.
+Auth tests for the invite-only platform (docs/DECISIONS.md): there is no
+register endpoint, and verify-email / resend-verification exist for
+exactly one flow -- the 3-wrong-passwords lockout, where login flips
+is_verified to False, emails a 10-minute one-time code, and the account
+must verify before it can log in again.
 
-Self-signup is organization-owner-only as of the org-management feature
-(see app/routers/auth.py's RegisterRequest) -- there's no more "pick a
-role" registration; every self-signup becomes an organization_admin with
-a brand-new pending organization. See tests/test_org_lifecycle.py for
-the full pending -> approved -> staffed end-to-end flow.
+Every test that probes the anonymous verify/resend surface with an
+unknown email asserts the response is byte-identical to the response for
+a known email in the same situation -- nothing on that surface may
+reveal whether an address has an account.
 
-Run with: pytest (from backend/), after `createdb sentinelx_test`.
+Also pins the fact that GET /organizations and GET /stats/overview both
+require auth (both were once-open holes).
+
+No SMTP is configured in tests, so codes are read straight off the
+account row, same as the backend prints to its own console in dev.
 """
+
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
-from app.models import Organization, OrganizationStatus, PendingRegistration
+from app.models import Admin
+from tests.helpers import make_admin, make_organization
+
+AUTH_BASE = "/api/v1/auth"
+TEST_PASSWORD = "correct-horse-battery"
 
 
-async def test_register_verify_login_me(client, db_session):
-    register_resp = await client.post(
-        "/api/v1/auth/register",
-        json={
-            "name": "Olivia Owner",
-            "email": "olivia@example.com",
-            "password": "correct-horse-battery",
-            "organization_name": "Aurora Health",
-        },
-    )
-    assert register_resp.status_code == 200
-    assert register_resp.json()["email"] == "olivia@example.com"
+async def _locked_admin(db_session, client, *, email="locked@example.com"):
+    """A verified admin put through the full lockout: the 3rd wrong
+    password trips it (counter resets, is_verified flips, code sent)."""
+    org = await make_organization(db_session)
+    await make_admin(db_session, email=email, organization_id=org.id)
+    for _ in range(2):
+        wrong = await client.post(f"{AUTH_BASE}/login", json={"email": email, "password": "not-the-password"})
+        assert wrong.status_code == 401
 
-    # No SMTP configured in tests, so the code never actually gets emailed
-    # -- read it straight from the pending row, same as the backend prints
-    # to its own console in dev.
-    pending = (
-        await db_session.execute(
-            select(PendingRegistration).where(
-                PendingRegistration.email == "olivia@example.com"
-            )
-        )
-    ).scalar_one()
-    code = pending.verification_code
-    assert code
+    third = await client.post(f"{AUTH_BASE}/login", json={"email": email, "password": "not-the-password"})
+    assert third.status_code == 403
+    assert "verify" in third.json()["detail"].lower()
 
-    verify_resp = await client.post(
-        "/api/v1/auth/verify-email",
-        json={"email": "olivia@example.com", "code": code},
-    )
-    assert verify_resp.status_code == 200
-    assert verify_resp.json()["account_type"] == "admin"
-    assert verify_resp.json()["role"] == "organization_admin"
-
-    org = (
-        await db_session.execute(select(Organization).where(Organization.name == "Aurora Health"))
-    ).scalar_one()
-    assert org.status == OrganizationStatus.pending
-
-    login_resp = await client.post(
-        "/api/v1/auth/login",
-        json={"email": "olivia@example.com", "password": "correct-horse-battery"},
-    )
-    assert login_resp.status_code == 200
-    body = login_resp.json()
-    assert body["user"]["email"] == "olivia@example.com"
-    token = body["access_token"]
-
-    me_resp = await client.get(
-        "/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"}
-    )
-    assert me_resp.status_code == 200
-    me_body = me_resp.json()
-    assert me_body["email"] == "olivia@example.com"
-    assert me_body["organization"]["status"] == "pending"
+    admin = (await db_session.execute(select(Admin).where(Admin.email == email))).scalar_one()
+    await db_session.refresh(admin)
+    assert admin.is_verified is False
+    assert admin.verification_code, "the lockout must generate a code"
+    assert admin.failed_login_attempts == 0, "the counter resets when the lockout trips"
+    return admin
 
 
-async def test_register_requires_an_organization_name(client):
+async def test_register_endpoint_no_longer_exists(client):
+    """Invite-only: the self-signup endpoint was removed entirely."""
     resp = await client.post(
-        "/api/v1/auth/register",
-        json={
-            "name": "No Org",
-            "email": "no.org@example.com",
-            "password": "correct-horse-battery",
-            "organization_name": "   ",
-        },
+        f"{AUTH_BASE}/register",
+        json={"name": "Ghost", "email": "ghost@example.com", "password": TEST_PASSWORD, "organization_name": "Ghost Org"},
     )
-    assert resp.status_code == 400
+    assert resp.status_code in (404, 405)
 
 
-async def test_register_rejects_an_already_registered_email(client, db_session):
-    first = await client.post(
-        "/api/v1/auth/register",
-        json={
-            "name": "First Owner",
-            "email": "dup@example.com",
-            "password": "correct-horse-battery",
-            "organization_name": "First Org",
-        },
-    )
+async def test_verify_email_lockout_full_flow(client, db_session):
+    admin = await _locked_admin(db_session, client, email="flow@example.com")
+
+    # Even the CORRECT password is refused until the account is verified.
+    unverified_login = await client.post(f"{AUTH_BASE}/login", json={"email": "flow@example.com", "password": TEST_PASSWORD})
+    assert unverified_login.status_code == 403
+
+    # A wrong code answers with the generic 400...
+    wrong = await client.post(f"{AUTH_BASE}/verify-email", json={"email": "flow@example.com", "code": "000000"})
+    assert wrong.status_code == 400
+
+    # ...and the right one clears the lockout.
+    ok = await client.post(f"{AUTH_BASE}/verify-email", json={"email": "flow@example.com", "code": admin.verification_code})
+    assert ok.status_code == 200, ok.text
+    body = ok.json()
+    assert body["account_type"] == "admin"
+    assert body["email"] == "flow@example.com"
+
+    await db_session.refresh(admin)
+    assert admin.is_verified is True
+    assert admin.verification_code is None
+    assert admin.verification_code_expires_at is None
+
+    login = await client.post(f"{AUTH_BASE}/login", json={"email": "flow@example.com", "password": TEST_PASSWORD})
+    assert login.status_code == 200
+    assert login.json()["user"]["email"] == "flow@example.com"
+
+
+async def test_verification_code_expires_after_ten_minutes(client, db_session):
+    admin = await _locked_admin(db_session, client, email="expire@example.com")
+
+    admin.verification_code_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await db_session.commit()
+
+    expired = await client.post(f"{AUTH_BASE}/verify-email", json={"email": "expire@example.com", "code": admin.verification_code})
+    assert expired.status_code == 400
+
+    # Resend mints a fresh code (and stays silent about the account).
+    resend = await client.post(f"{AUTH_BASE}/resend-verification", json={"email": "expire@example.com"})
+    assert resend.status_code == 200
+
+    await db_session.refresh(admin)
+    assert admin.verification_code
+    assert admin.verification_code_expires_at > datetime.now(timezone.utc)
+
+    ok = await client.post(f"{AUTH_BASE}/verify-email", json={"email": "expire@example.com", "code": admin.verification_code})
+    assert ok.status_code == 200
+
+
+async def test_verification_code_is_single_use(client, db_session):
+    admin = await _locked_admin(db_session, client, email="once@example.com")
+    code = admin.verification_code
+
+    first = await client.post(f"{AUTH_BASE}/verify-email", json={"email": "once@example.com", "code": code})
     assert first.status_code == 200
 
-    pending = (
-        await db_session.execute(select(PendingRegistration).where(PendingRegistration.email == "dup@example.com"))
-    ).scalar_one()
-    await client.post(
-        "/api/v1/auth/verify-email", json={"email": "dup@example.com", "code": pending.verification_code}
-    )
-
-    second = await client.post(
-        "/api/v1/auth/register",
-        json={
-            "name": "Second Owner",
-            "email": "dup@example.com",
-            "password": "correct-horse-battery",
-            "organization_name": "Second Org",
-        },
-    )
-    assert second.status_code == 400
+    replay = await client.post(f"{AUTH_BASE}/verify-email", json={"email": "once@example.com", "code": code})
+    assert replay.status_code == 400
 
 
-async def test_login_wrong_password_is_rejected(client):
-    await client.post(
-        "/api/v1/auth/register",
-        json={
-            "name": "Another User",
-            "email": "another.user@example.com",
-            "password": "correct-horse-battery",
-            "organization_name": "Another Org",
-        },
-    )
+async def test_resend_verification_rotates_the_code(client, db_session):
+    admin = await _locked_admin(db_session, client, email="rotate@example.com")
+    first_code = admin.verification_code
 
-    resp = await client.post(
-        "/api/v1/auth/login",
-        json={"email": "another.user@example.com", "password": "wrong-password"},
-    )
+    resend = await client.post(f"{AUTH_BASE}/resend-verification", json={"email": "rotate@example.com"})
+    assert resend.status_code == 200
+    assert resend.json() == {"message": "If a verification code was sent to this email, it is in your inbox."}
+
+    await db_session.refresh(admin)
+    assert admin.verification_code != first_code
+
+    stale = await client.post(f"{AUTH_BASE}/verify-email", json={"email": "rotate@example.com", "code": first_code})
+    assert stale.status_code == 400
+
+    fresh = await client.post(f"{AUTH_BASE}/verify-email", json={"email": "rotate@example.com", "code": admin.verification_code})
+    assert fresh.status_code == 200
+
+
+async def test_verify_email_never_reveals_whether_an_email_exists(client, db_session):
+    """Unknown email + wrong code on a real account -> identical bodies."""
+    admin = await _locked_admin(db_session, client, email="quiet@example.com")
+
+    known = await client.post(f"{AUTH_BASE}/verify-email", json={"email": "quiet@example.com", "code": "000000"})
+    unknown = await client.post(f"{AUTH_BASE}/verify-email", json={"email": "nobody@example.com", "code": "000000"})
+
+    assert known.status_code == unknown.status_code == 400
+    assert known.json() == unknown.json()
+    assert admin.email not in unknown.text
+
+
+async def test_resend_verification_never_reveals_whether_an_email_exists(client, db_session):
+    await _locked_admin(db_session, client, email="quiet2@example.com")
+
+    known = await client.post(f"{AUTH_BASE}/resend-verification", json={"email": "quiet2@example.com"})
+    unknown = await client.post(f"{AUTH_BASE}/resend-verification", json={"email": "nobody@example.com"})
+
+    assert known.status_code == unknown.status_code == 200
+    assert known.json() == unknown.json()
+
+
+async def test_verify_email_attempts_are_capped_per_email(client, db_session):
+    """Five wrong codes blow the anonymous attempt budget for that
+    email -- even the correct code is refused until the window clears."""
+    admin = await _locked_admin(db_session, client, email="hammer@example.com")
+
+    for _ in range(5):
+        wrong = await client.post(f"{AUTH_BASE}/verify-email", json={"email": "hammer@example.com", "code": "000000"})
+        assert wrong.status_code == 400
+
+    correct = await client.post(f"{AUTH_BASE}/verify-email", json={"email": "hammer@example.com", "code": admin.verification_code})
+    assert correct.status_code == 400
+
+
+async def test_login_wrong_password_is_rejected(client, db_session):
+    org = await make_organization(db_session)
+    await make_admin(db_session, email="solid@example.com", organization_id=org.id)
+
+    resp = await client.post(f"{AUTH_BASE}/login", json={"email": "solid@example.com", "password": "wrong-password"})
     assert resp.status_code == 401
 
 
 async def test_login_unknown_email_is_rejected(client):
-    resp = await client.post(
-        "/api/v1/auth/login",
-        json={"email": "nobody@example.com", "password": "whatever"},
-    )
+    resp = await client.post(f"{AUTH_BASE}/login", json={"email": "nobody@example.com", "password": "whatever"})
     assert resp.status_code == 401
 
 
 async def test_me_requires_a_token(client):
-    resp = await client.get("/api/v1/auth/me")
+    resp = await client.get(f"{AUTH_BASE}/me")
     assert resp.status_code == 401
 
 
 async def test_organizations_list_requires_auth(client):
-    """GET /organizations used to be open; this is the regression test
-    for that fix."""
+    """GET /organizations was once an open endpoint; now the legacy
+    router is deleted entirely (invite-only, docs/DECISIONS.md), so it
+    is gone (404) rather than merely guarded."""
     resp = await client.get("/api/v1/organizations")
-    assert resp.status_code == 401
+    assert resp.status_code in (401, 404, 405)
 
 
 async def test_stats_overview_requires_auth(client):

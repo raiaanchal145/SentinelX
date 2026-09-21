@@ -33,24 +33,18 @@ async def _owner_token(db_session, client, *, org=None, email="owner@example.com
     return org, owner, token
 
 
-async def test_overview_shows_pending_message_before_full_detail_after_active(client, db_session):
-    org, _owner, token = await _owner_token(db_session, client, org=await make_organization(db_session, status=OrganizationStatus.pending))
+async def test_overview_returns_full_detail_for_active_organization(client, db_session):
+    """Organizations are born active (invite-only, docs/DECISIONS.md),
+    so the owner overview always carries the full payload -- the old
+    pending "message only" shape died with self-signup."""
+    org, _owner, token = await _owner_token(db_session, client)
 
-    pending_resp = await client.get(ORG_BASE, headers=auth(token))
-    assert pending_resp.status_code == 200
-    pending_body = pending_resp.json()
-    assert pending_body["status"] == "pending"
-    assert "message" in pending_body
-    assert "recent_activity" not in pending_body
-
-    org.status = OrganizationStatus.active
-    await db_session.commit()
-
-    active_resp = await client.get(ORG_BASE, headers=auth(token))
-    active_body = active_resp.json()
-    assert active_body["status"] == "active"
-    assert "recent_activity" in active_body
-    assert "members" in active_body
+    resp = await client.get(ORG_BASE, headers=auth(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "active"
+    assert "recent_activity" in body
+    assert "members" in body
 
 
 async def test_non_owner_cannot_reach_organization_endpoints(client, db_session):
@@ -62,11 +56,10 @@ async def test_non_owner_cannot_reach_organization_endpoints(client, db_session)
     assert resp.status_code == 403
 
 
-async def test_pending_suspended_archived_block_member_endpoints_but_not_overview_or_me(client, db_session):
-    org, _owner, token = await _owner_token(db_session, client, org=await make_organization(db_session, status=OrganizationStatus.pending))
+async def test_suspended_archived_block_member_endpoints_but_not_overview_or_me(client, db_session):
+    org, _owner, token = await _owner_token(db_session, client)
 
     for status, code in (
-        (OrganizationStatus.pending, "organization_pending"),
         (OrganizationStatus.suspended, "organization_suspended"),
         (OrganizationStatus.archived, "organization_archived"),
     ):

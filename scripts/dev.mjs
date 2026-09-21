@@ -16,6 +16,7 @@
 
 import http from 'node:http';
 import path from 'node:path';
+import readline from 'node:readline/promises';
 import { spawn, spawnSync } from 'node:child_process';
 import * as log from './lib/log.mjs';
 import {
@@ -165,6 +166,84 @@ function pollHealth(timeoutMs) {
     };
     attempt();
   });
+}
+
+// ---------------------------------------------------------------------------
+// First super_admin bootstrap (invite-only platform, docs/DECISIONS.md).
+// The platform's first account is created by the one-time server-side
+// command `python -m app.create_super_admin` -- never through a public
+// page or endpoint. On a first run (database has no active super_admin)
+// the launcher offers to run it right here; once one exists, regular
+// runs stay completely silent.
+// ---------------------------------------------------------------------------
+
+const SUPER_ADMIN_CHECK = `
+import asyncio
+from sqlalchemy import select, func
+from app.database import AsyncSessionLocal
+from app.models import Admin, AdminLevel
+
+async def main():
+    async with AsyncSessionLocal() as db:
+        n = (await db.execute(
+            select(func.count(Admin.id)).where(
+                Admin.admin_level == AdminLevel.super_admin,
+                Admin.is_active.is_(True),
+            )
+        )).scalar() or 0
+        print("HAS_SUPER_ADMIN" if n > 0 else "NO_SUPER_ADMIN")
+
+asyncio.run(main())
+`;
+
+function hasSuperAdmin(venvPython) {
+  const res = spawnSync(venvPython, ['-c', SUPER_ADMIN_CHECK], {
+    cwd: path.join(ROOT, 'backend'),
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  // A broken check never blocks the normal dev flow -- it only means we
+  // skip the first-run offer, which the developer can run manually.
+  if (res.status !== 0) {
+    log.warn('Could not check for an existing super_admin (continuing without the first-run offer).');
+    return true;
+  }
+  return (res.stdout || '').includes('HAS_SUPER_ADMIN');
+}
+
+async function askYesNo(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question(question)).trim().toLowerCase();
+    return answer === '' || answer === 'y' || answer === 'yes';
+  } finally {
+    rl.close();
+  }
+}
+
+async function ensureFirstSuperAdmin(venvPython) {
+  if (hasSuperAdmin(venvPython)) return; // regular runs: nothing at all
+
+  log.heading('No super_admin exists yet');
+  log.raw("   SentinelX is invite-only: the platform's first account is created");
+  log.raw('   by a one-time, server-side command -- never through a public page.');
+  log.raw('');
+
+  if (process.stdin.isTTY && (await askYesNo('   Create the first super_admin now? [Y/n] '))) {
+    log.step('Running: python -m app.create_super_admin  (password input is hidden)');
+    // stdio inherit so the interactive getpass prompts work in this
+    // terminal; the command itself never prints the password.
+    spawnSync(venvPython, ['-m', 'app.create_super_admin'], {
+      cwd: path.join(ROOT, 'backend'),
+      stdio: 'inherit',
+    });
+    return;
+  }
+
+  log.raw('   Run this when you are ready (from the repo root):');
+  log.raw('     Windows:  cd backend && .venv\\Scripts\\python -m app.create_super_admin');
+  log.raw('     Unix:     cd backend && .venv/bin/python -m app.create_super_admin');
+  log.raw('');
 }
 
 async function isBackendAlreadyHealthy() {
@@ -318,6 +397,7 @@ async function cmdSetup() {
   const databaseUrl = readDatabaseUrl();
   await ensureDatabaseReady(venvPython, databaseUrl);
   runMigrations(venvPython);
+  await ensureFirstSuperAdmin(venvPython);
   log.success('Setup complete.');
 }
 
@@ -340,6 +420,8 @@ async function cmdFullDev() {
 
   const dbSource = await ensureDatabaseReady(venvPython, databaseUrl);
   runMigrations(venvPython);
+  // First-run only: silent once an active super_admin exists.
+  await ensureFirstSuperAdmin(venvPython);
 
   let backendChild = null;
   if (!reuseBackend) {

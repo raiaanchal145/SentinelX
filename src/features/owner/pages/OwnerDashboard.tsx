@@ -28,10 +28,6 @@ function OwnerDashboard() {
     setLoadError("")
     apiGetOrganizationOverview()
       .then((res) => {
-        if (res.status === "pending") {
-          navigate("/organization-pending", { replace: true })
-          return
-        }
         if (res.status === "suspended" || res.status === "archived") {
           navigate("/organization-suspended", { replace: true, state: { status: res.status } })
           return

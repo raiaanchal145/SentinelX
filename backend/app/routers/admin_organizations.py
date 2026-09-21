@@ -28,6 +28,7 @@ from app.models import (
     AssetTag,
     AssetType,
     AuditLog,
+    Invitation,
     Organization,
     OrganizationModule,
     OrganizationStatus,
@@ -36,7 +37,7 @@ from app.models import (
     User,
     UserRole,
 )
-from app.invite_service import check_invitation_rate_limit, create_invitation
+from app.invite_service import check_invitation_rate_limit, create_invitation, rotate_invitation_token
 from app.modules import ALL_MODULE_KEYS
 from app.org_summary import active_owner_count, compute_org_counts
 from app.routers import assets as assets_router
@@ -226,6 +227,10 @@ async def create_organization(
     if existing_email:
         raise _err("email_already_registered", "An account already exists with this email.", status_code=409)
 
+    # Invite-only platform (docs/DECISIONS.md): the organization is born
+    # ACTIVE together with its owner's invitation -- there is no pending
+    # state and no approve step. The owner account itself only comes into
+    # existence when the invitation is accepted (invitations.py).
     org = Organization(
         name=payload.name.strip(),
         industry=payload.industry,
@@ -322,22 +327,6 @@ async def _transition(
     return await _org_row(db, org)
 
 
-@router.post("/{organization_id}/approve")
-async def approve_organization(
-    organization_id: uuid.UUID, request: Request,
-    db: AsyncSession = Depends(get_db), scope: Scope = Depends(require_super_admin),
-):
-    def apply(org: Organization) -> None:
-        org.approved_by_admin_id = scope.account.id
-        org.approved_at = datetime.now(timezone.utc)
-
-    return await _transition(
-        organization_id, db, scope, request,
-        allowed_from={OrganizationStatus.pending}, to=OrganizationStatus.active,
-        action="organization.approve", apply=apply,
-    )
-
-
 @router.post("/{organization_id}/suspend")
 async def suspend_organization(
     organization_id: uuid.UUID, payload: SuspendRequest, request: Request,
@@ -353,7 +342,7 @@ async def suspend_organization(
 
     return await _transition(
         organization_id, db, scope, request,
-        allowed_from={OrganizationStatus.active, OrganizationStatus.pending}, to=OrganizationStatus.suspended,
+        allowed_from={OrganizationStatus.active}, to=OrganizationStatus.suspended,
         action="organization.suspend", apply=apply,
     )
 
@@ -381,7 +370,7 @@ async def archive_organization(
 ):
     return await _transition(
         organization_id, db, scope, request,
-        allowed_from={OrganizationStatus.active, OrganizationStatus.suspended, OrganizationStatus.pending},
+        allowed_from={OrganizationStatus.active, OrganizationStatus.suspended},
         to=OrganizationStatus.archived,
         action="organization.archive", apply=lambda org: None,
     )
@@ -612,6 +601,122 @@ async def list_organization_assets(
         "page_size": page_size,
         "assets": await assets_router._rows_for(db, scope, list(rows), can_edit_all_false=True),
     }
+
+
+@router.get("/{organization_id}/invitations")
+async def list_owner_invitations(
+    organization_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    scope: Scope = Depends(require_super_admin),
+):
+    """The organization's owner-kind invitations, any status -- the
+    platform admin's view of "has the owner accepted yet?". The
+    organization detail page reads this to show the invitation status and
+    offer resend/revoke. Member-kind invitations are the owner's business
+    (GET /organization/invitations), not the platform's."""
+    org = await db.get(Organization, organization_id)
+    if org is None:
+        raise _err("organization_not_found", "Organization not found.", status_code=404)
+
+    rows = (
+        await db.execute(
+            select(Invitation)
+            .where(Invitation.organization_id == organization_id, Invitation.kind == "owner")
+            .order_by(Invitation.created_at.desc())
+        )
+    ).scalars().all()
+
+    now = datetime.now(timezone.utc)
+    return {
+        "invitations": [
+            {
+                "id": str(inv.id),
+                "email": inv.email,
+                "kind": inv.kind,
+                "status": inv.status,
+                # An old row still marked pending whose expiry has passed
+                # reads as expired before anyone clicks the link -- the
+                # accept endpoint would expire it on read anyway.
+                "expired": inv.status == "pending" and inv.expires_at <= now,
+                "created_at": inv.created_at.isoformat() if inv.created_at else None,
+                "expires_at": inv.expires_at.isoformat() if inv.expires_at else None,
+                "accepted_at": inv.accepted_at.isoformat() if inv.accepted_at else None,
+            }
+            for inv in rows
+        ]
+    }
+
+
+@router.post("/{organization_id}/invitations/{invitation_id}/resend")
+async def resend_owner_invitation(
+    organization_id: uuid.UUID, invitation_id: uuid.UUID, request: Request,
+    db: AsyncSession = Depends(get_db), scope: Scope = Depends(require_super_admin),
+):
+    """Rotates the owner invitation's token/expiry on the same row (the
+    old link stops working), exactly like the owner-side resend. Only a
+    still-pending invitation can be resent; an accepted one is done and a
+    revoked one needs a fresh creation path."""
+    invitation = (
+        await db.execute(
+            select(Invitation).where(
+                Invitation.id == invitation_id,
+                Invitation.organization_id == organization_id,
+                Invitation.kind == "owner",
+            )
+        )
+    ).scalar_one_or_none()
+    if invitation is None:
+        raise _err("invitation_not_found", "Invitation not found.", status_code=404)
+    if invitation.status != "pending":
+        raise _err("invitation_not_pending", "Only a pending invitation can be resent.", status_code=409)
+
+    await check_invitation_rate_limit(db, organization_id)
+    raw_token = rotate_invitation_token(invitation)
+    await audit_from_scope(
+        db, scope, "invitation.resend", organization_id=organization_id,
+        target_type="invitation", target_id=invitation.id, request=request,
+    )
+    await db.commit()
+
+    org = await db.get(Organization, organization_id)
+    invite_link = f"{settings.frontend_url}/accept-invite?token={raw_token}"
+    try:
+        send_invitation_email(
+            invitation.email, org.name if org else "SentinelX", "organization owner",
+            invite_link, invitation.expires_at,
+        )
+    except Exception as exc:
+        print(f"[SentinelX] Failed to send invitation email to {invitation.email}: {exc}")
+
+    return {"id": str(invitation.id), "status": invitation.status, "expires_at": invitation.expires_at.isoformat()}
+
+
+@router.delete("/{organization_id}/invitations/{invitation_id}")
+async def revoke_owner_invitation(
+    organization_id: uuid.UUID, invitation_id: uuid.UUID, request: Request,
+    db: AsyncSession = Depends(get_db), scope: Scope = Depends(require_super_admin),
+):
+    invitation = (
+        await db.execute(
+            select(Invitation).where(
+                Invitation.id == invitation_id,
+                Invitation.organization_id == organization_id,
+                Invitation.kind == "owner",
+            )
+        )
+    ).scalar_one_or_none()
+    if invitation is None:
+        raise _err("invitation_not_found", "Invitation not found.", status_code=404)
+    if invitation.status != "pending":
+        raise _err("invitation_not_pending", "Only a pending invitation can be revoked.", status_code=409)
+
+    invitation.status = "revoked"
+    await audit_from_scope(
+        db, scope, "invitation.revoke", organization_id=organization_id,
+        target_type="invitation", target_id=invitation.id, request=request,
+    )
+    await db.commit()
+    return {"id": str(invitation.id), "status": invitation.status}
 
 
 @router.get("/{organization_id}/activity")

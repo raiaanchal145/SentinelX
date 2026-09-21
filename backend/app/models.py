@@ -55,7 +55,12 @@ class AdminLevel(str, enum.Enum):
 
 
 class OrganizationStatus(str, enum.Enum):
-    pending = "pending"
+    # Invite-only platform (docs/DECISIONS.md): organizations are created
+    # ACTIVE by the platform admin together with the owner's invitation --
+    # there was never a public self-signup for the `pending` state to
+    # gate, so the value (and the whole approve flow) is gone. The
+    # migration that dropped it converted any historical pending rows to
+    # active first.
     active = "active"
     suspended = "suspended"
     archived = "archived"
@@ -249,8 +254,10 @@ class Organization(Base):
     )
     # NULL = unlimited. Counts active members + owners + pending invitations.
     max_members: Mapped[int | None] = mapped_column(Integer)
-    # "self_signup" | "platform_admin" -- how the organization came to exist.
-    created_via: Mapped[str] = mapped_column(String(20), nullable=False, default="self_signup")
+    # How the organization came to exist. Only "platform_admin" is ever
+    # written since self-signup was removed (docs/DECISIONS.md); the
+    # column stays so historical rows keep their origin recorded.
+    created_via: Mapped[str] = mapped_column(String(20), nullable=False, default="platform_admin")
     # Both admin FKs point admins <- organizations while admins.organization_id
     # points organizations <- admins -- a cycle Base.metadata can't sort on its
     # own, which made create_all/drop_all (the entire pytest fixture) raise
@@ -335,9 +342,9 @@ class AccountEmail(Base):
     level. Postgres has no way to put a single UNIQUE constraint across
     two different tables, so every admin/user row also gets exactly one
     row here, written in the same transaction as the admin/user insert.
-    The register endpoint checks/reserves an email here instead of
-    querying admins and users separately, which is also what makes the
-    cross-table check race-safe under concurrent signups.
+    All account-creation paths (invitation accept, create_super_admin)
+    reserve the email here instead of querying admins and users
+    separately, which makes the cross-table check race-safe.
     """
 
     __tablename__ = "account_emails"
@@ -395,55 +402,6 @@ class User(Base):
 
     organization: Mapped["Organization"] = relationship(back_populates="users")
     team: Mapped["Team | None"] = relationship(back_populates="members")
-
-
-class PendingRegistration(Base):
-    """
-    A registration that has been submitted but not yet email-verified.
-
-    No row is created in `admins` or `users` here -- verify-email()
-    creates the row in whichever table account_type points to, using
-    `role` for a user or `admin_level` for an admin (the CHECK constraint
-    below keeps exactly one of those populated). organization_name is
-    used to create a brand-new organization at verify time: for an
-    organization_admin signup (per the spec, self-registering as an org
-    admin always creates a new org), and, since there's no "pick your
-    org" UI yet, as the default for a plain user signup too (see the
-    register endpoint for the exact rule).
-    """
-
-    __tablename__ = "pending_registrations"
-
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    name: Mapped[str] = mapped_column(String(150), nullable=False)
-    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-
-    account_type: Mapped[str] = mapped_column(String(10), nullable=False, default="user")
-    role: Mapped[UserRole | None] = mapped_column(Enum(UserRole, name="user_role"))
-    admin_level: Mapped[AdminLevel | None] = mapped_column(Enum(AdminLevel, name="admin_level"))
-    organization_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("organizations.id", ondelete="CASCADE")
-    )
-    organization_name: Mapped[str | None] = mapped_column(String(200))
-    # Only meaningful alongside organization_name, for a self-signup
-    # organization_admin -- carries the register form's optional
-    # industry field across to verify_email()'s Organization creation.
-    organization_industry: Mapped[str | None] = mapped_column(String(120))
-
-    verification_code: Mapped[str] = mapped_column(String(10), nullable=False)
-    verification_code_expires_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-
-    __table_args__ = (
-        CheckConstraint(
-            "(account_type = 'admin' AND admin_level IS NOT NULL AND role IS NULL) OR "
-            "(account_type = 'user' AND role IS NOT NULL AND admin_level IS NULL)",
-            name="ck_pending_registrations_type_matches_fields",
-        ),
-    )
 
 
 class OrganizationModule(Base):
