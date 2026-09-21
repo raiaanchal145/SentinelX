@@ -411,3 +411,11 @@ export function apiUpdateSocAnalystOrganizations(adminId: string, organizationId
     { method: "PUT", body: JSON.stringify({ organization_ids: organizationIds }) },
   )
 }
+
+/** Self-service equivalent for the calling platform_soc_analyst -- see
+ * docs/API_CONTRACT.md ("GET /me"). GET /admin/soc-analysts above is
+ * super_admin-only, so this is what the SOC Team member's own "SOC
+ * queue" page reads to show their assigned organizations. */
+export function apiGetMyAssignedOrganizations() {
+  return request<{ assigned_organizations: SocAnalystAssignedOrg[] }>("/admin/soc-analysts/me")
+}

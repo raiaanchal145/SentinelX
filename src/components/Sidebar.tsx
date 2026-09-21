@@ -67,6 +67,11 @@ function Sidebar() {
       badgeCount: pendingOrgCount,
     },
     {
+      name: "SOC Team",
+      icon: Users,
+      path: "/admin/soc-team",
+    },
+    {
       name: "Admin Dashboard",
       icon: LayoutDashboard,
       path: "/admin",
@@ -84,11 +89,6 @@ function Sidebar() {
       name: "IT Oversight",
       icon: Wrench,
       path: "/admin/it-oversight",
-    },
-    {
-      name: "Users & Access",
-      icon: Users,
-      path: "/admin",
     },
     {
       name: "Assets",
@@ -179,14 +179,31 @@ function Sidebar() {
     },
   ]
 
+  /*
+    PLATFORM SOC ANALYST
+    Restricted admin-side navigation -- see Prompt B section A5. The
+    real triage queue arrives with the alerts work; for now this is a
+    placeholder plus the analyst's own assigned organizations.
+  */
+
+  const platformSocAnalystItems: NavItem[] = [
+    {
+      name: "SOC Queue",
+      icon: ShieldAlert,
+      path: "/admin/soc-queue",
+    },
+  ]
+
   const items =
     role === "super_admin"
       ? superAdminItems
       : role === "organization_admin"
         ? organizationAdminItems
-        : role === "soc_analyst"
-          ? socItems
-          : itItems
+        : role === "platform_soc_analyst"
+          ? platformSocAnalystItems
+          : role === "soc_analyst"
+            ? socItems
+            : itItems
 
   return (
     <aside className="flex min-h-screen w-72 flex-col border-r border-white/10 bg-surface-sunken">
