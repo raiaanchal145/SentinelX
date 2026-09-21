@@ -322,6 +322,16 @@ export function getSocOversight(state: StoreState, scope: Scope) {
 
   const offlineAssets = state.assets.filter((a) => inScope(a.organizationId, scope) && a.agentStatus === "offline")
 
+  // Exposed as full rows (not just the KPI count above) so the admin
+  // oversight page can offer a reassign action per alert.
+  const unassignedAlerts = unassigned
+    .slice()
+    .sort((a, b) => {
+      const sev = SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]
+      if (sev !== 0) return sev
+      return new Date(a.firstSeenAt).getTime() - new Date(b.firstSeenAt).getTime()
+    })
+
   const attention = [
     ...alerts
       .filter((a) => a.severity === "critical" && a.status === "new")
@@ -344,6 +354,7 @@ export function getSocOversight(state: StoreState, scope: Scope) {
     analystWorkload,
     topRules,
     offlineAssets,
+    unassignedAlerts,
     attention,
   }
 }
