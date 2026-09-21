@@ -197,9 +197,9 @@ async def test_stats_overview_counts_are_isolated_by_tenant(client, db_session):
     )
 
     db_session.add_all([
-        Asset(organization_id=org_a.id, hostname="org-a-web-1", asset_type=AssetType.server),
-        Asset(organization_id=org_a.id, hostname="org-a-web-2", asset_type=AssetType.server),
-        Asset(organization_id=org_b.id, hostname="org-b-db-1", asset_type=AssetType.database),
+        Asset(organization_id=org_a.id, name="org-a-web-1", hostname="org-a-web-1", asset_type=AssetType.server),
+        Asset(organization_id=org_a.id, name="org-a-web-2", hostname="org-a-web-2", asset_type=AssetType.server),
+        Asset(organization_id=org_b.id, name="org-b-db-1", hostname="org-b-db-1", asset_type=AssetType.database),
     ])
     await db_session.commit()
 
