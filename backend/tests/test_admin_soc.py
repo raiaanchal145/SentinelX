@@ -61,6 +61,25 @@ async def test_list_soc_analysts_includes_assigned_organizations(client, db_sess
     assert [o["name"] for o in body[0]["assigned_organizations"]] == ["Managed Co"]
 
 
+async def test_my_assigned_organizations_returns_own_assignments(client, db_session):
+    soc = await make_admin(db_session, email="soc@example.com", admin_level=AdminLevel.platform_soc_analyst)
+    org = await make_organization(db_session, name="Managed Co", soc_mode=SocMode.managed)
+    db_session.add(SocOrganizationAssignment(admin_id=soc.id, organization_id=org.id))
+    await db_session.commit()
+    token = await login(client, soc.email)
+
+    resp = await client.get(f"{SOC_BASE}/me", headers=auth(token))
+    assert resp.status_code == 200
+    assert [o["name"] for o in resp.json()["assigned_organizations"]] == ["Managed Co"]
+
+
+async def test_my_assigned_organizations_rejects_non_platform_soc(client, db_session):
+    token = await _super_admin_token(client, db_session)
+    resp = await client.get(f"{SOC_BASE}/me", headers=auth(token))
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "platform_soc_required"
+
+
 async def test_patch_soc_analyst_toggles_is_active(client, db_session):
     token = await _super_admin_token(client, db_session)
     soc = await make_admin(db_session, email="soc@example.com", admin_level=AdminLevel.platform_soc_analyst)

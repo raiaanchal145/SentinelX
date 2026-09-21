@@ -92,12 +92,13 @@ An invalid status transition is `409 invalid_status_transition`;
 an unknown organization id is `404 organization_not_found` everywhere
 in this router.
 
-## Platform admin: `/api/v1/admin/soc-analysts` (super_admin-only)
+## Platform admin: `/api/v1/admin/soc-analysts` (super_admin-only except `GET /me`)
 
 | Method & path | Notes |
 |---|---|
 | `POST /` | `{email}`. Sends a `platform_soc`-kind invitation (no organization). `409 email_already_registered` if the email already has an account. |
 | `GET /` | Every `platform_soc_analyst` admin, each with `assigned_organizations`. |
+| `GET /me` | **platform_soc_analyst-only** (not super_admin). `{assigned_organizations}` for the calling analyst -- added so the SOC Team page's "your assigned organizations" placeholder has a real endpoint to read, since `GET /` above is super_admin-only. |
 | `PATCH /{admin_id}` | `{is_active}`. |
 | `PUT /{admin_id}/organizations` | `{organization_ids: [uuid, ...]}`. Replaces the full assignment set. Every id must currently be `soc_mode=managed` and not `archived`, or the whole request is rejected with `400 invalid_organization_assignment` (naming the offending ids) -- no partial application. |
 

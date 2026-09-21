@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.access import require_super_admin
+from app.access import require_platform_soc, require_super_admin
 from app.audit import audit_from_scope
 from app.config import settings
 from app.database import get_db
@@ -80,6 +80,23 @@ async def invite_soc_analyst(
         print(f"[SentinelX] Failed to send invitation email to {email}: {exc}")
 
     return {"id": str(invitation.id), "email": email, "status": invitation.status}
+
+
+@router.get("/me")
+async def my_assigned_organizations(
+    db: AsyncSession = Depends(get_db),
+    scope: Scope = Depends(require_platform_soc),
+):
+    """
+    Self-service equivalent of list_soc_analysts()'s per-analyst
+    assigned_organizations, for the platform_soc_analyst's own "SOC
+    queue" placeholder page -- GET /admin/soc-analysts (below) is
+    super_admin-only, so a platform_soc_analyst has no other way to see
+    their own assignments. Declared before "/{admin_id}"-shaped routes
+    would matter (there are none for GET in this router) so there's no
+    literal-vs-param collision to worry about.
+    """
+    return {"assigned_organizations": await _assigned_organizations(db, scope.account.id)}
 
 
 @router.get("")
