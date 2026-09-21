@@ -59,6 +59,7 @@ __all__ = [
     "ACCESS_WRITE",
     "ROLE_DEFAULT_MODULES",
     "get_effective_access",
+    "seed_default_modules",
     "require_platform_admin",
     "require_super_admin",
     "require_org_owner",
@@ -109,6 +110,18 @@ ROLE_DEFAULT_MODULES: dict[UserRole, dict[str, str]] = {
 SOC_MODE_GATED_MODULES: dict[UserRole, set[str]] = {
     UserRole.soc_analyst: {ModuleKey.soc.value, ModuleKey.incidents.value},
 }
+
+
+async def seed_default_modules(db: AsyncSession, organization_id: uuid.UUID) -> None:
+    """
+    Every module key enabled -- called once, when a new organization is
+    created (self-signup or platform-admin-created), so
+    organization_modules always has a full set of rows and
+    get_effective_access() never treats a brand-new organization as
+    having nothing turned on (a missing row reads as disabled).
+    """
+    for key in ALL_MODULE_KEYS:
+        db.add(OrganizationModule(organization_id=organization_id, module_key=key, enabled=True))
 
 
 async def get_effective_access(

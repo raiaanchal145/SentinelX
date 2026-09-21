@@ -1,16 +1,19 @@
 """
-Organization endpoints.
+Legacy organization endpoints, superseded by the platform/owner surfaces
+in admin_organizations.py and organization.py but kept for whatever
+still points at them.
 
-Split out of app/main.py. Both endpoints now go through app/scope.py:
-
-- POST requires an admin (require_admin) and records the creator, same
-  as before.
-- GET used to return every organization in the platform to anyone
-  merely authenticated -- a real tenant-isolation gap, since an
-  organization_admin (or any `users` account) could see every other
-  organization's name/industry/environment. It's now filtered by the
-  caller's own organization_id: a super_admin still sees all of them,
-  everyone else sees only their own.
+Both are now super_admin-only: an organization owner reads their own
+organization through GET /organization (organization.py), and a
+platform admin manages every organization through /admin/organizations
+(admin_organizations.py) -- there is no remaining legitimate caller for
+"list every organization" or "create a bare organization with no owner"
+below super_admin. GET used to return every organization in the
+platform to anyone merely authenticated (a real tenant-isolation gap,
+fixed once already by scoping it to the caller's own organization); it's
+now closed further per the spec's "no anonymous endpoint may list
+organizations" -- scoped is still one org too many for a non-platform
+caller to reach through this path when a dedicated one exists.
 """
 
 from fastapi import APIRouter, Depends
@@ -18,9 +21,10 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.access import require_super_admin, seed_default_modules
 from app.database import get_db
 from app.models import Organization
-from app.scope import Scope, org_scope, require_admin
+from app.scope import Scope
 
 router = APIRouter(prefix="/api/v1/organizations", tags=["organizations"])
 
@@ -48,13 +52,13 @@ class OrganizationOut(BaseModel):
 async def create_organization(
     payload: OrganizationCreate,
     db: AsyncSession = Depends(get_db),
-    scope: Scope = Depends(require_admin),
+    scope: Scope = Depends(require_super_admin),
 ):
     """
-    Admin-only. Per the schema split, every organization should know
-    which admin created it (organizations.created_by_admin_id) -- this
-    endpoint used to be open with no such link; now that `admins` exists,
-    it requires an authenticated admin and records them as the creator.
+    super_admin-only. Creates an already-active, platform-created
+    organization with every module enabled and no owner -- prefer
+    POST /admin/organizations, which also sends the owner an
+    invitation; this bare version is kept only for compatibility.
     """
     org = Organization(
         name=payload.name,
@@ -62,8 +66,11 @@ async def create_organization(
         environment=payload.environment,
         timezone=payload.timezone,
         created_by_admin_id=scope.account.id,
+        created_via="platform_admin",
     )
     db.add(org)
+    await db.flush()
+    await seed_default_modules(db, org.id)
     await db.commit()
     await db.refresh(org)
     return OrganizationOut(
@@ -72,22 +79,16 @@ async def create_organization(
         industry=org.industry,
         environment=org.environment,
         timezone=org.timezone,
-        status=org.status,
+        status=org.status.value,
     )
 
 
 @router.get("")
 async def list_organizations(
     db: AsyncSession = Depends(get_db),
-    scope: Scope = Depends(org_scope),
+    scope: Scope = Depends(require_super_admin),
 ):
-    # scoped_to_org() doesn't apply here: it filters child tables by their
-    # organization_id foreign key, but Organization's own primary key IS
-    # the organization id -- so the equivalent filter is `Organization.id
-    # == scope.organization_id` directly, not scoped_to_org().
     stmt = select(Organization).order_by(Organization.created_at.desc())
-    if scope.organization_id is not None:
-        stmt = stmt.where(Organization.id == scope.organization_id)
     rows = (await db.execute(stmt)).scalars().all()
     return [
         {
@@ -96,7 +97,7 @@ async def list_organizations(
             "industry": org.industry,
             "environment": org.environment,
             "timezone": org.timezone,
-            "status": org.status,
+            "status": org.status.value,
             "created_at": org.created_at.isoformat() if org.created_at else None,
         }
         for org in rows

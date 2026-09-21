@@ -231,7 +231,18 @@ def upgrade() -> None:
     op.create_index("ix_soc_organization_assignments_organization_id", "soc_organization_assignments", ["organization_id"])
 
     # =====================================================================
-    # PART 6: backfill -- every existing organization gets every module
+    # PART 6: pending_registrations gets an optional organization_industry
+    # column, alongside the existing organization_name, so the simplified
+    # (organization-owner-only) register form can carry an industry value
+    # through to the Organization created in verify_email().
+    # =====================================================================
+    op.add_column(
+        "pending_registrations",
+        sa.Column("organization_industry", sa.String(length=120), nullable=True),
+    )
+
+    # =====================================================================
+    # PART 7: backfill -- every existing organization gets every module
     # key enabled, so nothing anyone could already do regresses.
     # =====================================================================
     module_values_sql = ", ".join(f"('{key}')" for key in MODULE_KEYS)
@@ -244,7 +255,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Reverse PART 6 is implicit in dropping organization_modules below.
+    # Reverse PART 7 is implicit in dropping organization_modules below.
+
+    # Reverse PART 6
+    op.drop_column("pending_registrations", "organization_industry")
 
     # Reverse PART 5
     op.drop_table("soc_organization_assignments")

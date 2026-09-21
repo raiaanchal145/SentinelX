@@ -419,6 +419,10 @@ class PendingRegistration(Base):
         ForeignKey("organizations.id", ondelete="CASCADE")
     )
     organization_name: Mapped[str | None] = mapped_column(String(200))
+    # Only meaningful alongside organization_name, for a self-signup
+    # organization_admin -- carries the register form's optional
+    # industry field across to verify_email()'s Organization creation.
+    organization_industry: Mapped[str | None] = mapped_column(String(120))
 
     verification_code: Mapped[str] = mapped_column(String(10), nullable=False)
     verification_code_expires_at: Mapped[datetime] = mapped_column(
