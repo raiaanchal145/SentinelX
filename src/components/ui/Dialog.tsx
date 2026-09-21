@@ -13,6 +13,17 @@ type DialogProps = {
 function Dialog({ open, onClose, title, children, footer }: DialogProps) {
   const panelRef = useRef<HTMLDivElement>(null)
 
+  // Callers almost always pass an inline (or otherwise per-render-fresh)
+  // onClose, e.g. onClose={() => setOpen(false)}. Reading it through a
+  // ref -- instead of putting it in the effect's dependency array --
+  // means typing into a field inside the dialog (which re-renders the
+  // caller and hands us a new onClose reference every keystroke) can't
+  // re-trigger this effect. Without this, the effect below re-ran on
+  // every keystroke and called panelRef.current?.focus(), stealing
+  // focus off the input the user was typing into after every character.
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+
   useEffect(() => {
     if (!open) return
 
@@ -28,7 +39,7 @@ function Dialog({ open, onClose, title, children, footer }: DialogProps) {
 
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        onClose()
+        onCloseRef.current()
         return
       }
 
@@ -67,7 +78,11 @@ function Dialog({ open, onClose, title, children, footer }: DialogProps) {
       document.removeEventListener("keydown", onKey)
       document.body.style.overflow = previousOverflow
     }
-  }, [open, onClose])
+    // Deliberately just [open]: this effect should only run when the
+    // dialog opens/closes, not on every render where onClose is a new
+    // function reference -- see the onCloseRef comment above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
 
   if (!open) return null
 
