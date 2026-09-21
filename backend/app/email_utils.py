@@ -100,3 +100,58 @@ def send_password_reset_email(to_email: str, name: str, code: str) -> None:
     with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, context=context) as server:
         server.login(settings.smtp_user, settings.smtp_password)
         server.sendmail(settings.smtp_user, to_email, message.as_string())
+
+
+def send_invitation_email(
+    to_email: str,
+    organization_name: str,
+    role_label: str,
+    invite_link: str,
+    expires_at,
+) -> None:
+    """Emails an invitation link via SMTP (Gmail by default).
+
+    Same fallback as the other senders in this file: if SMTP isn't
+    configured, the link is printed to the server console instead of
+    raising, so the invite -> accept flow still works locally before a
+    teammate sets up SMTP.
+    """
+    expires_label = expires_at.strftime("%B %d, %Y")
+
+    if not settings.smtp_user or not settings.smtp_password:
+        print(
+            f"[SentinelX] SMTP not configured -- invitation link for "
+            f"{to_email} ({organization_name}, {role_label}): {invite_link} "
+            f"(expires {expires_label})"
+        )
+        return
+
+    message = MIMEMultipart("alternative")
+    message["Subject"] = f"You've been invited to {organization_name} on SentinelX"
+    message["From"] = f"{settings.smtp_from_name} <{settings.smtp_user}>"
+    message["To"] = to_email
+
+    text_body = (
+        f"You've been invited to join {organization_name} on SentinelX as "
+        f"{role_label}.\n\n"
+        f"Accept the invitation: {invite_link}\n\n"
+        f"This invitation expires on {expires_label}.\n\n"
+        f"If you weren't expecting this, you can ignore this email."
+    )
+
+    html_body = f"""
+    <div style="font-family: Arial, sans-serif; color: #0b1f33;">
+      <p>You've been invited to join <strong>{organization_name}</strong> on SentinelX as <strong>{role_label}</strong>.</p>
+      <p><a href="{invite_link}" style="display: inline-block; padding: 10px 20px; background: #1f6feb; color: #fff; text-decoration: none; border-radius: 6px;">Accept invitation</a></p>
+      <p style="color: #888;">This invitation expires on {expires_label}.</p>
+      <p style="color: #888;">If you weren't expecting this, you can ignore this email.</p>
+    </div>
+    """
+
+    message.attach(MIMEText(text_body, "plain"))
+    message.attach(MIMEText(html_body, "html"))
+
+    context = ssl.create_default_context()
+    with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, context=context) as server:
+        server.login(settings.smtp_user, settings.smtp_password)
+        server.sendmail(settings.smtp_user, to_email, message.as_string())

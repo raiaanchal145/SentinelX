@@ -34,8 +34,11 @@ function Register() {
   const [showConfirmPassword, setShowConfirmPassword] =
     useState(false)
 
-  const [role, setRole] =
-    useState("soc_analyst")
+  const [organizationName, setOrganizationName] =
+    useState("")
+
+  const [industry, setIndustry] =
+    useState("")
 
   const [error, setError] =
     useState("")
@@ -58,7 +61,8 @@ function Register() {
       !name.trim() ||
       !email.trim() ||
       !password.trim() ||
-      !confirmPassword.trim()
+      !confirmPassword.trim() ||
+      !organizationName.trim()
     ) {
       setError(
         "Please complete all fields.",
@@ -103,11 +107,12 @@ function Register() {
         name.trim(),
         registeredEmail,
         password,
-        role,
+        organizationName.trim(),
+        industry.trim() || undefined,
       )
 
       setSuccess(
-        "Verification code sent. Check your email to finish creating your account...",
+        "Verification code sent. Check your email to finish creating your account. Once verified, your organization will be pending platform approval before you can sign in.",
       )
 
       setTimeout(() => {
@@ -295,33 +300,45 @@ function Register() {
           <div>
 
             <label className="mb-2 block text-sm">
-              Role
+              Organization Name
             </label>
 
-            <select
-              value={role}
+            <input
+              value={organizationName}
               onChange={(e) =>
-                setRole(
+                setOrganizationName(
                   e.target.value,
                 )
               }
               className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 outline-none focus:border-brand-500"
-            >
+              required
+            />
 
-              <option value="soc_analyst">
-                SOC Analyst
-              </option>
+          </div>
 
-              <option value="it_developer">
-                IT / Developer
-              </option>
+          <div>
 
-            </select>
+            <label className="mb-2 block text-sm">
+              Industry <span className="text-fg-muted">(optional)</span>
+            </label>
+
+            <input
+              value={industry}
+              onChange={(e) =>
+                setIndustry(
+                  e.target.value,
+                )
+              }
+              className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 outline-none focus:border-brand-500"
+            />
 
             <p className="mt-2 text-xs text-fg-muted">
-              Super Administrator access is
-              automatically assigned only to the
-              three configured administrator emails.
+              Creating an account sets up a new
+              organization as its owner. A platform
+              administrator must approve it before
+              anyone can sign in. Super Administrator
+              access is automatically assigned only
+              to the configured administrator emails.
             </p>
 
           </div>

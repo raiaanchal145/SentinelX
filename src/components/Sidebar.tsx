@@ -4,34 +4,79 @@ import {
   ClipboardList,
   LayoutDashboard,
   Server,
+  Settings,
   ShieldAlert,
   ShieldCheck,
   Users,
+  UsersRound,
   Wrench,
 } from "lucide-react"
 
+import type { LucideIcon } from "lucide-react"
+import { useEffect, useState } from "react"
 import { NavLink } from "react-router-dom"
+
+import { apiListOrganizations } from "../lib/api"
+import Badge from "./ui/Badge"
+
+type NavItem = {
+  name: string
+  icon: LucideIcon
+  path: string
+  /** Rendered as a Badge next to the label -- omit for no badge. */
+  badgeCount?: number | null
+}
 
 function Sidebar() {
   const role = localStorage.getItem(
     "sentinelx_role",
   )
 
+  // Cheap "how many organizations need my attention" count for the nav
+  // badge -- fetched once per Sidebar mount (every admin page renders
+  // its own Sidebar, so this refreshes on every admin-side navigation,
+  // including right after approving/rejecting one). super_admin-only:
+  // the endpoint is 403 for anyone else.
+  const [pendingOrgCount, setPendingOrgCount] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (role !== "super_admin") return
+    let cancelled = false
+    apiListOrganizations({ status: "pending", page_size: 1 })
+      .then((res) => {
+        if (!cancelled) setPendingOrgCount(res.total)
+      })
+      .catch(() => {
+        if (!cancelled) setPendingOrgCount(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [role])
+
   /*
     SUPER ADMIN
     Can see everything
   */
 
-  const superAdminItems = [
+  const superAdminItems: NavItem[] = [
+    {
+      name: "Organizations",
+      icon: Building2,
+      path: "/admin/organizations",
+      // Rendered as a Badge next to the label below -- how many
+      // organizations are waiting on platform approval right now.
+      badgeCount: pendingOrgCount,
+    },
+    {
+      name: "SOC Team",
+      icon: Users,
+      path: "/admin/soc-team",
+    },
     {
       name: "Admin Dashboard",
       icon: LayoutDashboard,
       path: "/admin",
-    },
-    {
-      name: "Organization Dashboard",
-      icon: Building2,
-      path: "/organization-dashboard",
     },
     {
       // Was "/soc-dashboard", which only ever redirected into the
@@ -46,11 +91,6 @@ function Sidebar() {
       name: "IT Oversight",
       icon: Wrench,
       path: "/admin/it-oversight",
-    },
-    {
-      name: "Users & Access",
-      icon: Users,
-      path: "/admin",
     },
     {
       name: "Assets",
@@ -72,11 +112,26 @@ function Sidebar() {
     to their one organization by scopeFor() rather than "all".
   */
 
-  const organizationAdminItems = [
+  const organizationAdminItems: NavItem[] = [
     {
-      name: "Organization Dashboard",
+      name: "Dashboard",
       icon: Building2,
-      path: "/organization-dashboard",
+      path: "/organization",
+    },
+    {
+      name: "Members",
+      icon: Users,
+      path: "/organization/members",
+    },
+    {
+      name: "Teams",
+      icon: UsersRound,
+      path: "/organization/teams",
+    },
+    {
+      name: "Access",
+      icon: ShieldCheck,
+      path: "/organization/access",
     },
     {
       name: "SOC Oversight",
@@ -88,6 +143,11 @@ function Sidebar() {
       icon: Wrench,
       path: "/admin/it-oversight",
     },
+    {
+      name: "Settings",
+      icon: Settings,
+      path: "/organization/settings",
+    },
   ]
 
   /*
@@ -95,7 +155,7 @@ function Sidebar() {
     Only SOC-related information
   */
 
-  const socItems = [
+  const socItems: NavItem[] = [
     {
       name: "SOC Dashboard",
       icon: LayoutDashboard,
@@ -123,7 +183,7 @@ function Sidebar() {
     Only IT-related information
   */
 
-  const itItems = [
+  const itItems: NavItem[] = [
     {
       name: "IT Dashboard",
       icon: LayoutDashboard,
@@ -141,14 +201,31 @@ function Sidebar() {
     },
   ]
 
+  /*
+    PLATFORM SOC ANALYST
+    Restricted admin-side navigation -- see Prompt B section A5. The
+    real triage queue arrives with the alerts work; for now this is a
+    placeholder plus the analyst's own assigned organizations.
+  */
+
+  const platformSocAnalystItems: NavItem[] = [
+    {
+      name: "SOC Queue",
+      icon: ShieldAlert,
+      path: "/admin/soc-queue",
+    },
+  ]
+
   const items =
     role === "super_admin"
       ? superAdminItems
       : role === "organization_admin"
         ? organizationAdminItems
-        : role === "soc_analyst"
-          ? socItems
-          : itItems
+        : role === "platform_soc_analyst"
+          ? platformSocAnalystItems
+          : role === "soc_analyst"
+            ? socItems
+            : itItems
 
   return (
     <aside className="flex min-h-screen w-72 flex-col border-r border-white/10 bg-surface-sunken">
@@ -195,6 +272,7 @@ function Sidebar() {
 
         {items.map((item) => {
           const Icon = item.icon
+          const badgeCount = item.badgeCount
 
           return (
             <NavLink
@@ -211,7 +289,9 @@ function Sidebar() {
 
               <Icon size={19} />
 
-              {item.name}
+              <span className="flex-1">{item.name}</span>
+
+              {!!badgeCount && <Badge tone="brand">{badgeCount}</Badge>}
 
             </NavLink>
           )

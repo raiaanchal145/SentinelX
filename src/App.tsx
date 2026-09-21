@@ -5,14 +5,28 @@ import Register from "./pages/Register"
 import VerifyEmail from "./pages/VerifyEmail"
 import ForgotPassword from "./pages/ForgotPassword"
 import ResetPassword from "./pages/ResetPassword"
+import AcceptInvite from "./pages/AcceptInvite"
+import OrganizationPending from "./pages/OrganizationPending"
+import OrganizationSuspended from "./pages/OrganizationSuspended"
+import NoAccess from "./pages/NoAccess"
 
 import AdminDashboard from "./pages/AdminDashboard"
 import OrganizationDashboard from "./pages/OrganizationDashboard"
 
 import SocOversightAdmin from "./features/admin/pages/SocOversight"
 import ItOversightAdmin from "./features/admin/pages/ItOversight"
+import Organizations from "./features/admin/pages/Organizations"
+import OrganizationDetail from "./features/admin/pages/OrganizationDetail"
+import SocTeam from "./features/admin/pages/SocTeam"
+import SocQueue from "./features/admin/pages/SocQueue"
+import OwnerDashboard from "./features/owner/pages/OwnerDashboard"
+import OwnerMembers from "./features/owner/pages/OwnerMembers"
+import OwnerTeams from "./features/owner/pages/OwnerTeams"
+import OwnerAccess from "./features/owner/pages/OwnerAccess"
+import OwnerSettings from "./features/owner/pages/OwnerSettings"
 
 import UserLayout from "./layouts/UserLayout"
+import ModuleGuard from "./components/ModuleGuard"
 
 import SocOverview from "./features/soc/pages/SocOverview"
 import SocAlerts from "./features/soc/pages/SocAlerts"
@@ -144,6 +158,120 @@ function App() {
         element={<ResetPassword />}
       />
 
+      <Route
+        path="/accept-invite"
+        element={<AcceptInvite />}
+      />
+
+      {/* ORGANIZATION STATUS SCREENS -- reachable with or without an
+          active session (Login redirects here on organization_pending/
+          organization_suspended/organization_archived; a later guard
+          on protected routes will also redirect here if an
+          already-logged-in session's organization changes status). */}
+
+      <Route
+        path="/organization-pending"
+        element={<OrganizationPending />}
+      />
+
+      <Route
+        path="/organization-suspended"
+        element={<OrganizationSuspended />}
+      />
+
+      <Route
+        path="/no-access"
+        element={<NoAccess />}
+      />
+
+      {/* PLATFORM ADMIN: ORGANIZATIONS (Prompt B section A -- super_admin's
+          new home; see homePathFor() in lib/auth.ts) */}
+
+      <Route
+        path="/admin/organizations"
+        element={
+          <ProtectedRoute allowedRoles={["super_admin"]}>
+            <Organizations />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/admin/organizations/:id"
+        element={
+          <ProtectedRoute allowedRoles={["super_admin"]}>
+            <OrganizationDetail />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/admin/soc-team"
+        element={
+          <ProtectedRoute allowedRoles={["super_admin"]}>
+            <SocTeam />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/admin/soc-queue"
+        element={
+          <ProtectedRoute allowedRoles={["platform_soc_analyst"]}>
+            <SocQueue />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* ORGANIZATION OWNER (Prompt B section B -- organization_admin's new
+          home; see homePathFor() in lib/auth.ts). Distinct from the
+          legacy /organization-dashboard route below, kept as-is. */}
+
+      <Route
+        path="/organization"
+        element={
+          <ProtectedRoute allowedRoles={["organization_admin"]}>
+            <OwnerDashboard />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/organization/members"
+        element={
+          <ProtectedRoute allowedRoles={["organization_admin"]}>
+            <OwnerMembers />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/organization/teams"
+        element={
+          <ProtectedRoute allowedRoles={["organization_admin"]}>
+            <OwnerTeams />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/organization/access"
+        element={
+          <ProtectedRoute allowedRoles={["organization_admin"]}>
+            <OwnerAccess />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/organization/settings"
+        element={
+          <ProtectedRoute allowedRoles={["organization_admin"]}>
+            <OwnerSettings />
+          </ProtectedRoute>
+        }
+      />
+
       {/* SUPER ADMIN DASHBOARD (admin side -- unchanged) */}
 
       <Route
@@ -210,12 +338,12 @@ function App() {
         }
       >
         <Route path="/soc" element={<SocOverview />} />
-        <Route path="/soc/alerts" element={<SocAlerts />} />
-        <Route path="/soc/incidents" element={<SocIncidents />} />
-        <Route path="/soc/incidents/:id" element={<IncidentDetail />} />
-        <Route path="/soc/events" element={<SocEvents />} />
-        <Route path="/soc/assets" element={<SocAssets />} />
-        <Route path="/soc/reports" element={<SocReports />} />
+        <Route path="/soc/alerts" element={<ModuleGuard module="soc"><SocAlerts /></ModuleGuard>} />
+        <Route path="/soc/incidents" element={<ModuleGuard module="incidents"><SocIncidents /></ModuleGuard>} />
+        <Route path="/soc/incidents/:id" element={<ModuleGuard module="incidents"><IncidentDetail /></ModuleGuard>} />
+        <Route path="/soc/events" element={<ModuleGuard module="soc"><SocEvents /></ModuleGuard>} />
+        <Route path="/soc/assets" element={<ModuleGuard module="assets"><SocAssets /></ModuleGuard>} />
+        <Route path="/soc/reports" element={<ModuleGuard module="reports"><SocReports /></ModuleGuard>} />
       </Route>
 
       {/* IT / DEVELOPER -- top navigation shell */}
@@ -228,10 +356,10 @@ function App() {
         }
       >
         <Route path="/it" element={<ItMyTasks />} />
-        <Route path="/it/tickets" element={<ItTickets />} />
-        <Route path="/it/tickets/:id" element={<TicketDetail />} />
-        <Route path="/it/assets" element={<ItAssets />} />
-        <Route path="/it/runbooks" element={<ItRunbooks />} />
+        <Route path="/it/tickets" element={<ModuleGuard module="it_tickets"><ItTickets /></ModuleGuard>} />
+        <Route path="/it/tickets/:id" element={<ModuleGuard module="it_tickets"><TicketDetail /></ModuleGuard>} />
+        <Route path="/it/assets" element={<ModuleGuard module="assets"><ItAssets /></ModuleGuard>} />
+        <Route path="/it/runbooks" element={<ModuleGuard module="it_tickets"><ItRunbooks /></ModuleGuard>} />
       </Route>
 
       {/* SECURITY MANAGER -- top navigation shell */}
@@ -244,11 +372,11 @@ function App() {
         }
       >
         <Route path="/manager" element={<ManagerOverview />} />
-        <Route path="/manager/incidents" element={<ManagerIncidents />} />
-        <Route path="/manager/approvals" element={<ManagerApprovals />} />
-        <Route path="/manager/reports" element={<ManagerReports />} />
-        <Route path="/manager/assets" element={<ManagerAssets />} />
-        <Route path="/manager/audit" element={<ManagerAudit />} />
+        <Route path="/manager/incidents" element={<ModuleGuard module="incidents"><ManagerIncidents /></ModuleGuard>} />
+        <Route path="/manager/approvals" element={<ModuleGuard module="approvals"><ManagerApprovals /></ModuleGuard>} />
+        <Route path="/manager/reports" element={<ModuleGuard module="reports"><ManagerReports /></ModuleGuard>} />
+        <Route path="/manager/assets" element={<ModuleGuard module="assets"><ManagerAssets /></ModuleGuard>} />
+        <Route path="/manager/audit" element={<ModuleGuard module="audit_logs"><ManagerAudit /></ModuleGuard>} />
       </Route>
 
       {/* AUDITOR -- top navigation shell */}
@@ -261,9 +389,9 @@ function App() {
         }
       >
         <Route path="/auditor" element={<AuditorOverview />} />
-        <Route path="/auditor/audit-logs" element={<AuditorAuditLogs />} />
-        <Route path="/auditor/incidents" element={<AuditorIncidents />} />
-        <Route path="/auditor/reports" element={<AuditorReports />} />
+        <Route path="/auditor/audit-logs" element={<ModuleGuard module="audit_logs"><AuditorAuditLogs /></ModuleGuard>} />
+        <Route path="/auditor/incidents" element={<ModuleGuard module="incidents"><AuditorIncidents /></ModuleGuard>} />
+        <Route path="/auditor/reports" element={<ModuleGuard module="reports"><AuditorReports /></ModuleGuard>} />
       </Route>
 
       {/* LEGACY URL REDIRECTS */}

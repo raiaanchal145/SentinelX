@@ -18,13 +18,23 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.access import get_effective_access, seed_default_modules
 from app.database import get_db
 from app.email_utils import (
     generate_verification_code,
     send_password_reset_email,
     send_verification_email,
 )
-from app.models import AccountEmail, Admin, AdminLevel, Organization, PendingRegistration, User, UserRole
+from app.models import (
+    AccountEmail,
+    Admin,
+    AdminLevel,
+    Organization,
+    OrganizationStatus,
+    PendingRegistration,
+    SocMode,
+    User,
+)
 from app.scope import Scope, org_scope
 from app.security import create_access_token, hash_password, verify_password
 from app.validators import is_valid_email_format, is_valid_name_format
@@ -44,18 +54,18 @@ SUPER_ADMIN_EMAILS = {
 
 
 class RegisterRequest(BaseModel):
+    """
+    Self-signup is organization-owner-only: there is no role choice and
+    no "join an existing organization" path. organization_name is
+    required (ignored for the hardcoded SUPER_ADMIN_EMAILS accounts,
+    which get no organization at all -- see register() below).
+    """
+
     name: str
     email: str
     password: str
-    # One of the UserRole values (soc_analyst/security_manager/it_developer/
-    # auditor) for a plain user, or the literal string "organization_admin"
-    # to self-register as an admin of a brand-new organization. Never
-    # "super_admin" -- that's assigned only via SUPER_ADMIN_EMAILS below.
-    role: str = "soc_analyst"
-    # Only used when role == "organization_admin" (or for a plain user, as
-    # the name of their auto-created personal org, since there's no "pick
-    # your org" UI yet). Defaults to "<name>'s Organization" if omitted.
-    organization_name: str | None = None
+    organization_name: str
+    industry: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -63,16 +73,30 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class OrganizationSummaryOut(BaseModel):
+    id: str
+    name: str
+    status: str
+    soc_mode: str
+
+
 class UserOut(BaseModel):
     id: str
     name: str
     email: str
     # For a user account this is the UserRole value; for an admin account
-    # this is the AdminLevel value (super_admin/organization_admin) -- kept
-    # under the same field name for frontend compatibility (existing code
-    # already checks role == "super_admin"). account_type disambiguates.
+    # this is the AdminLevel value (super_admin/organization_admin/
+    # platform_soc_analyst) -- kept under the same field name for frontend
+    # compatibility (existing code already checks role == "super_admin").
+    # account_type disambiguates.
     role: str
     account_type: str  # "admin" | "user"
+    # Only set for an organization_admin owner or a `users` account --
+    # None for super_admin/platform_soc_analyst, who aren't scoped to a
+    # single organization. The frontend builds its navigation from
+    # effective_modules, per docs/API_CONTRACT.md.
+    organization: OrganizationSummaryOut | None = None
+    effective_modules: dict[str, str] | None = None
 
 
 class RegisterResponse(BaseModel):
@@ -157,6 +181,17 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
     if len(payload.password) < 6:
         raise HTTPException(status_code=400, detail="Password must contain at least 6 characters.")
 
+    organization_name = payload.organization_name.strip()
+    industry = (payload.industry or "").strip() or None
+
+    # Nobody can self-assign super_admin -- decided purely by the
+    # configured email allow-list, which also gets no organization at
+    # all (same as before this change).
+    is_super_admin_email = email in SUPER_ADMIN_EMAILS
+
+    if not is_super_admin_email and not organization_name:
+        raise HTTPException(status_code=400, detail="Please enter your organization's name.")
+
     # account_emails is the cross-table ("admins" + "users") uniqueness
     # check -- a plain "does users or admins have this email" query would
     # miss whichever table it's not looking at. See AccountEmail's
@@ -165,29 +200,7 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="An account already exists with this email.")
 
-    organization_name: str | None = None
-
-    if email in SUPER_ADMIN_EMAILS:
-        # Nobody can self-assign super_admin through the role field --
-        # this is decided purely by the configured email allow-list.
-        account_type = "admin"
-        admin_level: AdminLevel | None = AdminLevel.super_admin
-        role: UserRole | None = None
-    elif payload.role == "organization_admin":
-        account_type = "admin"
-        admin_level = AdminLevel.organization_admin
-        role = None
-        organization_name = (payload.organization_name or "").strip() or f"{name}'s Organization"
-    else:
-        account_type = "user"
-        admin_level = None
-        try:
-            role = UserRole(payload.role)
-        except ValueError:
-            role = UserRole.soc_analyst
-        # No "pick your org" UI yet -- a self-registered plain user gets a
-        # personal organization created at verify time (see verify_email).
-        organization_name = (payload.organization_name or "").strip() or f"{name}'s Organization"
+    admin_level = AdminLevel.super_admin if is_super_admin_email else AdminLevel.organization_admin
 
     code = generate_verification_code()
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
@@ -203,10 +216,11 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
         # submission (new details, new code) rather than erroring out.
         pending.name = name
         pending.password_hash = password_hash
-        pending.account_type = account_type
-        pending.role = role
+        pending.account_type = "admin"
+        pending.role = None
         pending.admin_level = admin_level
-        pending.organization_name = organization_name
+        pending.organization_name = None if is_super_admin_email else organization_name
+        pending.organization_industry = None if is_super_admin_email else industry
         pending.verification_code = code
         pending.verification_code_expires_at = expires_at
     else:
@@ -214,10 +228,11 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
             name=name,
             email=email,
             password_hash=password_hash,
-            account_type=account_type,
-            role=role,
+            account_type="admin",
+            role=None,
             admin_level=admin_level,
-            organization_name=organization_name,
+            organization_name=None if is_super_admin_email else organization_name,
+            organization_industry=None if is_super_admin_email else industry,
             verification_code=code,
             verification_code_expires_at=expires_at,
         )
@@ -272,9 +287,19 @@ async def verify_email(payload: VerifyEmailRequest, db: AsyncSession = Depends(g
 
             if pending.admin_level == AdminLevel.organization_admin:
                 # Self-registering as an organization admin always creates
-                # a brand-new organization -- there's no "join an existing
-                # org" flow yet.
-                org = Organization(name=pending.organization_name or f"{pending.name}'s Organization")
+                # a brand-new organization, pending platform approval --
+                # there's no "join an existing org" flow. Every module
+                # starts enabled (the platform admin narrows later, if at
+                # all); the owner can't do anything with the organization
+                # itself until a super_admin approves it (see access.py's
+                # require_active_organization).
+                org = Organization(
+                    name=pending.organization_name or f"{pending.name}'s Organization",
+                    industry=pending.organization_industry,
+                    status=OrganizationStatus.pending,
+                    soc_mode=SocMode.managed,
+                    created_via="self_signup",
+                )
                 db.add(org)
                 await db.flush()  # need org.id before the admin row references it
                 organization_id = org.id
@@ -292,6 +317,7 @@ async def verify_email(payload: VerifyEmailRequest, db: AsyncSession = Depends(g
 
             if org is not None:
                 org.created_by_admin_id = account.id
+                await seed_default_modules(db, org.id)
 
             account_type = "admin"
         else:
@@ -461,6 +487,27 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
     if not account.is_verified:
         raise HTTPException(status_code=403, detail="Please verify your email before logging in.")
 
+    # Organization status rules: suspended/archived block login outright
+    # (owner included); pending is allowed through, since the owner needs
+    # to be able to log in and see the "waiting for approval" screen.
+    # Only relevant for an organization_admin or a `users` account --
+    # super_admin/platform_soc_analyst aren't scoped to one organization.
+    organization: Organization | None = None
+    if (account_type == "admin" and account.admin_level == AdminLevel.organization_admin) or account_type == "user":
+        organization = await db.get(Organization, account.organization_id)
+
+    if organization is not None:
+        if organization.status == OrganizationStatus.suspended:
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "organization_suspended", "message": "Your organization has been suspended."},
+            )
+        if organization.status == OrganizationStatus.archived:
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "organization_archived", "message": "Your organization has been archived."},
+            )
+
     if account.failed_login_attempts:
         # Clear a stale count (e.g. 1-2 prior misses) on a successful login.
         account.failed_login_attempts = 0
@@ -486,13 +533,37 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/me", response_model=UserOut)
-async def me(scope: Scope = Depends(org_scope)):
+async def me(scope: Scope = Depends(org_scope), db: AsyncSession = Depends(get_db)):
+    """
+    Deliberately does NOT depend on require_active_organization -- this
+    is one of the two endpoints (with the owner's GET /organization
+    overview) that must keep working for a pending/suspended/archived
+    organization, so the frontend has something to read in order to
+    show the right screen at all.
+    """
+    organization_out = None
+    effective_modules = None
+
+    if scope.organization_id is not None:
+        organization = await db.get(Organization, scope.organization_id)
+        if organization is not None:
+            organization_out = OrganizationSummaryOut(
+                id=str(organization.id),
+                name=organization.name,
+                status=organization.status.value,
+                soc_mode=organization.soc_mode.value,
+            )
+            access = await get_effective_access(db, scope.account, organization)
+            effective_modules = access["modules"]
+
     return UserOut(
         id=str(scope.account.id),
         name=scope.account.name,
         email=scope.account.email,
         role=scope.role,
         account_type=scope.account_type,
+        organization=organization_out,
+        effective_modules=effective_modules,
     )
 
 

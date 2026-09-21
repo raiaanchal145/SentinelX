@@ -28,21 +28,51 @@ Two different shells exist for two different kinds of role:
 
 - **`UserLayout`** (top navigation) — for `soc_analyst`, `it_developer`,
   `security_manager` ("manager"), and `auditor`. Which nav items each
-  role sees is defined in `src/lib/roleNav.ts`.
-- **`Sidebar`** (left sidebar, inside the admin pages under `src/pages/`)
-  — for `super_admin` and `organization_admin`.
+  role sees is defined in `src/lib/roleNav.ts`, filtered further by
+  each item's optional `module` against `useMe().effective_modules`
+  (module-less items, i.e. each role's own overview, always show).
+- **`Sidebar`** (left sidebar, composed directly by each page under
+  `src/pages/` and `src/features/{admin,owner}/pages/` — it is not a
+  layout route) — for `super_admin`, `organization_admin` (the
+  organization owner), and `platform_soc_analyst`.
 
-Current routes (see `App.tsx` for the authoritative list):
+Every route inside the four `UserLayout` roles above, except each
+role's own overview/home route, is additionally wrapped in
+`ModuleGuard` (`src/components/ModuleGuard.tsx`): it reads
+`effective_modules` from `useMe()` and redirects to `/no-access` if
+the route's required module isn't in that map. This is a second,
+independent check behind the nav filtering above, for anyone who
+still has a direct URL to a module their organization or owner has
+turned off. Separately, `UserLayout` and `OwnerDashboard` both watch
+`useMe()`'s `organization.status` on every render and redirect to
+`/organization-suspended` if it becomes `suspended`/`archived` —
+an already-logged-in session's token and cached `effective_modules`
+stay valid until the next `/auth/me` call, so without this an
+employee or owner could sit on a stale page after their organization
+is suspended mid-session.
+
+Current routes / screens (see `App.tsx` for the authoritative list):
 
 | Path | Role(s) | Notes |
 |---|---|---|
 | `/login`, `/register`, `/verify-email`, `/forgot-password`, `/reset-password` | anyone | real backend auth |
-| `/admin` | super_admin, organization_admin | admin dashboard |
-| `/organization-dashboard` | super_admin, organization_admin | org-scoped admin view |
-| `/soc`, `/soc/alerts`, `/soc/incidents(/:id)`, `/soc/events`, `/soc/assets`, `/soc/reports` | soc_analyst | mock-data dashboards |
-| `/it`, `/it/tickets(/:id)`, `/it/assets`, `/it/runbooks` | it_developer | mock-data dashboards |
-| `/manager/*` | security_manager | mock-data dashboards |
-| `/auditor/*` | auditor | mock-data dashboards |
+| `/accept-invite` | anyone (token from the invite link) | `src/pages/AcceptInvite.tsx` — sets a name/password for an owner-, member-, or platform-SOC-kind invitation and signs the new account in |
+| `/organization-pending`, `/organization-suspended`, `/no-access` | any authenticated account | `src/pages/OrganizationPending.tsx` / `OrganizationSuspended.tsx` / `NoAccess.tsx` — status/guard screens from Prompt B section C; each offers sign-out |
+| `/admin/organizations`, `/admin/organizations/:id` | super_admin | `src/features/admin/pages/Organizations.tsx` (search/filter/sort/approve/reject/suspend/reactivate/archive, create-org dialog) and `OrganizationDetail.tsx` (Overview/Members/Access-and-modules/SOC/Activity/Settings tabs) |
+| `/admin/soc-team` | super_admin | `src/features/admin/pages/SocTeam.tsx` — invite/list/deactivate platform SOC analysts, edit each one's assigned `managed` organizations |
+| `/admin/soc-queue` | platform_soc_analyst | `src/features/admin/pages/SocQueue.tsx` — restricted nav (SOC Queue only), placeholder queue over this analyst's own assigned organizations |
+| `/admin` | super_admin, organization_admin | admin dashboard (unchanged) |
+| `/organization-dashboard` | super_admin, organization_admin | legacy org-scoped admin view, kept reachable for compatibility; the owner's real home is now `/organization` below |
+| `/organization` | organization_admin | `src/features/owner/pages/OwnerDashboard.tsx` — reads `GET /organization` live and redirects to the pending/suspended screen if the organization isn't active |
+| `/organization/members` | organization_admin | `OwnerMembers.tsx` — Members / Pending invitations tabs, invite-member dialog |
+| `/organization/teams` | organization_admin | `OwnerTeams.tsx` — team CRUD, per-team membership drawer |
+| `/organization/access` | organization_admin | `OwnerAccess.tsx` — role x module access matrix, per-member override drawer |
+| `/organization/settings` | organization_admin | `OwnerSettings.tsx` — read-only organization settings |
+| `/admin/soc-oversight`, `/admin/it-oversight` | super_admin, organization_admin | aggregate rollups (unchanged) |
+| `/soc`, `/soc/alerts`, `/soc/incidents(/:id)`, `/soc/events`, `/soc/assets`, `/soc/reports` | soc_analyst | mock-data dashboards; every route but `/soc` itself is `ModuleGuard`-wrapped (`soc`/`incidents`/`assets`/`reports`) |
+| `/it`, `/it/tickets(/:id)`, `/it/assets`, `/it/runbooks` | it_developer | mock-data dashboards; every route but `/it` itself is `ModuleGuard`-wrapped (`it_tickets`/`assets`) |
+| `/manager/*` | security_manager | mock-data dashboards; every route but `/manager` itself is `ModuleGuard`-wrapped (`incidents`/`approvals`/`reports`/`assets`/`audit_logs`) |
+| `/auditor/*` | auditor | mock-data dashboards; every route but `/auditor` itself is `ModuleGuard`-wrapped (`audit_logs`/`incidents`/`reports`) |
 | `/soc-dashboard`, `/it-dashboard` | -- | legacy paths, redirect to `/soc`/`/it` |
 
 ## Backend
@@ -60,27 +90,119 @@ Postgres can't put a single UNIQUE constraint across two tables.
 `backend/app/main.py` only wires up the app (CORS, security headers,
 `/health`) and mounts routers from `backend/app/routers/`:
 
-- `auth.py` — registration (OTP-verified), login (JWT), forgot/reset
-  password, `/me`.
-- `organizations.py` — create (admin-only) / list, both tenant-scoped.
+- `auth.py` — registration (OTP-verified, organization-owner-only —
+  see below), login (JWT), forgot/reset password, `/me`.
+- `organizations.py` — legacy create/list, now super_admin-only (kept
+  for compatibility; see `docs/DECISIONS.md`). Superseded by
+  `admin_organizations.py` and `organization.py` below.
 - `stats.py` — `/stats/overview`, tenant-scoped.
+- `admin_organizations.py` — platform admin management of every
+  organization (lifecycle, modules, soc-mode, members, activity).
+  super_admin-only.
+- `admin_soc.py` — platform SOC team management (invite, list, assign
+  to managed organizations). super_admin-only.
+- `organization.py` — an organization owner's own organization: members,
+  invitations, teams, the access matrix. organization_admin-only, own
+  organization only.
+- `invitations.py` — public (no auth) invitation validate/accept; the
+  only way to create a member account, a platform-created owner
+  account, or a platform SOC analyst account.
 
 `backend/app/scope.py` is the one place "who is calling, what role,
 which organization" is resolved and enforced: `Scope` (account, role,
-`organization_id` -- `None` means "all organizations", only for
-`super_admin`), and the dependencies `org_scope` / `require_admin` /
-`require_roles(*roles)` that every organization-scoped endpoint depends
-on, plus `scoped_to_org(stmt, model, scope)` to filter a query by the
-caller's own organization.
+`organization_id` -- `None` means "every organization", for both
+`super_admin` and the newer `platform_soc_analyst`), and the
+dependencies `org_scope` / `require_admin` / `require_roles(*roles)`
+that every organization-scoped endpoint depends on, plus
+`scoped_to_org(stmt, model, scope)` to filter a query by the caller's
+own organization. `app/access.py` builds on top of `scope.py` with the
+organization-management-specific guards (`require_super_admin`,
+`require_platform_admin`, `require_platform_soc`, `require_org_owner`,
+`require_active_organization`, `require_module`) and the layered
+effective-access calculation — see the section below.
 
-Both `organizations` list and `stats/overview` require authentication
-and are tenant-scoped; originally neither check existed, which was both
-an information-leak (readable with no token at all) and a
-tenant-isolation gap (any authenticated account, in any organization,
-saw every organization's data). `backend/tests/test_scope.py` is the
-regression suite for both: a tenant-isolation matrix (org A can never
-read org B's organizations or stats, a super_admin sees everything) and
-role-guard unit tests for `require_admin`/`require_roles`.
+Both `organizations` list and `stats/overview` require authentication;
+originally neither check existed, which was both an information-leak
+(readable with no token at all) and a tenant-isolation gap (any
+authenticated account, in any organization, saw every organization's
+data). `backend/tests/test_scope.py` is the regression suite for both,
+plus a `scoped_to_org` fail-closed check for `platform_soc_analyst` and
+an is-active-rechecked-on-every-request check.
+
+## Organizations, access control and invitations
+
+An organization moves through `pending -> active -> suspended/archived`
+(`organizations.status`). Self-signup always creates a **pending**
+organization owned by a brand-new `organization_admin`; a platform
+`super_admin` creates an already-**active** one directly. Only
+`active` organizations can use their own member/invitation/access
+endpoints (`require_active_organization`) -- `GET /auth/me` and the
+owner's `GET /organization` overview are the two deliberate exceptions,
+so the frontend always has something to read to show the right
+pending/suspended/archived screen.
+
+`organizations.soc_mode` is `managed` (platform SOC staff, assigned via
+`soc_organization_assignments`, work its alerts/incidents; the owner
+sees `soc`/`incidents` read-only) or `in_house` (the organization's own
+`soc_analyst` members work them, at full access; a `soc_analyst` role
+can only be assigned/invited while `in_house`).
+
+Effective module access for an organization's own accounts
+(`app/access.py::get_effective_access`) is four layers, each only ever
+narrowing what an earlier layer already allowed, never widening it:
+
+```
+organization_modules (platform on/off per org)
+  AND role default map (ROLE_DEFAULT_MODULES, per UserRole)
+  AND organization_role_access (owner's per-role narrowing)
+  AND user_access_overrides (owner's per-person narrowing)
+  = effective_modules, {module_key: "read"|"write"}
+```
+
+The organization owner (`organization_admin`) isn't a `UserRole` and
+isn't subject to the three narrowing tables above; their effective
+access is every platform-enabled module at `write`, except `soc`/
+`incidents` drop to `read` while `soc_mode = managed` (see
+`docs/DECISIONS.md`). `super_admin` and `platform_soc_analyst` don't go
+through this calculation at all -- they reach organization data through
+`/admin/*` endpoints and their own `require_*` guards.
+
+The only way to create a member account, a platform-created owner
+account, or a `platform_soc_analyst` account is an **invitation**
+(`invitations` table): a 7-day, single-use, SHA-256-hashed token
+(`app/security.py::generate_invitation_token`/`hash_invitation_token`
+-- a cheaper, deliberately different mechanism than password bcrypt
+hashing), rate-limited to 20 per organization per hour (globally for
+platform-SOC invitations, which have no organization). `app/invite_service.py`
+holds the create/rotate logic shared by every router that sends one;
+`app/routers/invitations.py` is the public accept side.
+
+New tables (`backend/app/models.py`, migration
+`a4b5c6d7e8f9_org_management_and_access_control`):
+
+| Table | Purpose | Key columns |
+|---|---|---|
+| `organization_modules` | Platform on/off per module per organization (widest access layer). | `organization_id`, `module_key`, `enabled` |
+| `organization_role_access` | Owner's per-role narrowing of the role default map. | `organization_id`, `role`, `module_key`, `enabled` |
+| `user_access_overrides` | Owner's per-person narrowing (deny-only). | `user_id`, `organization_id`, `module_key`, `allowed` |
+| `invitations` | The only path to a member/owner/platform_soc account. | `organization_id` (NULL for `platform_soc`), `email`, `kind`, `role`, `token_hash`, `status`, `expires_at` |
+| `soc_organization_assignments` | Which `platform_soc_analyst` admins see which `managed` organizations. | `admin_id`, `organization_id` |
+
+Changed columns: `organizations` gained `status` (now a real enum, was
+a plain string), `soc_mode`, `max_members`, `created_via`,
+`approved_by_admin_id`/`approved_at`, `suspended_at`/`suspension_reason`;
+`admins.admin_level` gained `platform_soc_analyst` (its `organization_id`
+is `NULL`, same check-constraint shape as `super_admin`);
+`pending_registrations` gained `organization_industry` (carries the
+register form's optional industry field across to the organization
+created at `verify-email`).
+
+Every business-rule/permission rejection in this feature raises a
+structured `{code, message}` detail rather than a bare string, so the
+frontend can switch on `code` -- see `docs/API_CONTRACT.md` for the
+full endpoint-by-endpoint reference and error code table, and
+`docs/DECISIONS.md` for the ambiguities resolved and trade-offs made
+while building it.
 
 ## The mock data layer (frontend)
 
@@ -109,11 +231,20 @@ lib/data.ts      getSocKpis(state, scope), getTriageQueue(...), etc. --
 
 ## Known gaps
 
-- The frontend session/`UserOut` payload carries no `organization_id`,
-  so real multi-tenant scoping isn't wired to identity yet -- every
-  non-super-admin mock session is pinned to one hardcoded demo
-  organization. Only `super_admin`'s org switcher is fully live across
-  the mock orgs.
+- The platform admin, organization owner, and public UI for this
+  feature is now built (organizations list + 6-tab detail, platform
+  SOC team + queue, owner dashboard/members/teams/access/settings,
+  accept-invite, and the pending/suspended/no-access screens -- see
+  the routes table above), and `UserLayout`'s nav plus `ModuleGuard`
+  now drive navigation and route access from the real
+  `organization`/`effective_modules` fields `GET /auth/me` returns.
+  What's still mock-backed is the *content* inside the SOC/IT/manager/
+  auditor dashboards themselves (KPIs, queues, tables) -- gating
+  decides which routes are reachable, not what data appears inside
+  them once you're on one. See the pipeline-tables bullet below.
+- The register page's role picker was removed as a small, approved
+  frontend exception ahead of that larger task (self-signup is now
+  organization-owner-only) -- see `src/pages/Register.tsx`.
 - The pipeline tables (`alerts`, `incidents`, `tickets`, etc.) exist in
   the schema and migrations but have no real API endpoints yet -- the
   dashboards that display this data are still backed entirely by the

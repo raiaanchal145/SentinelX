@@ -16,8 +16,46 @@ function Dialog({ open, onClose, title, children, footer }: DialogProps) {
   useEffect(() => {
     if (!open) return
 
+    function getFocusable(): HTMLElement[] {
+      const panel = panelRef.current
+      if (!panel) return []
+      return Array.from(
+        panel.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((el) => el.offsetParent !== null)
+    }
+
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose()
+      if (event.key === "Escape") {
+        onClose()
+        return
+      }
+
+      if (event.key !== "Tab") return
+
+      // Focus trap: keep Tab/Shift+Tab cycling within the dialog panel
+      // rather than escaping into the page behind the overlay.
+      const focusable = getFocusable()
+      if (focusable.length === 0) {
+        event.preventDefault()
+        panelRef.current?.focus()
+        return
+      }
+
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      const active = document.activeElement
+
+      if (event.shiftKey) {
+        if (active === first || active === panelRef.current) {
+          event.preventDefault()
+          last.focus()
+        }
+      } else if (active === last) {
+        event.preventDefault()
+        first.focus()
+      }
     }
 
     document.addEventListener("keydown", onKey)

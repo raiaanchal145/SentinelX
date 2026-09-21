@@ -19,9 +19,10 @@ import uuid
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
 
 from app.models import AccountEmail, Admin, AdminLevel, Asset, AssetType, Organization, User, UserRole
-from app.scope import Scope, require_admin, require_roles
+from app.scope import Scope, require_admin, require_roles, scoped_to_org
 from app.security import hash_password
 
 TEST_PASSWORD = "correct-horse-battery"
@@ -129,7 +130,16 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def test_organizations_list_is_isolated_by_tenant(client, db_session):
+async def test_organizations_list_is_super_admin_only(client, db_session):
+    """
+    GET /api/v1/organizations used to be tenant-scoped for everyone (any
+    authenticated account saw its own organization); it's now
+    super_admin-only per the org-management spec's "no anonymous endpoint
+    may list organizations" rule -- an organization's own owner reads it
+    through GET /organization instead, and a platform admin manages every
+    organization through /admin/organizations. Only a super_admin still
+    has any reason to call this legacy endpoint at all.
+    """
     org_a = Organization(name="Aurora Health")
     org_b = Organization(name="Blackridge Logistics")
     db_session.add_all([org_a, org_b])
@@ -157,15 +167,14 @@ async def test_organizations_list_is_isolated_by_tenant(client, db_session):
     token_root = await _login(client, "root@example.com")
     token_analyst_a = await _login(client, "analyst.a@example.com")
 
-    names_a = {o["name"] for o in (await client.get("/api/v1/organizations", headers=_auth(token_a))).json()}
-    names_b = {o["name"] for o in (await client.get("/api/v1/organizations", headers=_auth(token_b))).json()}
-    names_root = {o["name"] for o in (await client.get("/api/v1/organizations", headers=_auth(token_root))).json()}
-    names_analyst_a = {o["name"] for o in (await client.get("/api/v1/organizations", headers=_auth(token_analyst_a))).json()}
+    assert (await client.get("/api/v1/organizations", headers=_auth(token_a))).status_code == 403
+    assert (await client.get("/api/v1/organizations", headers=_auth(token_b))).status_code == 403
+    assert (await client.get("/api/v1/organizations", headers=_auth(token_analyst_a))).status_code == 403
 
-    assert names_a == {"Aurora Health"}
-    assert names_b == {"Blackridge Logistics"}
+    root_resp = await client.get("/api/v1/organizations", headers=_auth(token_root))
+    assert root_resp.status_code == 200
+    names_root = {o["name"] for o in root_resp.json()}
     assert names_root == {"Aurora Health", "Blackridge Logistics"}
-    assert names_analyst_a == {"Aurora Health"}
 
 
 async def test_stats_overview_counts_are_isolated_by_tenant(client, db_session):
@@ -212,10 +221,10 @@ async def test_stats_overview_counts_are_isolated_by_tenant(client, db_session):
     assert stats_root["organizations"] == 2
 
 
-async def test_non_admin_cannot_create_an_organization(client, db_session):
-    """Role guard: POST /organizations requires an admin account (any
-    organization) -- a plain `users` account, in any organization, is
-    rejected before it ever gets to write a new row."""
+async def test_only_super_admin_can_create_an_organization(client, db_session):
+    """Role guard: POST /organizations is super_admin-only -- a plain
+    `users` account AND an organization's own owner (organization_admin)
+    are both rejected before either gets to write a new row."""
     org_a = Organization(name="Aurora Health")
     db_session.add(org_a)
     await db_session.flush()
@@ -223,15 +232,27 @@ async def test_non_admin_cannot_create_an_organization(client, db_session):
         db_session, email="analyst.a@example.com", name="Analyst A",
         role=UserRole.soc_analyst, organization_id=org_a.id,
     )
+    await _seed_admin(
+        db_session, email="admin.a@example.com", name="Admin A",
+        admin_level=AdminLevel.organization_admin, organization_id=org_a.id,
+    )
 
     token_analyst_a = await _login(client, "analyst.a@example.com")
+    token_admin_a = await _login(client, "admin.a@example.com")
 
-    resp = await client.post(
+    resp_user = await client.post(
         "/api/v1/organizations",
         json={"name": "Shouldn't Exist"},
         headers=_auth(token_analyst_a),
     )
-    assert resp.status_code == 403
+    assert resp_user.status_code == 403
+
+    resp_owner = await client.post(
+        "/api/v1/organizations",
+        json={"name": "Shouldn't Exist Either"},
+        headers=_auth(token_admin_a),
+    )
+    assert resp_owner.status_code == 403
 
 
 async def test_organizations_and_stats_reject_unauthenticated_requests(client):
@@ -239,3 +260,44 @@ async def test_organizations_and_stats_reject_unauthenticated_requests(client):
     used to be readable with no token at all."""
     assert (await client.get("/api/v1/organizations")).status_code == 401
     assert (await client.get("/api/v1/stats/overview")).status_code == 401
+
+
+async def test_deactivated_account_is_rejected_on_its_very_next_request(client, db_session):
+    """
+    is_active is now re-checked in get_current_account on every request,
+    not just at login -- a token that was valid a moment ago must stop
+    working the instant the account is deactivated, without waiting for
+    it to expire.
+    """
+    org = Organization(name="Aurora Health")
+    db_session.add(org)
+    await db_session.flush()
+    admin = await _seed_admin(
+        db_session, email="admin.a@example.com", name="Admin A",
+        admin_level=AdminLevel.organization_admin, organization_id=org.id,
+    )
+
+    token = await _login(client, "admin.a@example.com")
+    assert (await client.get("/api/v1/auth/me", headers=_auth(token))).status_code == 200
+
+    admin.is_active = False
+    await db_session.commit()
+
+    resp = await client.get("/api/v1/auth/me", headers=_auth(token))
+    assert resp.status_code == 401
+
+
+async def test_scoped_to_org_fails_closed_for_platform_soc_analyst():
+    """
+    A platform_soc_analyst has organization_id=None, the same shape as
+    super_admin, but scoped_to_org() must NOT extend them the same
+    "see every organization" treatment -- see its docstring in
+    app/scope.py. Falling through to `organization_id == None` for them
+    matches zero rows, which is the safe default: any endpoint meant to
+    be reachable by a platform_soc_analyst must use
+    access.soc_visible_organization_ids() instead of this helper.
+    """
+    scope = _scope("admin", AdminLevel.platform_soc_analyst.value, organization_id=None)
+    stmt = scoped_to_org(select(Asset), Asset, scope)
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "organization_id IS NULL" in compiled
