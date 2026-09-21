@@ -20,6 +20,7 @@ import OrganizationDetail from "./features/admin/pages/OrganizationDetail"
 import SocTeam from "./features/admin/pages/SocTeam"
 import SocQueue from "./features/admin/pages/SocQueue"
 import OwnerDashboard from "./features/owner/pages/OwnerDashboard"
+import OwnerMembers from "./features/owner/pages/OwnerMembers"
 
 import UserLayout from "./layouts/UserLayout"
 
@@ -227,6 +228,15 @@ function App() {
         element={
           <ProtectedRoute allowedRoles={["organization_admin"]}>
             <OwnerDashboard />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/organization/members"
+        element={
+          <ProtectedRoute allowedRoles={["organization_admin"]}>
+            <OwnerMembers />
           </ProtectedRoute>
         }
       />
