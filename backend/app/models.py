@@ -741,7 +741,7 @@ class Asset(Base):
     # Human display name -- required. hostname is a separate, OPTIONAL
     # technical identifier (an "application"/"cloud_resource" asset may
     # not have one) -- see uq_assets_org_lower_hostname in the
-    # h1a2b3c4d5e6 migration for the partial unique index that only
+    # b8c9d0e1f2a3 migration for the partial unique index that only
     # applies when it's set.
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     hostname: Mapped[str | None] = mapped_column(String(200))
