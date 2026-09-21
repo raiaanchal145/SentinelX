@@ -3,7 +3,7 @@ const API_BASE = "http://localhost:8000/api/v1"
 export type OrganizationSummary = {
   id: string
   name: string
-  status: "pending" | "active" | "suspended" | "archived"
+  status: "active" | "suspended" | "archived"
   soc_mode: "managed" | "in_house"
 }
 
@@ -50,11 +50,6 @@ type LoginResponse = {
   access_token: string
   token_type: string
   user: ApiUser
-}
-
-type RegisterResponse = {
-  email: string
-  message: string
 }
 
 type MessageResponse = {
@@ -130,25 +125,6 @@ export function apiLogin(email: string, password: string) {
   })
 }
 
-export function apiRegister(
-  name: string,
-  email: string,
-  password: string,
-  organizationName: string,
-  industry?: string,
-) {
-  return request<RegisterResponse>("/auth/register", {
-    method: "POST",
-    body: JSON.stringify({
-      name,
-      email,
-      password,
-      organization_name: organizationName,
-      industry: industry || null,
-    }),
-  })
-}
-
 export function apiVerifyEmail(email: string, code: string) {
   return request<ApiUser>("/auth/verify-email", {
     method: "POST",
@@ -220,7 +196,7 @@ export type OrganizationRow = {
   id: string
   name: string
   industry: string | null
-  status: "pending" | "active" | "suspended" | "archived"
+  status: "active" | "suspended" | "archived"
   soc_mode: "managed" | "in_house"
   max_members: number | null
   created_via: string | null
@@ -277,9 +253,7 @@ export function apiCreateOrganization(payload: OrganizationCreatePayload) {
   })
 }
 
-export function apiApproveOrganization(organizationId: string) {
-  return request<OrganizationRow>(`/admin/organizations/${organizationId}/approve`, { method: "POST" })
-}
+
 
 export function apiSuspendOrganization(organizationId: string, reason: string) {
   return request<OrganizationRow>(`/admin/organizations/${organizationId}/suspend`, {
@@ -377,6 +351,40 @@ export function apiGetOrganizationActivity(organizationId: string, page = 1, pag
   )
 }
 
+// The organization's owner invitation(s) as the platform admin sees them
+// -- "has the owner accepted yet?", with resend/revoke for a stale one.
+// Member invitations are the owner's business, not the platform's.
+export type OwnerInvitationRow = {
+  id: string
+  email: string
+  kind: string
+  status: "pending" | "accepted" | "expired" | "revoked"
+  expired: boolean
+  created_at: string | null
+  expires_at: string | null
+  accepted_at: string | null
+}
+
+export function apiListOwnerInvitationsForOrg(organizationId: string) {
+  return request<{ invitations: OwnerInvitationRow[] }>(
+    `/admin/organizations/${organizationId}/invitations`,
+  )
+}
+
+export function apiResendOwnerInvitation(organizationId: string, invitationId: string) {
+  return request<{ id: string; status: string; expires_at: string }>(
+    `/admin/organizations/${organizationId}/invitations/${invitationId}/resend`,
+    { method: "POST" },
+  )
+}
+
+export function apiRevokeOwnerInvitation(organizationId: string, invitationId: string) {
+  return request<{ id: string; status: string }>(
+    `/admin/organizations/${organizationId}/invitations/${invitationId}`,
+    { method: "DELETE" },
+  )
+}
+
 // ---------------------------------------------------------------------
 // Platform admin: platform SOC team (super_admin-only). See
 // docs/API_CONTRACT.md ("Platform admin: /api/v1/admin/soc-analysts").
@@ -385,7 +393,7 @@ export function apiGetOrganizationActivity(organizationId: string, page = 1, pag
 export type SocAnalystAssignedOrg = {
   id: string
   name: string
-  status: "pending" | "active" | "suspended" | "archived"
+  status: "active" | "suspended" | "archived"
   soc_mode: "managed" | "in_house"
 }
 
@@ -442,7 +450,7 @@ export function apiGetMyAssignedOrganizations() {
 export type OrganizationOverview = {
   id: string
   name: string
-  status: "pending" | "active" | "suspended" | "archived"
+  status: "active" | "suspended" | "archived"
   soc_mode: "managed" | "in_house"
   // Only present while pending (see backend get_overview()).
   message?: string

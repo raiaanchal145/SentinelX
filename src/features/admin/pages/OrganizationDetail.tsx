@@ -19,7 +19,6 @@ import ActivityTab from "../components/org-detail/ActivityTab"
 import SettingsTab from "../components/org-detail/SettingsTab"
 
 const STATUS_TONE: Record<OrganizationDetailType["status"], "brand" | "success" | "danger" | "neutral"> = {
-  pending: "brand",
   active: "success",
   suspended: "danger",
   archived: "neutral",

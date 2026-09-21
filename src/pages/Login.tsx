@@ -88,17 +88,6 @@ function Login() {
         user.account_type,
       )
 
-      // A pending organization's owner is allowed to log in (the
-      // backend needs a session for /auth/me), but sees only the
-      // "waiting for approval" screen -- never the real dashboard.
-      // Suspended/archived organizations are rejected by /auth/login
-      // itself (see the ApiError handling below), so those two
-      // statuses can't reach this branch.
-      if (user.organization?.status === "pending") {
-        navigate("/organization-pending")
-        return
-      }
-
       navigate(homePathFor(user.role))
     } catch (err) {
       if (err instanceof ApiError) {
@@ -313,18 +302,7 @@ function Login() {
 
               <div className="mt-6 text-center text-sm text-fg-muted">
 
-                Need an account?{" "}
-
-                <button
-                  onClick={() =>
-                    navigate(
-                      "/register",
-                    )
-                  }
-                  className="text-brand-400 hover:text-brand-300"
-                >
-                  Register
-                </button>
+                Access to SentinelX is by invitation. Contact your organization administrator.
 
               </div>
 

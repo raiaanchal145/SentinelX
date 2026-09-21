@@ -15,7 +15,6 @@ import { useToast } from "../../../components/ui/Toast"
 import CreateOrganizationDialog from "../components/CreateOrganizationDialog"
 
 import {
-  apiApproveOrganization,
   apiArchiveOrganization,
   apiListOrganizations,
   apiReactivateOrganization,
@@ -25,7 +24,6 @@ import {
 } from "../../../lib/api"
 
 const STATUS_TONE: Record<OrganizationRow["status"], "brand" | "success" | "danger" | "neutral"> = {
-  pending: "brand",
   active: "success",
   suspended: "danger",
   archived: "neutral",
@@ -48,7 +46,6 @@ function relativeTime(iso: string | null): string {
 
 type PendingAction =
   | { type: "suspend"; org: OrganizationRow }
-  | { type: "reject"; org: OrganizationRow }
   | { type: "archive"; org: OrganizationRow }
 
 /**
@@ -109,21 +106,6 @@ function Organizations() {
     load()
   }, [load])
 
-  async function handleApprove(org: OrganizationRow) {
-    setActionBusyId(org.id)
-    try {
-      await apiApproveOrganization(org.id)
-      toast.show(`${org.name} approved.`, { tone: "success" })
-      load()
-    } catch (err) {
-      toast.show(err instanceof ApiError ? err.message : "Could not approve this organization.", {
-        tone: "danger",
-      })
-    } finally {
-      setActionBusyId(null)
-    }
-  }
-
   async function handleReactivate(org: OrganizationRow) {
     setActionBusyId(org.id)
     try {
@@ -148,14 +130,8 @@ function Organizations() {
         await apiSuspendOrganization(org.id, reason ?? "")
         toast.show(`${org.name} suspended.`, { tone: "success" })
       } else {
-        // "reject" and "archive" are the same terminal transition --
-        // there's no separate reject endpoint, a rejected (still-
-        // pending) application is simply archived. See
-        // docs/API_CONTRACT.md's status-transition table.
         await apiArchiveOrganization(org.id)
-        toast.show(type === "reject" ? `${org.name} rejected.` : `${org.name} archived.`, {
-          tone: "success",
-        })
+        toast.show(`${org.name} archived.`, { tone: "success" })
       }
       load()
     } catch (err) {
@@ -176,17 +152,7 @@ function Organizations() {
       },
     ]
 
-    if (org.status === "pending") {
-      items.push(
-        { key: "approve", label: "Approve", onSelect: () => void handleApprove(org) },
-        {
-          key: "reject",
-          label: "Reject",
-          danger: true,
-          onSelect: () => setPendingAction({ type: "reject", org }),
-        },
-      )
-    } else if (org.status === "active") {
+    if (org.status === "active") {
       items.push(
         {
           key: "suspend",
@@ -339,7 +305,7 @@ function Organizations() {
               <p className="text-sm text-brand-400">System Administration</p>
               <h1 className="mt-2 text-2xl font-semibold text-fg-primary">Organizations</h1>
               <p className="mt-1 text-xs text-fg-muted">
-                Every organization on the platform -- approve new sign-ups, and manage status and SOC mode.
+                Every organization on the platform -- manage owner invitations, status and SOC mode.
               </p>
             </div>
             <Button variant="primary" icon={<Plus size={16} />} onClick={() => setCreateOpen(true)}>
@@ -373,7 +339,6 @@ function Organizations() {
               className="rounded-control border border-line bg-surface px-3 py-2 text-sm text-fg-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
             >
               <option value="">All statuses</option>
-              <option value="pending">Pending</option>
               <option value="active">Active</option>
               <option value="suspended">Suspended</option>
               <option value="archived">Archived</option>
@@ -457,21 +422,15 @@ function Organizations() {
         title={
           pendingAction?.type === "suspend"
             ? `Suspend ${pendingAction.org.name}?`
-            : pendingAction?.type === "reject"
-              ? `Reject ${pendingAction.org.name}?`
-              : `Archive ${pendingAction?.org.name}?`
+            : `Archive ${pendingAction?.org.name}?`
         }
         impact={
           pendingAction?.type === "suspend"
             ? "Members of this organization will not be able to sign in until it's reactivated."
-            : pendingAction?.type === "reject"
-              ? "This application will be archived and cannot be approved later -- the owner would need to register again."
-              : "This organization will be archived. Archiving is terminal and cannot be undone."
+            : "This organization will be archived. Archiving is terminal and cannot be undone."
         }
         requireReason={pendingAction?.type === "suspend"}
-        confirmLabel={
-          pendingAction?.type === "suspend" ? "Suspend" : pendingAction?.type === "reject" ? "Reject" : "Archive"
-        }
+        confirmLabel={pendingAction?.type === "suspend" ? "Suspend" : "Archive"}
         danger
       />
     </div>

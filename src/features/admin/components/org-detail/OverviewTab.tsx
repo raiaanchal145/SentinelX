@@ -4,7 +4,6 @@ import EmptyState from "../../../../components/EmptyState"
 import type { OrganizationDetail } from "../../../../lib/api"
 
 const STATUS_TONE: Record<OrganizationDetail["status"], "brand" | "success" | "danger" | "neutral"> = {
-  pending: "brand",
   active: "success",
   suspended: "danger",
   archived: "neutral",

@@ -1,12 +1,10 @@
 import { Navigate, Route, Routes } from "react-router-dom"
 
 import Login from "./pages/Login"
-import Register from "./pages/Register"
 import VerifyEmail from "./pages/VerifyEmail"
 import ForgotPassword from "./pages/ForgotPassword"
 import ResetPassword from "./pages/ResetPassword"
 import AcceptInvite from "./pages/AcceptInvite"
-import OrganizationPending from "./pages/OrganizationPending"
 import OrganizationSuspended from "./pages/OrganizationSuspended"
 import NoAccess from "./pages/NoAccess"
 
@@ -141,11 +139,6 @@ function App() {
       />
 
       <Route
-        path="/register"
-        element={<Register />}
-      />
-
-      <Route
         path="/verify-email"
         element={<VerifyEmail />}
       />
@@ -166,15 +159,10 @@ function App() {
       />
 
       {/* ORGANIZATION STATUS SCREENS -- reachable with or without an
-          active session (Login redirects here on organization_pending/
-          organization_suspended/organization_archived; a later guard
-          on protected routes will also redirect here if an
+          active session (Login redirects here on
+          organization_suspended/organization_archived; a later guard on
+          protected routes will also redirect here if an
           already-logged-in session's organization changes status). */}
-
-      <Route
-        path="/organization-pending"
-        element={<OrganizationPending />}
-      />
 
       <Route
         path="/organization-suspended"
