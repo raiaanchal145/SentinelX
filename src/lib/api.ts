@@ -572,6 +572,18 @@ export function apiUpdateAccessMatrix(updates: { role: string; module_key: strin
   })
 }
 
+export type MemberAccessCell = AccessCell & { denied: boolean }
+
+export type MemberAccessResponse = {
+  user_id: string
+  role: string
+  modules: Record<string, MemberAccessCell>
+}
+
+export function apiGetMemberAccess(userId: string) {
+  return request<MemberAccessResponse>(`/organization/members/${userId}/access`)
+}
+
 export function apiUpdateMemberAccess(userId: string, deniedModules: string[]) {
   return request<{ id: string; denied_modules: string[] }>(`/organization/members/${userId}/access`, {
     method: "PUT",
