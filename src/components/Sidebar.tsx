@@ -4,9 +4,11 @@ import {
   ClipboardList,
   LayoutDashboard,
   Server,
+  Settings,
   ShieldAlert,
   ShieldCheck,
   Users,
+  UsersRound,
   Wrench,
 } from "lucide-react"
 
@@ -112,9 +114,24 @@ function Sidebar() {
 
   const organizationAdminItems: NavItem[] = [
     {
-      name: "Organization Dashboard",
+      name: "Dashboard",
       icon: Building2,
-      path: "/organization-dashboard",
+      path: "/organization",
+    },
+    {
+      name: "Members",
+      icon: Users,
+      path: "/organization/members",
+    },
+    {
+      name: "Teams",
+      icon: UsersRound,
+      path: "/organization/teams",
+    },
+    {
+      name: "Access",
+      icon: ShieldCheck,
+      path: "/organization/access",
     },
     {
       name: "SOC Oversight",
@@ -125,6 +142,11 @@ function Sidebar() {
       name: "IT Oversight",
       icon: Wrench,
       path: "/admin/it-oversight",
+    },
+    {
+      name: "Settings",
+      icon: Settings,
+      path: "/organization/settings",
     },
   ]
 

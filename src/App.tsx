@@ -19,6 +19,7 @@ import Organizations from "./features/admin/pages/Organizations"
 import OrganizationDetail from "./features/admin/pages/OrganizationDetail"
 import SocTeam from "./features/admin/pages/SocTeam"
 import SocQueue from "./features/admin/pages/SocQueue"
+import OwnerDashboard from "./features/owner/pages/OwnerDashboard"
 
 import UserLayout from "./layouts/UserLayout"
 
@@ -213,6 +214,19 @@ function App() {
         element={
           <ProtectedRoute allowedRoles={["platform_soc_analyst"]}>
             <SocQueue />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* ORGANIZATION OWNER (Prompt B section B -- organization_admin's new
+          home; see homePathFor() in lib/auth.ts). Distinct from the
+          legacy /organization-dashboard route below, kept as-is. */}
+
+      <Route
+        path="/organization"
+        element={
+          <ProtectedRoute allowedRoles={["organization_admin"]}>
+            <OwnerDashboard />
           </ProtectedRoute>
         }
       />
