@@ -284,3 +284,130 @@ export function apiReactivateOrganization(organizationId: string) {
 export function apiArchiveOrganization(organizationId: string) {
   return request<OrganizationRow>(`/admin/organizations/${organizationId}/archive`, { method: "POST" })
 }
+
+export type AuditEntry = {
+  id: string
+  action: string
+  actor_type: string
+  actor_id: string | null
+  target_type: string | null
+  target_id: string | null
+  created_at: string | null
+  details: Record<string, unknown> | null
+}
+
+export type OrganizationMember = {
+  account_type: "admin" | "user"
+  id: string
+  name: string
+  email: string
+  role: string
+  is_active: boolean
+  last_login_at: string | null
+}
+
+export type OrganizationDetail = OrganizationRow & {
+  modules: Record<string, boolean>
+  assigned_soc_analysts: { id: string; name: string; email: string }[]
+  recent_activity: AuditEntry[]
+}
+
+export function apiGetOrganizationDetail(organizationId: string) {
+  return request<OrganizationDetail>(`/admin/organizations/${organizationId}`)
+}
+
+export function apiPatchOrganization(
+  organizationId: string,
+  payload: { name?: string; industry?: string; max_members?: number },
+) {
+  return request<OrganizationRow>(`/admin/organizations/${organizationId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function apiGetOrganizationMembers(organizationId: string) {
+  return request<{ members: OrganizationMember[] }>(`/admin/organizations/${organizationId}/members`)
+}
+
+export function apiDeactivateOrganizationMember(
+  organizationId: string,
+  accountType: "admin" | "user",
+  accountId: string,
+) {
+  return request<{ id: string; is_active: boolean }>(
+    `/admin/organizations/${organizationId}/members/${accountType}/${accountId}/deactivate`,
+    { method: "POST" },
+  )
+}
+
+export function apiUpdateOrganizationModules(organizationId: string, modules: Record<string, boolean>) {
+  return request<{ modules: Record<string, boolean>; changed: Record<string, boolean> }>(
+    `/admin/organizations/${organizationId}/modules`,
+    { method: "PUT", body: JSON.stringify({ modules }) },
+  )
+}
+
+export function apiUpdateOrganizationSocMode(organizationId: string, socMode: "managed" | "in_house") {
+  return request<{
+    organization: OrganizationRow
+    soc_analyst_count: number
+    message?: string
+    warning?: string
+  }>(`/admin/organizations/${organizationId}/soc-mode`, {
+    method: "PUT",
+    body: JSON.stringify({ soc_mode: socMode }),
+  })
+}
+
+export function apiGetOrganizationActivity(organizationId: string, page = 1, pageSize = 25) {
+  return request<{ total: number; page: number; page_size: number; entries: AuditEntry[] }>(
+    `/admin/organizations/${organizationId}/activity?page=${page}&page_size=${pageSize}`,
+  )
+}
+
+// ---------------------------------------------------------------------
+// Platform admin: platform SOC team (super_admin-only). See
+// docs/API_CONTRACT.md ("Platform admin: /api/v1/admin/soc-analysts").
+// ---------------------------------------------------------------------
+
+export type SocAnalystAssignedOrg = {
+  id: string
+  name: string
+  status: "pending" | "active" | "suspended" | "archived"
+  soc_mode: "managed" | "in_house"
+}
+
+export type SocAnalyst = {
+  id: string
+  name: string
+  email: string
+  is_active: boolean
+  last_login_at: string | null
+  assigned_organizations: SocAnalystAssignedOrg[]
+}
+
+export function apiListSocAnalysts() {
+  return request<{ soc_analysts: SocAnalyst[] }>("/admin/soc-analysts")
+}
+
+export function apiInviteSocAnalyst(email: string) {
+  return request<{ id: string; email: string; status: string }>("/admin/soc-analysts", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  })
+}
+
+export function apiPatchSocAnalyst(adminId: string, isActive: boolean) {
+  return request<{ id: string; is_active: boolean }>(`/admin/soc-analysts/${adminId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ is_active: isActive }),
+  })
+}
+
+export function apiUpdateSocAnalystOrganizations(adminId: string, organizationIds: string[]) {
+  return request<{ id: string; assigned_organizations: SocAnalystAssignedOrg[] }>(
+    `/admin/soc-analysts/${adminId}/organizations`,
+    { method: "PUT", body: JSON.stringify({ organization_ids: organizationIds }) },
+  )
+}

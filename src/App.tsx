@@ -16,6 +16,7 @@ import OrganizationDashboard from "./pages/OrganizationDashboard"
 import SocOversightAdmin from "./features/admin/pages/SocOversight"
 import ItOversightAdmin from "./features/admin/pages/ItOversight"
 import Organizations from "./features/admin/pages/Organizations"
+import OrganizationDetail from "./features/admin/pages/OrganizationDetail"
 
 import UserLayout from "./layouts/UserLayout"
 
@@ -183,6 +184,15 @@ function App() {
         element={
           <ProtectedRoute allowedRoles={["super_admin"]}>
             <Organizations />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/admin/organizations/:id"
+        element={
+          <ProtectedRoute allowedRoles={["super_admin"]}>
+            <OrganizationDetail />
           </ProtectedRoute>
         }
       />
