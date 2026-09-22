@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "dev:share": "node scripts/dev.mjs --share",
     "dev:web": "vite",
     "dev:api": "node scripts/dev.mjs --api-only",
     "dev:db": "node scripts/dev.mjs --db-only",

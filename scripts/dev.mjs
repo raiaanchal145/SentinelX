@@ -8,6 +8,10 @@
 //   npm run dev:doctor   -- run every check, print a PASS/FAIL table, start nothing.
 //   npm run dev:db       -- only ensure Postgres is up and migrated.
 //   npm run dev:api      -- backend only, in the current terminal.
+//   npm run dev:share    -- same as dev, plus expose the app to other devices
+//                            (pick LAN or a temporary cloudflared tunnel;
+//                            --lan / --tunnel skip the prompt). OPT-IN only:
+//                            plain `npm run dev` is never shared.
 //   npm run dev:stop     -- stop the backend this launcher started (add --db to also stop postgres).
 //   --inline / SENTINELX_INLINE=1  -- run the backend as a child process here instead of a new window.
 //
@@ -33,6 +37,7 @@ import {
   isVenvHealthy,
   venvPythonPath,
   findPidsOnPort,
+  isPidAlive,
 } from './lib/checks.mjs';
 import {
   LauncherError,
@@ -58,6 +63,12 @@ import {
   spawnInline,
   killInlineChild,
 } from './lib/terminals.mjs';
+import {
+  pickShareMode,
+  lanShareUrl,
+  ensureCloudflared,
+  startQuickTunnel,
+} from './lib/share.mjs';
 
 const BACKEND_PORT = 8000;
 const FRONTEND_PORT = 5173;
@@ -66,6 +77,9 @@ const HEALTH_URL = `http://localhost:${BACKEND_PORT}/api/v1/health`;
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);
 const INLINE = flag('--inline') || process.env.SENTINELX_INLINE === '1';
+// Dev sharing is fully opt-in: only these flags (or `npm run dev:share`,
+// which passes --share) ever expose the stack beyond localhost.
+const SHARE = flag('--share') || flag('--lan') || flag('--tunnel');
 
 // ---------------------------------------------------------------------------
 // Shared: pick "first-time" vs "quick start" framing.
@@ -326,6 +340,24 @@ async function cmdDoctor() {
   add('Port 5173 free', await isPortFree(FRONTEND_PORT));
   add('.venv-1 stray folder', !checkStrayVenv1(), checkStrayVenv1() ? 'found -- delete it' : 'none');
 
+  // Sharing status: what's running now (if anything) and the candidate LAN URL.
+  const shareState = readState().share || null;
+  const sharingNow = Boolean(shareState?.pid && isPidAlive(shareState.pid));
+  add(
+    'Sharing active',
+    true,
+    sharingNow
+      ? `YES -- ${shareState.mode || 'tunnel'} ${shareState.url || ''} (cloudflared PID ${shareState.pid})`
+      : 'no (npm run dev:share to enable, opt-in only)'
+  );
+  let lanDetail = 'none found';
+  try {
+    lanDetail = lanShareUrl(FRONTEND_PORT).urls.join('  ');
+  } catch {
+    // No private IPv4 (not on a LAN, or in a VM) -- the detail above already says so.
+  }
+  add('LAN URL (if sharing via LAN)', true, lanDetail);
+
   console.log('');
   const nameWidth = Math.max(...rows.map((r) => r.name.length)) + 2;
   for (const r of rows) {
@@ -364,6 +396,15 @@ async function cmdStop() {
     if (result.status === 0) log.success('postgres container stopped (data volume untouched).');
     else log.warn('Could not stop the postgres container -- is Docker Desktop running?');
   }
+
+  // Tear down any orphaned sharing tunnel (normally its own Ctrl+C does this).
+  const share = readState().share;
+  if (share?.pid) {
+    log.step(`Stopping the sharing tunnel (cloudflared PID ${share.pid})...`);
+    if (killPidTree(share.pid)) log.success('Tunnel stopped.');
+    else log.warn('Could not stop the tunnel process -- is it already gone?');
+    writeState({ share: null });
+  }
 }
 
 async function cmdDbOnly() {
@@ -401,6 +442,54 @@ async function cmdSetup() {
   log.success('Setup complete.');
 }
 
+// ---------------------------------------------------------------------------
+// Dev sharing setup (opt-in: npm run dev:share / --share / --lan / --tunnel).
+// Returns { origin, mode, stop() } -- the launcher-wide contract used for
+// the backend env, the frontend env, the share box and cleanup.
+// ---------------------------------------------------------------------------
+
+async function setupShare(frontendPort) {
+  const mode = await pickShareMode({ lan: flag('--lan'), tunnel: flag('--tunnel') });
+
+  if (mode === 'lan') {
+    const { urls, recommended, interfaces } = lanShareUrl(frontendPort);
+    log.heading('LAN sharing (same Wi-Fi)');
+    for (const iface of interfaces) {
+      const isRecommended = `http://${iface.address}:${frontendPort}` === recommended;
+      log.raw(`   ${isRecommended ? '*' : ' '} http://${iface.address}:${frontendPort}   (${iface.iface})${isRecommended ? '   <-- recommended' : ''}`);
+    }
+    log.raw('   Any device on the same Wi-Fi can open any of the URLs above.');
+    log.raw('   Windows may ask to allow Node through the firewall the first time -- allow it for private networks.');
+    log.raw('');
+    return {
+      origin: recommended,
+      mode: 'lan',
+      urls,
+      stop() { /* nothing to tear down for LAN mode */ },
+    };
+  }
+
+  // Tunnel mode.
+  ensureCloudflared();
+  log.step('Starting a temporary cloudflared quick tunnel (no account needed)...');
+  const { child, url, pid } = await startQuickTunnel(frontendPort);
+  log.success(`Tunnel is up: ${url}`);
+  // Record the tunnel so `npm run dev:stop` can clean up an orphan and
+  // `dev:doctor` can report what is currently being shared.
+  writeState({ share: { pid, port: frontendPort, mode: 'tunnel', url, startedAt: new Date().toISOString() } });
+  return {
+    origin: url,
+    mode: 'tunnel',
+    urls: [url],
+    stop() {
+      killPidTree(pid);
+      if (!child.killed) child.kill();
+      const shareState = readState().share;
+      if (shareState?.pid === pid) writeState({ share: null });
+    },
+  };
+}
+
 async function cmdFullDev() {
   let envAlreadyPresent = false;
   try {
@@ -423,31 +512,68 @@ async function cmdFullDev() {
   // First-run only: silent once an active super_admin exists.
   await ensureFirstSuperAdmin(venvPython);
 
+  // ---- Dev sharing (opt-in only; plain `npm run dev` skips all of this) ----
+  let share = null; // { origin, mode, stop() }
+  if (SHARE) {
+    share = await setupShare(FRONTEND_PORT);
+  }
+
   let backendChild = null;
   if (!reuseBackend) {
     log.step(INLINE ? 'Starting backend inline (uvicorn)...' : 'Starting backend in a new terminal window ("SentinelX Backend")...');
+    // In share mode the backend's session env points FRONTEND_URL at the
+    // shared origin (email links become openable from other devices) and
+    // DEV_SHARE_ORIGINS at the same origin (session-scoped CORS). Plain
+    // runs get no extra env at all.
+    const backendEnv = share
+      ? {
+          ...process.env,
+          FRONTEND_URL: share.origin,
+          DEV_SHARE_ORIGINS: share.origin,
+          SENTINELX_SHARE_ACTIVE: share.origin,
+        }
+      : process.env;
     const backendArgs = ['-m', 'uvicorn', 'app.main:app', '--reload', '--port', String(BACKEND_PORT)];
     const backendCwd = path.join(ROOT, 'backend');
 
     if (INLINE) {
-      backendChild = spawnInline({ cwd: backendCwd, command: venvPython, args: backendArgs, label: 'api', color: 'magenta' });
+      backendChild = spawnInline({ cwd: backendCwd, command: venvPython, args: backendArgs, label: 'api', color: 'magenta', env: backendEnv });
       writeState({ backend: { pid: backendChild.pid, port: BACKEND_PORT, startedAt: new Date().toISOString(), mode: 'inline' } });
     } else {
-      const pid = openWindow({ cwd: backendCwd, command: venvPython, args: backendArgs, title: 'SentinelX Backend' });
+      const pid = openWindow({ cwd: backendCwd, command: venvPython, args: backendArgs, title: 'SentinelX Backend', env: backendEnv });
       writeState({ backend: { pid, port: BACKEND_PORT, startedAt: new Date().toISOString(), mode: 'window' } });
     }
+  } else if (share) {
+    // Reusing a backend that this launcher already started WITHOUT the share
+    // env: it must be restarted so it picks up FRONTEND_URL/DEV_SHARE_ORIGINS.
+    log.warn(
+      'Sharing needs the backend restarted with FRONTEND_URL set, but a backend started by a previous (non-shared) run is already serving port 8000.'
+    );
+    log.raw('   Stop it first (npm run dev:stop) and re-run npm run dev:share, or it will keep emailing localhost links.');
   }
 
   log.step('Starting frontend (vite) in this terminal...');
   // shell:true is the reliable way to invoke the "npm" .cmd shim on Windows
   // (naming "npm.cmd" explicitly can throw EINVAL on some Node/Windows
   // combinations) -- see the matching comment in lib/first-run.mjs.
-  const frontendChild = spawn('npm', ['run', 'dev:web'], { cwd: ROOT, stdio: 'inherit', shell: IS_WIN });
+  const frontendChild = spawn(
+    'npm',
+    ['run', 'dev:web'],
+    {
+      cwd: ROOT,
+      stdio: 'inherit',
+      shell: IS_WIN,
+      // Only in share mode: this session's env enables the share-only Vite
+      // branch (host: true, allowedHosts, /api proxy) from vite.config.ts.
+      env: share ? { ...process.env, SENTINELX_SHARE: '1' } : process.env,
+    }
+  );
 
   let cleanedUp = false;
   const cleanup = () => {
     if (cleanedUp) return;
     cleanedUp = true;
+    if (share) share.stop(); // tear the tunnel down with the launcher
     if (!reuseBackend) {
       if (INLINE && backendChild) {
         killInlineChild(backendChild);
@@ -484,6 +610,17 @@ async function cmdFullDev() {
     `Database   ${dbSource === 'docker' ? 'Docker (postgres container)' : 'local PostgreSQL install'}`,
     `API health ${health.ok ? 'OK' : 'NOT RESPONDING YET'}`,
   ]);
+  if (share) {
+    console.log('');
+    log.box([
+      `Sharing is ON for this run (${share.mode}) -- anyone with the URL can open this DEV environment.`,
+      '',
+      `Share URL  ${share.origin}`,
+      'Emails     invitation links now point at the Share URL above',
+      'Stop it    Ctrl+C here (tears the tunnel down), or npm run dev:stop',
+    ]);
+    log.warn('Sharing exposes dev secrets and seed data. Close it after the demo -- never share a environment holding real data.');
+  }
   if (!health.ok) {
     log.warn(`Backend did not answer ${HEALTH_URL} within 40s -- check the ${INLINE ? '[api] lines above' : '"SentinelX Backend" window'} for the real error. Vite is still running.`);
   }
