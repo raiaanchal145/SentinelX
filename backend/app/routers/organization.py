@@ -24,7 +24,7 @@ from app.audit import audit_from_scope
 from app.config import settings
 from app.database import get_db
 from app.email_utils import send_invitation_email
-from app.invite_service import check_invitation_rate_limit, create_invitation, rotate_invitation_token
+from app.invite_service import build_invite_link, check_invitation_rate_limit, create_invitation, rotate_invitation_token
 from app.models import (
     AccountEmail,
     ActorType,
@@ -327,7 +327,7 @@ async def create_member_invitation(
     )
     await db.commit()
 
-    invite_link = f"{settings.frontend_url}/accept-invite?token={raw_token}"
+    invite_link = build_invite_link(raw_token)
     try:
         send_invitation_email(email, org.name, role.value, invite_link, invitation.expires_at)
     except Exception as exc:
@@ -380,7 +380,7 @@ async def resend_invitation(
     await audit_from_scope(db, scope, "invitation.resend", target_type="invitation", target_id=invitation.id, request=request)
     await db.commit()
 
-    invite_link = f"{settings.frontend_url}/accept-invite?token={raw_token}"
+    invite_link = build_invite_link(raw_token)
     role_label = invitation.role.value if invitation.role else invitation.kind
     try:
         send_invitation_email(invitation.email, org.name, role_label, invite_link, invitation.expires_at)

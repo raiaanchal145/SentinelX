@@ -34,7 +34,17 @@ class Settings(BaseSettings):
     # Base URL of the deployed frontend -- used to build the link inside
     # invitation emails ({frontend_url}/accept-invite?token=...). The dev
     # default matches Vite's default port, same as CORS in app/main.py.
+    # The dev launcher's share mode (npm run dev:share) overrides this for
+    # one session only (LAN IP or tunnel URL) so emailed invitation links
+    # open from other devices -- see README "Sharing the dev environment".
     frontend_url: str = "http://localhost:5173"
+
+    # Comma-separated extra CORS origins for dev sharing ONLY, e.g.
+    # "http://192.168.1.20:5173,https://random-name.trycloudflare.com".
+    # Set by the dev launcher (npm run dev:share) for that session alone;
+    # never set it permanently and never use "*" -- main.py only applies
+    # these when ENV=dev and always keeps the localhost origin allowed.
+    dev_share_origins: str = ""
 
 
 DEFAULT_SECRET_KEY = "sentinelx-dev-secret-change-me"

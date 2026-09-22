@@ -16,7 +16,7 @@ from app.audit import audit_from_scope
 from app.config import settings
 from app.database import get_db
 from app.email_utils import send_invitation_email
-from app.invite_service import check_invitation_rate_limit, create_invitation
+from app.invite_service import build_invite_link, check_invitation_rate_limit, create_invitation
 from app.models import AccountEmail, Admin, AdminLevel, Organization, OrganizationStatus, SocMode, SocOrganizationAssignment
 from app.scope import Scope
 
@@ -73,7 +73,7 @@ async def invite_soc_analyst(
     )
     await db.commit()
 
-    invite_link = f"{settings.frontend_url}/accept-invite?token={raw_token}"
+    invite_link = build_invite_link(raw_token)
     try:
         send_invitation_email(email, "SentinelX", "platform SOC analyst", invite_link, invitation.expires_at)
     except Exception as exc:

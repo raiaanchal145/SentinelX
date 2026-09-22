@@ -16,11 +16,26 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models import Invitation
 from app.security import generate_invitation_token
 
 INVITATION_TTL_DAYS = 7
 MAX_INVITATIONS_PER_ORG_PER_HOUR = 20
+
+
+def build_invite_link(raw_token: str) -> str:
+    """
+    The accept-invitation URL put in invitation emails (and printed to
+    the console when SMTP isn't configured).
+
+    Reads settings.frontend_url at send time -- never a baked-in
+    constant -- so the dev launcher's share mode can repoint email links
+    at the LAN IP or tunnel URL for that session (FRONTEND_URL env var),
+    and a phone can open the invitation (see README's "Sharing the dev
+    environment"). In production this is just FRONTEND_URL from .env.
+    """
+    return f"{settings.frontend_url.rstrip('/')}/accept-invite?token={raw_token}"
 
 
 async def check_invitation_rate_limit(db: AsyncSession, organization_id: uuid.UUID | None) -> None:
