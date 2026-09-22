@@ -294,3 +294,19 @@ with a 10-minute expiry. `test_auth.py` asserts the known-vs-unknown
 responses are byte-identical, and `test_anonymous_routes.py` pins the
 whole anonymous surface to the allowed list so a future anonymous
 account-creation path fails the suite rather than a security review.
+
+## Dev sharing is opt-in, session-scoped, and never a wildcard
+
+Emailed links point at `FRONTEND_URL` (default `http://localhost:5173`),
+so they only open on the machine running the dev server. `npm run
+dev:share` exposes the stack for **one run** via LAN URLs or a temporary
+cloudflared quick tunnel. For that session the launcher sets
+`FRONTEND_URL` and `DEV_SHARE_ORIGINS` in the backend's env only --
+nothing is written to any `.env` file, and plain `npm run dev` passes
+neither variable. The backend's CORS allow-list grows by exactly the
+sharing origin; the parser refuses `*` and empty entries, and a test
+pins that an unknown origin is still rejected while sharing is active.
+cloudflared is an external CLI the launcher never installs -- it prints
+the install command instead -- and the frontend's API base follows the
+page origin (with Vite proxying `/api` to loopback) so a phone hits the
+right backend without the backend ever leaving localhost.
