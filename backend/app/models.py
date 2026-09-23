@@ -751,6 +751,21 @@ class AssetTag(Base):
     __table_args__ = (UniqueConstraint("asset_id", "tag", name="uq_asset_tags_asset_tag"),)
 
 
+class WorkerStatus(Base):
+    """
+    Single-row (id=1) liveness record the worker's heartbeat job upserts
+    every 30 seconds. The API reads it (health/doctor) to answer "is the
+    background worker alive?" without touching Redis.
+    """
+
+    __tablename__ = "worker_status"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    worker_name: Mapped[str | None] = mapped_column(String(80))
+    pid: Mapped[int | None] = mapped_column()
+
+
 class EventSource(Base):
     __tablename__ = "event_sources"
 

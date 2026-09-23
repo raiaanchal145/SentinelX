@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     # these when ENV=dev and always keeps the localhost origin allowed.
     dev_share_origins: str = ""
 
+    # Redis used by the background worker (docs/DECISIONS.md -- Arq over
+    # RQ). The docker-compose default matches the launcher's container;
+    # the worker and the API's enqueue pool both connect here, and the
+    # worker prints a clear startup error if this is unreachable.
+    redis_url: str = "redis://localhost:6379/0"
+
 
 DEFAULT_SECRET_KEY = "sentinelx-dev-secret-change-me"
 

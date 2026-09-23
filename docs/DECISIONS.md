@@ -315,3 +315,29 @@ API base follows the page origin (with Vite proxying `/api` to
 loopback) so a phone hits the right backend without the backend ever
 leaving localhost. Emails baked with a localhost URL before a share
 session keep that URL forever; the launcher tells the user to resend.
+
+## Background work: Arq over RQ, Redis in compose
+
+The backend is async end to end (FastAPI + async SQLAlchemy + asyncpg),
+so the worker runs **Arq** (async job functions share the app's session
+factory) rather than RQ, whose sync jobs would need a second sync DB
+engine or loop-wrangling. Arq also ships cron scheduling (the worker
+heartbeat is config, not a hand-rolled loop) and graceful SIGTERM
+drain. `redis:7-alpine` joins docker-compose with a **named volume**
+(jobs in flight survive a restart, same pattern as pgdata) and a
+healthcheck; `settings.redis_url` points at it, and the dev launcher
+starts Redis, a worker terminal, and checks both in `dev:doctor`.
+Dependencies added: `arq`, `redis` (the async redis-py client) --
+nothing else.
+
+## Event sources are managed by organization_admin + security_manager
+
+Minting ingestion API keys is security administration, not device
+management. Reusing the `assets`-write module rule would let IT
+developers mint keys for their team's assets, widening the key-minting
+surface for no operational need; the dedicated role check keeps key
+creation with the owner and security manager (the same audience as the
+frontend page). soc_analyst and auditor get read-only lists. Keys are
+SHA-256 hashed (format `sx_<prefix>_<secret>`, shown exactly once),
+revocable, and record `last_used_at`; a rate-limit hook exists for P07
+to implement.
