@@ -37,7 +37,9 @@ export const CLOUDFLARED_INSTALL_HINT =
 
 // Only IPv4 private ranges are useful for LAN sharing -- loopback is the
 // machine itself, link-local (169.254.x) is unroutable, CGNAT (100.64/10)
-// and public IPs are not "same Wi-Fi" addresses.
+// and public IPs are not "same Wi-Fi" addresses. NOTE: CGNAT (100.64.0.0/10)
+// is excluded deliberately even though some phone-hotspot/cellular paths use
+// it -- that traffic doesn't reach the laptop's LAN stack from another device.
 function isPrivateIPv4(address) {
   const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(address);
   if (!m) return false;
@@ -48,17 +50,33 @@ function isPrivateIPv4(address) {
   return false;
 }
 
+// Adapter names that are virtual (VMs/WSL/hotspot/containers) rather than
+// the physical Wi-Fi/Ethernet adapter a phone on the same LAN would reach.
+// Matched case-insensitively as substrings; matched LAST so a physical
+// adapter always wins over a virtual one at the same priority tier.
+const VIRTUAL_IFACE_PATTERN =
+  /vethernet|wsl|hyper-v|virtualbox|vmware|loopback|tap|tun|docker|vEthernet|hotspot|local area connection\*|bluetooth/i;
+
+// Lower score = better candidate for the "recommended" share URL.
+function ifaceScore(iface) {
+  const name = iface.toLowerCase();
+  if (/(wi-?fi|wlan|wireless|ethernet|eth\d)/.test(name) && !VIRTUAL_IFACE_PATTERN.test(name)) return 0; // physical
+  if (VIRTUAL_IFACE_PATTERN.test(name)) return 2; // virtual adapters
+  return 1; // everything else (unnamed/unknown adapters)
+}
+
 export function detectLanIps() {
   const found = [];
   for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
     for (const addr of addrs ?? []) {
       if (addr.family !== 'IPv4' || addr.internal) continue;
       if (!isPrivateIPv4(addr.address)) continue;
-      found.push({ iface: name, address: addr.address });
+      found.push({ iface: name, address: addr.address, score: ifaceScore(name) });
     }
   }
-  // Stable order so the "recommended" pick doesn't jump between runs.
-  found.sort((x, y) => x.address.localeCompare(y.address, undefined, { numeric: true }));
+  // Physical adapters first, then by stable numeric address order, so the
+  // "recommended" pick is the real Wi-Fi/Ethernet and doesn't jump between runs.
+  found.sort((x, y) => x.score - y.score || x.address.localeCompare(y.address, undefined, { numeric: true }));
   return found;
 }
 
