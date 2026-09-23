@@ -799,7 +799,7 @@ export function apiCreateEventSourceKey(sourceId: string) {
 }
 
 export function apiListEventSourceKeys(sourceId: string) {
-  return request<{ keys: EventSourceKeyRow[] }>(`/event-sources/${sourceId}/keys`)
+  return request<{ keys: EventSourceKeyRow[]}>(`/event-sources/${sourceId}/keys`)
 }
 
 export function apiRevokeEventSourceKey(sourceId: string, keyId: string) {
