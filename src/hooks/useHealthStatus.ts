@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react"
 
+import { API_BASE } from "../lib/apiBase"
+
 export type ConnectivityStatus = "operational" | "degraded" | "offline"
 
-const HEALTH_URL = "http://localhost:8000/api/v1/health"
+const HEALTH_URL = `${API_BASE}/health`
 const POLL_MS = 30_000
 const TIMEOUT_MS = 5_000
 

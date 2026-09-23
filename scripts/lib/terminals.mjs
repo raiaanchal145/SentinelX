@@ -18,11 +18,12 @@ function quoteWin(arg) {
 }
 
 // Opens a new terminal window running `command args...` in `cwd`, titled
-// `title`. Returns the best-effort PID of the window's own shell process
+// `title`, with `env` (default: this process's env) as the child's
+// environment. Returns the best-effort PID of the window's own shell process
 // (used by dev:stop's tree-kill) -- may be null if we truly cannot obtain
 // one, in which case dev:stop falls back to killing whatever is listening
 // on the backend port instead.
-export function openWindow({ cwd, command, args, title }) {
+export function openWindow({ cwd, command, args, title, env = process.env }) {
   const fullCommand = [command, ...args].map(quoteWin).join(' ');
 
   if (IS_WIN) {
@@ -43,7 +44,7 @@ export function openWindow({ cwd, command, args, title }) {
       const child = spawn(
         'wt.exe',
         ['new-tab', '--title', title, '-d', cwd, 'cmd.exe', '/k', fullCommand],
-        { detached: true, stdio: 'ignore' }
+        { detached: true, stdio: 'ignore', env }
       );
       child.unref();
       if (child.pid) return child.pid;
@@ -64,7 +65,7 @@ export function openWindow({ cwd, command, args, title }) {
       '-WorkingDirectory $env:SENTINELX_CWD -PassThru; $p.Id';
     const result = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
       encoding: 'utf8',
-      env: { ...process.env, SENTINELX_CMD: fullCommand, SENTINELX_CWD: cwd },
+      env: { ...env, SENTINELX_CMD: fullCommand, SENTINELX_CWD: cwd },
     });
     const pid = Number((result.stdout || '').trim());
 
@@ -152,9 +153,10 @@ export function killByPort(port) {
 // Inline fallback: run backend + frontend as this process's own children.
 // ---------------------------------------------------------------------------
 
-export function spawnInline({ cwd, command, args, label, color }) {
+export function spawnInline({ cwd, command, args, label, color, env = process.env }) {
   const child = spawn(command, args, {
     cwd,
+    env,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: !IS_WIN,
   });

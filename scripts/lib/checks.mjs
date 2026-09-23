@@ -240,6 +240,23 @@ export function parseDatabaseUrl(databaseUrl) {
   }
 }
 
+// Is this PID still running? (Cheap liveness probe -- unlike port checks,
+// it works for processes that don't listen anywhere, like a cloudflared
+// tunnel that connects OUT to the local app instead of listening.)
+export function isPidAlive(pid) {
+  if (!pid) return false;
+  try {
+    if (IS_WIN) {
+      const result = spawnSync('tasklist', ['/FI', `PID eq ${pid}`, '/NH'], { encoding: 'utf8' });
+      return result.status === 0 && new RegExp(`\\b${pid}\\b`).test(result.stdout || '');
+    }
+    process.kill(pid, 0); // signal 0 = existence check only
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Best-effort process-name lookup, used before killing-by-port so dev:stop
 // doesn't nuke an unrelated program that happens to be on the same port.
 export function processNameForPid(pid) {

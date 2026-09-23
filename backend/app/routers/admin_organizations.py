@@ -37,7 +37,7 @@ from app.models import (
     User,
     UserRole,
 )
-from app.invite_service import check_invitation_rate_limit, create_invitation, rotate_invitation_token
+from app.invite_service import build_invite_link, check_invitation_rate_limit, create_invitation, rotate_invitation_token
 from app.modules import ALL_MODULE_KEYS
 from app.org_summary import active_owner_count, compute_org_counts
 from app.routers import assets as assets_router
@@ -258,7 +258,7 @@ async def create_organization(
     )
     await db.commit()
 
-    invite_link = f"{settings.frontend_url}/accept-invite?token={raw_token}"
+    invite_link = build_invite_link(raw_token)
     try:
         send_invitation_email(owner_email, org.name, "organization owner", invite_link, invitation.expires_at)
     except Exception as exc:
@@ -679,7 +679,7 @@ async def resend_owner_invitation(
     await db.commit()
 
     org = await db.get(Organization, organization_id)
-    invite_link = f"{settings.frontend_url}/accept-invite?token={raw_token}"
+    invite_link = build_invite_link(raw_token)
     try:
         send_invitation_email(
             invitation.email, org.name if org else "SentinelX", "organization owner",
