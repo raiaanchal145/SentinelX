@@ -22,6 +22,7 @@ import OwnerMembers from "./features/owner/pages/OwnerMembers"
 import OwnerTeams from "./features/owner/pages/OwnerTeams"
 import OwnerAccess from "./features/owner/pages/OwnerAccess"
 import OwnerAssets from "./features/owner/pages/OwnerAssets"
+import OwnerEventSources from "./features/owner/pages/OwnerEventSources"
 import OwnerSettings from "./features/owner/pages/OwnerSettings"
 
 import UserLayout from "./layouts/UserLayout"
@@ -46,6 +47,7 @@ import ManagerApprovals from "./features/manager/pages/ManagerApprovals"
 import ManagerIncidents from "./features/manager/pages/ManagerIncidents"
 import ManagerReports from "./features/manager/pages/ManagerReports"
 import ManagerAssets from "./features/manager/pages/ManagerAssets"
+import ManagerEventSources from "./features/manager/pages/ManagerEventSources"
 import ManagerAudit from "./features/manager/pages/ManagerAudit"
 
 import AuditorOverview from "./features/auditor/pages/AuditorOverview"
@@ -263,6 +265,15 @@ function App() {
       />
 
       <Route
+        path="/organization/event-sources"
+        element={
+          <ProtectedRoute allowedRoles={["organization_admin"]}>
+            <OwnerEventSources />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
         path="/organization/settings"
         element={
           <ProtectedRoute allowedRoles={["organization_admin"]}>
@@ -375,6 +386,7 @@ function App() {
         <Route path="/manager/approvals" element={<ModuleGuard module="approvals"><ManagerApprovals /></ModuleGuard>} />
         <Route path="/manager/reports" element={<ModuleGuard module="reports"><ManagerReports /></ModuleGuard>} />
         <Route path="/manager/assets" element={<ModuleGuard module="assets"><ManagerAssets /></ModuleGuard>} />
+        <Route path="/manager/event-sources" element={<ManagerEventSources />} />
         <Route path="/manager/audit" element={<ModuleGuard module="audit_logs"><ManagerAudit /></ModuleGuard>} />
       </Route>
 

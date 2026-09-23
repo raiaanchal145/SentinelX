@@ -748,3 +748,60 @@ export function apiSetAssetTags(assetId: string, tags: string[]) {
 export function apiListOrganizationAssets(organizationId: string, params: Omit<AssetListParams, "organization_id"> = {}) {
   return request<AssetListResponse>(`/admin/organizations/${organizationId}/assets${assetQuery(params)}`)
 }
+
+// ---------------------------------------------------------------------------
+// Event sources + their ingestion API keys (routers/event_sources.py).
+// The full key is returned EXACTLY ONCE by apiCreateEventSourceKey --
+// the list endpoints only ever see prefix/created/last-used/revoked.
+// ---------------------------------------------------------------------------
+
+export type EventSourceRow = {
+  id: string
+  name: string
+  source_type: string
+  asset_id: string | null
+  enabled: boolean
+  status: string
+  last_event_at: string | null
+  created_at: string | null
+  can_manage: boolean
+}
+
+export type EventSourceKeyRow = {
+  id: string
+  prefix: string
+  created_at: string | null
+  last_used_at: string | null
+  revoked: boolean
+  revoked_at: string | null
+  /** Only present on the create-key response. */
+  key?: string
+}
+
+export function apiListEventSources() {
+  return request<{ event_sources: EventSourceRow[] }>("/event-sources")
+}
+
+export function apiCreateEventSource(payload: { name: string; source_type: string; asset_id?: string | null; enabled?: boolean }) {
+  return request<EventSourceRow>("/event-sources", { method: "POST", body: JSON.stringify(payload) })
+}
+
+export function apiUpdateEventSource(sourceId: string, payload: { name?: string; asset_id?: string | null; enabled?: boolean }) {
+  return request<EventSourceRow>(`/event-sources/${sourceId}`, { method: "PATCH", body: JSON.stringify(payload) })
+}
+
+export function apiDisableEventSource(sourceId: string) {
+  return request<EventSourceRow>(`/event-sources/${sourceId}`, { method: "DELETE" })
+}
+
+export function apiCreateEventSourceKey(sourceId: string) {
+  return request<EventSourceKeyRow>(`/event-sources/${sourceId}/keys`, { method: "POST" })
+}
+
+export function apiListEventSourceKeys(sourceId: string) {
+  return request<{ keys: EventSourceKeyRow[] }>(`/event-sources/${sourceId}/keys`)
+}
+
+export function apiRevokeEventSourceKey(sourceId: string, keyId: string) {
+  return request<EventSourceKeyRow>(`/event-sources/${sourceId}/keys/${keyId}`, { method: "DELETE" })
+}
