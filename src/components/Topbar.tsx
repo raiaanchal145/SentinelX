@@ -6,6 +6,8 @@ import {
 
 import { useNavigate } from "react-router-dom"
 
+import { logout as clearSession, roleLabel } from "../lib/auth"
+
 function Topbar() {
   const navigate = useNavigate()
 
@@ -20,27 +22,15 @@ function Topbar() {
     ) || ""
 
   const logout = () => {
-    localStorage.removeItem(
-      "sentinelx_logged_in",
-    )
-
-    localStorage.removeItem(
-      "sentinelx_role",
-    )
-
-    localStorage.removeItem(
-      "sentinelx_name",
-    )
-
+    // Shared logout clears every session key (token, email, account type
+    // included) -- the old inline version left stale values behind.
+    clearSession()
     navigate("/login")
   }
 
-  const formattedRole =
-    role === "super_admin"
-      ? "Super Administrator"
-      : role === "soc_analyst"
-        ? "SOC Analyst"
-        : "IT / Developer"
+  // roleLabel maps every role to its real label; the old inline ternary
+  // defaulted organization_admin (and anything unknown) to "IT / Developer".
+  const formattedRole = roleLabel(role)
 
   return (
     <header className="flex h-20 items-center justify-between border-b border-white/10 bg-surface-sunken px-6">
