@@ -30,8 +30,8 @@ from alembic.config import Config
 
 from app.config import settings
 
-MIGRATION_HEAD = "d5e6f7a8b9c0"
-PREVIOUS_REVISION = "b8c9d0e1f2a3"
+MIGRATION_HEAD = "e6f7a8b9c0d1"  # worker_status heartbeat (bumped each new migration)
+PREVIOUS_REVISION = "d5e6f7a8b9c0"
 SCRATCH_DB = "sentinelx_migration_scratch"
 
 
@@ -116,10 +116,10 @@ async def test_upgrade_empty_populated_and_downgrade(monkeypatch):
             assert pending_table is None
 
         # ------------------------------------------------------------
-        # 2. Downgrade -1 (the spec's own gate): the structures come
-        #    back on top of the still-existing schema -- the full four-
-        #    value enum and the pending_registrations table (empty; no
-        #    data is restored).
+        # 2. Downgrade -1 (the spec's own gate): back to d5e6f7a8b9c0.
+        #    e6f7's own downgrade DROPS worker_status; the invite-only
+        #    state (enum without 'pending', no pending_registrations) is
+        #    UNCHANGED -- that was settled two migrations ago.
         # ------------------------------------------------------------
         await asyncio.to_thread(command.downgrade, _alembic_config(), "-1")
 
@@ -137,14 +137,30 @@ async def test_upgrade_empty_populated_and_downgrade(monkeypatch):
                     )
                 )
             )
-            assert labels == ["pending", "active", "suspended", "archived"]
+            assert labels == ["active", "suspended", "archived"]
 
             pending_table = (
                 await conn.execute(
                     text("SELECT 1 FROM information_schema.tables WHERE table_name = 'pending_registrations'")
                 )
             ).scalar()
-            assert pending_table == 1
+            assert pending_table is None
+
+            worker_status = (
+                await conn.execute(
+                    text("SELECT 1 FROM information_schema.tables WHERE table_name = 'worker_status'")
+                )
+            ).scalar()
+            assert worker_status is None  # the -1 downgrade drops the heartbeat table
+
+        # ------------------------------------------------------------
+        # 3. Populated database -> upgrade head: a pending organization
+        #    converts to active, registration attempts are discarded.
+        #    The pending structures only exist BELOW d5e6, so first
+        #    downgrade to b8c9d0e1f2a3, insert, then upgrade head (which
+        #    replays d5e6 AND e6f7 over the data).
+        # ------------------------------------------------------------
+        await asyncio.to_thread(command.downgrade, _alembic_config(), "b8c9d0e1f2a3")
 
         # ------------------------------------------------------------
         # 3. Populated database -> upgrade head: a pending organization
@@ -178,6 +194,13 @@ async def test_upgrade_empty_populated_and_downgrade(monkeypatch):
             ).scalar()
             assert pending_table is None
 
-        await engine.dispose()
+            worker_status = (
+                await conn.execute(
+                    text("SELECT 1 FROM information_schema.tables WHERE table_name = 'worker_status'")
+                )
+            ).scalar()
+            assert worker_status == 1  # back at head: the heartbeat table exists again
+
+            await engine.dispose()
     finally:
         await _drop_scratch_database()

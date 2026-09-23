@@ -15,23 +15,30 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.database import AsyncSessionLocal
 from app.models import WorkerStatus
 
 logger = logging.getLogger("sentinelx.worker")
 
 
-async def heartbeat(ctx: dict[str, Any]) -> dict[str, Any]:
+async def heartbeat(ctx: dict[str, Any], session_factory=None) -> dict[str, Any]:
     """
     Cron job (every 30s via WorkerSettings): upsert the single
     worker_status row so the API (and the doctor) can answer "is the
     worker alive and when did it last tick?" without touching Redis.
+
+    The session factory comes from ctx (WorkerSettings.on_startup puts
+    the app's there), so tests can inject their own; the app default is
+    the fallback for direct calls.
     """
     now = dt.datetime.now(dt.timezone.utc)
     worker_name = os.environ.get("SENTINELX_WORKER_NAME", "worker-1")
     pid = os.getpid()
 
-    async with AsyncSessionLocal() as db:
+    if session_factory is None:
+        from app.database import AsyncSessionLocal  # imported lazily: keep module import light
+        session_factory = AsyncSessionLocal
+
+    async with session_factory() as db:
         row = (await db.execute(select(WorkerStatus).where(WorkerStatus.id == 1))).scalar_one_or_none()
         if row is None:
             row = WorkerStatus(id=1)
@@ -73,6 +80,11 @@ async def on_startup(ctx: dict[str, Any]) -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
+    # Jobs resolve their DB session through ctx so tests (and any future
+    # second worker) can inject a different session factory.
+    from app.database import AsyncSessionLocal
+
+    ctx["session_factory"] = AsyncSessionLocal
     logger.info("worker starting (pid=%s, redis=%s)", os.getpid(), ctx.get("_redis_url", "configured"))
 
     # Prove Redis is reachable now, not on the first job -- a wrong
