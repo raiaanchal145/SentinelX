@@ -70,7 +70,9 @@ invitation link), or invite members/platform SOC analysts from the
 organization pages. Access to SentinelX is by invitation; contact your
 organization administrator if you don't have an account.
 
-Press **Ctrl+C** in that terminal to stop the frontend and the backend window this command started. It does **not** stop the Postgres container (so the next `npm run dev` is fast) — see `npm run dev:stop` below if you want to stop that too.
+Press **Ctrl+C** in that terminal to stop the frontend, the backend window, and the worker window this command started. It does **not** stop the Postgres/Redis containers (so the next `npm run dev` is fast) — see `npm run dev:stop` below if you want to stop those too.
+
+The full stack `npm run dev` brings up: **Postgres** (docker compose, or a local install), **Redis** (docker compose — the background-work queue, docs/DECISIONS.md), the **backend** (uvicorn), a **worker** terminal (`python -m arq app.worker.WorkerSettings` — consumes the queue and writes a 30-second heartbeat the API reads for liveness), and **Vite**. `dev:doctor` reports Redis reachability and the worker alongside the database checks.
 
 ### Other commands
 
@@ -83,9 +85,9 @@ Press **Ctrl+C** in that terminal to stop the frontend and the backend window th
 | `npm run dev:setup` | Force the first-time setup steps again (reinstalls Node/Python packages even if nothing looks changed), then exits. |
 | `npm run dev:doctor` | Runs every check and prints a PASS/FAIL table — starts nothing. Good first step when something's not working. |
 | `npm run dev:share` | **Opt-in sharing for one run** — expose the dev environment to other devices (LAN or a temporary cloudflared tunnel); see the section below. |
-| `npm run dev:stop` | Stops the backend `npm run dev` started. Add `-- --db` to also stop the Postgres container (`npm run dev:stop -- --db`). Also tears down an orphaned sharing tunnel. |
+| `npm run dev:stop` | Stops the backend and worker `npm run dev` started. Add `-- --db` to also stop the Postgres and Redis containers (`npm run dev:stop -- --db`). Also tears down an orphaned sharing tunnel. |
 
-Add `--inline` (or set `SENTINELX_INLINE=1`) to `npm run dev` to run the backend as a plain child process printing `[api]`-prefixed lines in the same terminal, instead of opening a new window — useful if opening new terminal windows doesn't work in your setup.
+Add `--inline` (or set `SENTINELX_INLINE=1`) to `npm run dev` to run the backend AND worker as plain child processes printing `[api]`/`[worker]`-prefixed lines in the same terminal, instead of opening new windows — useful if opening new terminal windows doesn't work in your setup.
 
 ### Sharing the dev environment with another device (LAN by default)
 

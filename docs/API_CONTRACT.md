@@ -251,6 +251,61 @@ admin-side view of one organization's data is read-only.
 | `organization_id_required` | 400 | platform SOC analyst GET without organization_id |
 | `platform_admin_not_supported` | 403 | super_admin on /assets/*, or any platform account on a write endpoint |
 
+## Event sources: `/api/v1/event-sources`
+
+Registered event sources (a linux auth collector, an application, docker,
+a network probe, a custom JSON feed) and their ingestion API keys.
+`app/routers/event_sources.py`.
+
+Access: **organization_admin (owner) and security_manager only** for
+all write endpoints and key management (docs/DECISIONS.md -- minting
+keys is security administration, not `assets`-write); soc_analyst and
+auditor get the read-only list; platform accounts are rejected (403
+`platform_admin_not_supported`) -- a per-organization read view belongs
+on an admin-side endpoint in a later milestone.
+
+| Endpoint | Who | Notes |
+|---|---|---|
+| `GET /` | any active-org account | `{event_sources: [...]}`, newest first; each row: `id, name, source_type, asset_id, enabled, status, last_event_at, created_at, can_manage` |
+| `POST /` | owner / security_manager | `{name, source_type, asset_id?, enabled?=true, config?}`; 201, audit `event_source.create` |
+| `GET /{id}` | any active-org account | one row; another org's id is 404 |
+| `PATCH /{id}` | owner / security_manager | partial; `enabled: false` audits `event_source.disable` |
+| `DELETE /{id}` | owner / security_manager | soft-disable only (history keeps the source); audit `event_source.disable` |
+| `POST /{id}/keys` | owner / security_manager | 201 with the FULL key **exactly once**; only `key_hash` (SHA-256) + short `prefix` are stored; audit `api_key.create` stores the prefix, never the key |
+| `GET /{id}/keys` | owner / security_manager | `prefix`, `created_at`, `last_used_at`, `revoked`, `revoked_at` -- never the key or its hash |
+| `DELETE /{id}/keys/{key_id}` | owner / security_manager | revoke (not delete); collectors using it fail immediately; audit `api_key.revoke` |
+
+**Ingestion authentication** (used by the P07 ingestion endpoints):
+`Authorization: Bearer sx_<prefix>_<secret>` resolved by the reusable
+dependency `get_event_source_from_api_key` -- constant-time hash
+compare, `last_used_at` updated, per-key `rate_limit_for_key` hook (stub
+until P07), revoked key -> 401 `invalid_api_key`, disabled source -> 403
+`event_source_disabled`. Key format: 32+ random bytes, shown once.
+
+### Event source error codes
+
+| Code | Status | Where |
+|---|---|---|
+| `event_source_not_found` | 404 | get/patch/delete/keys, incl. another organization's id |
+| `event_source_already_disabled` | 409 | double disable |
+| `event_source_disabled` | 403 | valid key whose source is disabled |
+| `invalid_api_key` | 401 | missing/garbled/unknown/revoked key -- one identical response for every failure shape |
+| `api_key_not_found` / `api_key_already_revoked` | 404 / 409 | revoke |
+| `invalid_source_type` / `name_required` / `asset_not_found` | 400 | field validation |
+| `event_sources_write_required` | 403 | authenticated org account without the owner/security_manager role |
+| `platform_admin_not_supported` | 403 | platform accounts on this router |
+
+## Background worker
+
+`app/worker/` (Arq -- docs/DECISIONS.md) consumes the Redis queue
+(`settings.redis_url`). The API enqueues through `enqueue_work`, which
+never fails a request when Redis is down. The worker's heartbeat cron
+(every 30s) upserts the single `worker_status` row (`id=1`:
+`last_heartbeat_at`, `worker_name`, `pid`) so liveness is readable from
+Postgres alone; worker startup fails fast with a clear error when Redis
+is unreachable. The dev launcher starts Redis and a worker terminal
+with the rest of the stack and checks both in `dev:doctor`.
+
 ## Error code reference (structured-detail endpoints only)
 
 | Code | Status | Where |

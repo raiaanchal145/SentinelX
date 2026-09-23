@@ -320,4 +320,16 @@ lib/data.ts      getSocKpis(state, scope), getTriageQueue(...), etc. --
   dashboards that display this data are still backed entirely by the
   mock layer described above. `assets` is the exception: its endpoints
   (`app/routers/assets.py`) and UI are real, which is what the events,
-  alerts, incidents and tickets work will point at.
+  alerts, incidents and tickets work will point at. Event sources
+  (`app/routers/event_sources.py`) and the background worker
+  (`app/worker/`) are the second and third real pieces: sources
+  register collectors and mint hashed API keys (`sx_<prefix>_<secret>`,
+  shown once, SHA-256 at rest, owner + security_manager only --
+  docs/DECISIONS.md), and the Arq worker consumes the Redis queue
+  (`settings.redis_url`) with a 30s heartbeat cron upserting the
+  single `worker_status` row the API reads for liveness. The dev
+  launcher runs the whole stack: Postgres + Redis (docker compose),
+  uvicorn, the worker (`python -m arq app.worker.WorkerSettings`), and
+  Vite. Ingestion endpoints (P07) will authenticate with the
+  `get_event_source_from_api_key` dependency and enqueue parse jobs
+  through `enqueue_work`.
