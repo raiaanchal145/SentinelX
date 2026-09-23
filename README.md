@@ -76,7 +76,7 @@ Press **Ctrl+C** in that terminal to stop the frontend and the backend window th
 
 | Command | What it does |
 |---|---|
-| `npm run dev` | Everything above — the one command everybody uses day to day. |
+| `npm run dev` | Everything above — the one command everybody uses day to day. LAN-shares by default so emailed links open on a phone (`-- --no-share` for localhost-only). |
 | `npm run dev:web` | Frontend only (plain `vite`, what `npm run dev` used to do). |
 | `npm run dev:api` | Backend only, in the current terminal (assumes the database is already up). |
 | `npm run dev:db` | Only make sure PostgreSQL is running and migrated — starts no servers. |
@@ -87,18 +87,22 @@ Press **Ctrl+C** in that terminal to stop the frontend and the backend window th
 
 Add `--inline` (or set `SENTINELX_INLINE=1`) to `npm run dev` to run the backend as a plain child process printing `[api]`-prefixed lines in the same terminal, instead of opening a new window — useful if opening new terminal windows doesn't work in your setup.
 
-### Sharing the dev environment with another device (`npm run dev:share`, opt-in)
+### Sharing the dev environment with another device (LAN by default)
 
-Emails from SentinelX (invitation, verify, reset) link to `FRONTEND_URL`, which defaults to `http://localhost:5173` — a URL that only works on the machine running the dev server, so a teammate or reviewer on a phone gets "site can't be reached". `npm run dev:share` fixes that for **one run at a time**; plain `npm run dev` is never exposed beyond localhost and behaves exactly as always.
+Emails from SentinelX (invitation, verify, reset) link to `FRONTEND_URL`, which defaults to `http://localhost:5173` — a URL that only works on the machine running the dev server, so a teammate or reviewer on a phone gets "site can't be reached".
 
-Two modes (it asks; `--lan` / `--tunnel` skip the prompt):
+**By default `npm run dev` now LAN-shares** (decision 2026-09-23): it detects your machine's LAN IP, prints `http://<lan-ip>:5173`, and sets `FRONTEND_URL` for that session so every emailed link opens from a phone on the **same Wi-Fi** — no extra steps, no extra tools. Localhost keeps working on the laptop exactly as before. Run `npm run dev -- --no-share` for the old localhost-only behavior (e.g. on a café Wi-Fi you don't trust).
 
-- **LAN** — prints `http://<lan-ip>:5173` for every private IPv4 the machine has. Any device on the **same Wi-Fi** can open it; no extra tools. (Windows may prompt to allow Node through the firewall on first use — allow it for private networks.)
-- **Tunnel** — starts a temporary public **cloudflared quick tunnel** (`cloudflared tunnel --url http://localhost:5173`): no account, no signup, random `*.trycloudflare.com` URL, works from any network including mobile data. cloudflared is an **external CLI, not an npm dependency** — the launcher never installs it; it prints the exact install command (`winget install --id Cloudflare.cloudflared` on Windows) if it's missing. Stopping the launcher (Ctrl+C) tears the tunnel down; `npm run dev:stop` cleans up an orphaned one.
+Modes (`npm run dev:share` asks; flags skip the prompt):
 
-Whatever mode is active, for that session only: the backend's `FRONTEND_URL` points at the shared URL (so **invitation/verification emails contain a link that opens from the other device** — the console email fallback shows the same live URL), the backend's CORS allow-list gains exactly that one origin (`DEV_SHARE_ORIGINS`, never a wildcard, gone when the session ends), and Vite serves on all interfaces with `/api` proxied to the loopback backend — the phone talks to one origin and the backend itself never leaves localhost.
+- **LAN (default)** — prints `http://<lan-ip>:5173` for every private IPv4 the machine has. Any device on the **same Wi-Fi** can open it; no extra tools. (Windows may prompt to allow Node through the firewall on first use — allow it for private networks.)
+- **Tunnel** (`npm run dev -- --tunnel`) — starts a temporary public **cloudflared quick tunnel** (`cloudflared tunnel --url http://localhost:5173`): no account, no signup, random `*.trycloudflare.com` URL, works from **any network including mobile data**. cloudflared is an **external CLI, not an npm dependency** — the launcher never installs it; it prints the exact install command (`winget install --id Cloudflare.cloudflared` on Windows) if it's missing. Stopping the launcher (Ctrl+C) tears the tunnel down; `npm run dev:stop` cleans up an orphaned one.
 
-> **Warning:** sharing exposes your local dev environment — dev secrets, seed data, weak passwords — to anyone with the URL. Use it for demos only, stop it (Ctrl+C) as soon as the demo is over, and never share an environment that holds real data.
+Whatever mode is active, for that session only: the backend's `FRONTEND_URL` points at the shared URL (so **invitation/verification emails contain a link that opens from the other device** — the console email fallback shows the same live URL), the backend's CORS allow-list gains exactly that one origin (`DEV_SHARE_ORIGINS`, never a wildcard, gone when the session ends), and Vite serves on all interfaces with `/api` proxied to the loopback backend — the phone talks to one origin and the backend itself never leaves localhost. Nothing is written to any `.env` file.
+
+> **Warning:** sharing exposes your local dev environment — dev secrets, seed data, weak passwords — to anyone with the URL (same Wi-Fi in LAN mode, the whole internet in tunnel mode). Stop the launcher when you're done demoing, use `--no-share` on untrusted networks, and never share an environment that holds real data.
+
+**Emails sent while sharing was OFF keep their localhost links forever** (the URL is baked in at send time) — after switching share modes, resend the invitation and use the new email.
 
 `npm run dev:doctor` reports whether sharing is currently active (and the URL) plus your machine's candidate LAN URLs. `backend/.env.example` documents `FRONTEND_URL`; you normally never set it by hand — the launcher sets it per session.
 

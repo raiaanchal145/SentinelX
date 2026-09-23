@@ -1,16 +1,18 @@
-// Dev sharing (`npm run dev:share`) -- opt-in exposure of the local dev
-// stack to other devices:
+// Dev sharing -- exposure of the local dev stack to other devices:
 //
 //   LAN mode    detect the machine's private IPv4 addresses and print
 //               http://<lan-ip>:5173 (any device on the same Wi-Fi).
+//               This is the DEFAULT for `npm run dev` (decision
+//               2026-09-23, docs/DECISIONS.md) so emailed links just
+//               work on a phone; --no-share turns it off.
 //   Tunnel mode run a throwaway `cloudflared` quick tunnel (no account,
 //               no signup) in front of Vite, so a phone on mobile data
-//               can open the app too.
+//               can open the app too. Opt-in via --tunnel / dev:share.
 //
 // The chosen origin is returned to dev.mjs, which sets -- for that one
 // session only -- FRONTEND_URL (backend: email links point at the shared
 // URL) and DEV_SHARE_ORIGINS (backend: session-scoped CORS allow-list).
-// Plain `npm run dev` never calls any of this.
+// With --no-share nothing here runs and nothing is exposed.
 //
 // cloudflared is an EXTERNAL CLI, deliberately not an npm dependency, and
 // this module never installs it -- it only points at the install command.
@@ -99,9 +101,8 @@ export async function pickShareMode(flags) {
   if (flags.tunnel) return 'tunnel';
 
   log.heading('Share the dev environment');
-  log.raw('   Plain localhost stays available either way. Sharing is opt-in');
-  log.raw('   and only for this run -- it exposes DEV seed data, so stop it');
-  log.raw('   (Ctrl+C) as soon as the demo is over.');
+  log.raw('   Plain localhost stays available either way. It exposes DEV');
+  log.raw('   seed data -- stop it (Ctrl+C) when the demo is over.');
   log.raw('');
 
   if (!process.stdin.isTTY) {

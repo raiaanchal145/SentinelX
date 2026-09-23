@@ -4,14 +4,15 @@
 //   npm run dev          -- full flow: setup whatever is missing, ensure the
 //                            database is up and migrated, start the backend
 //                            in a new terminal window, start Vite here.
+//                            Shares over the LAN by DEFAULT (decision
+//                            2026-09-23), so emailed links open on a phone;
+//                            --no-share for localhost-only.
 //   npm run dev:setup    -- force the first-time setup steps again, then exit.
 //   npm run dev:doctor   -- run every check, print a PASS/FAIL table, start nothing.
 //   npm run dev:db       -- only ensure Postgres is up and migrated.
 //   npm run dev:api      -- backend only, in the current terminal.
-//   npm run dev:share    -- same as dev, plus expose the app to other devices
-//                            (pick LAN or a temporary cloudflared tunnel;
-//                            --lan / --tunnel skip the prompt). OPT-IN only:
-//                            plain `npm run dev` is never shared.
+//   npm run dev:share    -- same as dev, but asks LAN vs cloudflared tunnel
+//                            (--lan / --tunnel skip the prompt).
 //   npm run dev:stop     -- stop the backend this launcher started (add --db to also stop postgres).
 //   --inline / SENTINELX_INLINE=1  -- run the backend as a child process here instead of a new window.
 //
@@ -77,9 +78,22 @@ const HEALTH_URL = `http://localhost:${BACKEND_PORT}/api/v1/health`;
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);
 const INLINE = flag('--inline') || process.env.SENTINELX_INLINE === '1';
-// Dev sharing is fully opt-in: only these flags (or `npm run dev:share`,
-// which passes --share) ever expose the stack beyond localhost.
-const SHARE = flag('--share') || flag('--lan') || flag('--tunnel');
+
+// Dev sharing: `npm run dev` shares over the LAN by DEFAULT (decision
+// 2026-09-23) so invitation/verification emails carry a URL that opens
+// from a phone with no extra steps. --no-share restores the old
+// localhost-only run; --tunnel adds a public cloudflared quick tunnel
+// for devices on other networks; --share (what `npm run dev:share`
+// passes) asks which mode interactively.
+const SHARE_OFF = flag('--no-share') || flag('--local');
+
+function resolveShareMode() {
+  if (SHARE_OFF) return 'off';
+  if (flag('--tunnel')) return 'tunnel';
+  if (flag('--lan')) return 'lan';
+  if (flag('--share')) return 'ask';
+  return 'lan';
+}
 
 // ---------------------------------------------------------------------------
 // Shared: pick "first-time" vs "quick start" framing.
@@ -348,7 +362,7 @@ async function cmdDoctor() {
     true,
     sharingNow
       ? `YES -- ${shareState.mode || 'tunnel'} ${shareState.url || ''} (cloudflared PID ${shareState.pid})`
-      : 'no (npm run dev:share to enable, opt-in only)'
+      : 'no tunnel (npm run dev LAN-shares by default; --no-share disables)'
   );
   let lanDetail = 'none found';
   try {
@@ -443,13 +457,20 @@ async function cmdSetup() {
 }
 
 // ---------------------------------------------------------------------------
-// Dev sharing setup (opt-in: npm run dev:share / --share / --lan / --tunnel).
-// Returns { origin, mode, stop() } -- the launcher-wide contract used for
-// the backend env, the frontend env, the share box and cleanup.
+// Dev sharing setup. `npm run dev` LAN-shares by DEFAULT (decision
+// 2026-09-23); --no-share turns it off, --tunnel adds a public quick
+// tunnel, and npm run dev:share asks which mode. Returns { origin,
+// mode, stop() } -- the launcher-wide contract used for the backend
+// env, the frontend env, the share box and cleanup.
 // ---------------------------------------------------------------------------
 
-async function setupShare(frontendPort) {
-  const mode = await pickShareMode({ lan: flag('--lan'), tunnel: flag('--tunnel') });
+async function setupShare(frontendPort, forcedMode) {
+  let mode;
+  if (forcedMode === 'lan' || forcedMode === 'tunnel') {
+    mode = forcedMode;
+  } else {
+    mode = await pickShareMode({ lan: flag('--lan'), tunnel: flag('--tunnel') });
+  }
 
   if (mode === 'lan') {
     const { urls, recommended, interfaces } = lanShareUrl(frontendPort);
@@ -512,10 +533,17 @@ async function cmdFullDev() {
   // First-run only: silent once an active super_admin exists.
   await ensureFirstSuperAdmin(venvPython);
 
-  // ---- Dev sharing (opt-in only; plain `npm run dev` skips all of this) ----
+  // ---- Dev sharing (LAN by default; --no-share for localhost-only) ----
   let share = null; // { origin, mode, stop() }
-  if (SHARE) {
-    share = await setupShare(FRONTEND_PORT);
+  const shareMode = resolveShareMode();
+  if (shareMode !== 'off') {
+    if (shareMode === 'ask') {
+      share = await setupShare(FRONTEND_PORT); // npm run dev:share: prompts
+    } else {
+      share = await setupShare(FRONTEND_PORT, shareMode); // --lan (default) / --tunnel
+    }
+  } else {
+    log.info('Sharing is off for this run (--no-share) -- app is localhost-only.');
   }
 
   let backendChild = null;
@@ -547,9 +575,9 @@ async function cmdFullDev() {
     // Reusing a backend that this launcher already started WITHOUT the share
     // env: it must be restarted so it picks up FRONTEND_URL/DEV_SHARE_ORIGINS.
     log.warn(
-      'Sharing needs the backend restarted with FRONTEND_URL set, but a backend started by a previous (non-shared) run is already serving port 8000.'
+      'A backend from an older (localhost-only) run is already serving port 8000 -- it will keep emailing localhost links until restarted.'
     );
-    log.raw('   Stop it first (npm run dev:stop) and re-run npm run dev:share, or it will keep emailing localhost links.');
+    log.raw('   Run npm run dev:stop once, then npm run dev again, and emails will carry the share URL.');
   }
 
   log.step('Starting frontend (vite) in this terminal...');
@@ -613,13 +641,14 @@ async function cmdFullDev() {
   if (share) {
     console.log('');
     log.box([
-      `Sharing is ON for this run (${share.mode}) -- anyone with the URL can open this DEV environment.`,
+      `Sharing is ON for this run (${share.mode}) -- open it on your phone:`,
       '',
       `Share URL  ${share.origin}`,
-      'Emails     invitation links now point at the Share URL above',
-      'Stop it    Ctrl+C here (tears the tunnel down), or npm run dev:stop',
+      'Emails     invitation links point at the Share URL above',
+      `Localhost  http://localhost:${FRONTEND_PORT} (this machine, unchanged)`,
+      'Turn off   npm run dev -- --no-share',
     ]);
-    log.warn('Sharing exposes dev secrets and seed data. Close it after the demo -- never share a environment holding real data.');
+    log.warn('Sharing exposes dev secrets and seed data to anyone with the URL (npm run dev -- --no-share for localhost-only).');
   }
   if (!health.ok) {
     log.warn(`Backend did not answer ${HEALTH_URL} within 40s -- check the ${INLINE ? '[api] lines above' : '"SentinelX Backend" window'} for the real error. Vite is still running.`);

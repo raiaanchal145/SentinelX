@@ -27,8 +27,8 @@ Standing rules every change in this repo follows. When a prompt and this file di
 
 ## Dev launcher and sharing
 
-- Plain `npm run dev` must behave exactly as before any launcher change; new behavior goes behind flags.
-- Sharing the dev environment is **opt-in only** (`npm run dev:share` / `--lan` / `--tunnel`) and lasts one run: it sets `FRONTEND_URL` + `DEV_SHARE_ORIGINS` for that session and nothing persists.
+- Plain `npm run dev` LAN-shares by default (decision 2026-09-23) so emailed links open on a phone; `--no-share` gives a localhost-only run. Launcher changes must not break either path.
+- Sharing is per-run only: it sets `FRONTEND_URL` + `DEV_SHARE_ORIGINS` for that session and nothing persists to any `.env`.
 - The launcher never installs anything outside the repo's declared dependencies (cloudflared, ngrok, etc. are external CLIs — print the install command instead).
 
 ## Dependencies
