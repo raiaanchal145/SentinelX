@@ -56,6 +56,9 @@ import {
   portOwnedByOurContainer,
   explainPortConflict,
   printPgAdminHintOnce,
+  ensureRedisReady,
+  stopRedis,
+  probeRedis,
 } from './lib/docker.mjs';
 import {
   openWindow,
@@ -73,6 +76,7 @@ import {
 
 const BACKEND_PORT = 8000;
 const FRONTEND_PORT = 5173;
+const WORKER_PORT = null; // the worker listens nowhere -- it connects out to Postgres+Redis
 const HEALTH_URL = `http://localhost:${BACKEND_PORT}/api/v1/health`;
 
 const argv = process.argv.slice(2);
@@ -352,6 +356,7 @@ async function cmdDoctor() {
 
   add('Port 8000 free', await isPortFree(BACKEND_PORT));
   add('Port 5173 free', await isPortFree(FRONTEND_PORT));
+  add('Redis reachable', await probeRedis(), (await probeRedis()) ? 'localhost:6379' : 'not running (npm run dev starts it)');
   add('.venv-1 stray folder', !checkStrayVenv1(), checkStrayVenv1() ? 'found -- delete it' : 'none');
 
   // Sharing status: what's running now (if anything) and the candidate LAN URL.
@@ -404,11 +409,26 @@ async function cmdStop() {
 
   writeState({ backend: null });
 
+  // The worker this launcher started (window or inline) -- best-effort PID.
+  if (state.worker?.pid) {
+    log.step(`Stopping worker process tree (PID ${state.worker.pid})...`);
+    const workerKilled = killPidTree(state.worker.pid);
+    if (!workerKilled) killByPort(Number(state.worker.port)) /* workers listen on no port; this is a no-op safety net */;
+    stopped = stopped || workerKilled;
+    writeState({ worker: null });
+  }
+
   if (wantsDbStop) {
     log.step('Stopping the postgres container (docker compose stop postgres)...');
     const result = spawnSync('docker', ['compose', 'stop', 'postgres'], { cwd: ROOT, stdio: 'inherit' });
     if (result.status === 0) log.success('postgres container stopped (data volume untouched).');
     else log.warn('Could not stop the postgres container -- is Docker Desktop running?');
+
+    log.step('Stopping the redis container (docker compose stop redis)...');
+    if (stopRedis()) log.success('redis container stopped (data volume untouched).');
+    else log.warn('Could not stop the redis container -- is Docker Desktop running?');
+  } else if (await probeRedis()) {
+    log.info('redis container left running (data persists) -- `npm run dev:stop -- --db` also stops it.');
   }
 
   // Tear down any orphaned sharing tunnel (normally its own Ctrl+C does this).
@@ -530,6 +550,9 @@ async function cmdFullDev() {
 
   const dbSource = await ensureDatabaseReady(venvPython, databaseUrl);
   runMigrations(venvPython);
+  // Background-work queue (docs/DECISIONS.md -- Arq): start Redis before
+  // the worker that needs it.
+  await ensureRedisReady();
   // First-run only: silent once an active super_admin exists.
   await ensureFirstSuperAdmin(venvPython);
 
@@ -547,6 +570,7 @@ async function cmdFullDev() {
   }
 
   let backendChild = null;
+  const inlineChildren = []; // inline-mode children (backend + worker) to kill on cleanup
   if (!reuseBackend) {
     log.step(INLINE ? 'Starting backend inline (uvicorn)...' : 'Starting backend in a new terminal window ("SentinelX Backend")...');
     // In share mode the backend's session env points FRONTEND_URL at the
@@ -580,6 +604,21 @@ async function cmdFullDev() {
     log.raw('   Run npm run dev:stop once, then npm run dev again, and emails will carry the share URL.');
   }
 
+  // Worker (third process): consumes the Arq queue and writes the 30s
+  // heartbeat. Same window/inline split as the backend.
+  log.step(INLINE ? 'Starting worker inline (arq)...' : 'Starting worker in a new terminal window ("SentinelX Worker")...');
+  const workerArgs = ['-m', 'arq', 'app.worker.WorkerSettings'];
+  const workerCwd = path.join(ROOT, 'backend');
+  const workerEnv = { ...process.env, SENTINELX_WORKER_NAME: 'worker-1' };
+  if (INLINE) {
+    const workerChild = spawnInline({ cwd: workerCwd, command: venvPython, args: workerArgs, label: 'worker', color: 'cyan', env: workerEnv });
+    writeState({ worker: { pid: workerChild.pid, startedAt: new Date().toISOString(), mode: 'inline' } });
+    inlineChildren.push(workerChild);
+  } else {
+    const workerPid = openWindow({ cwd: workerCwd, command: venvPython, args: workerArgs, title: 'SentinelX Worker', env: workerEnv });
+    writeState({ worker: { pid: workerPid, startedAt: new Date().toISOString(), mode: 'window' } });
+  }
+
   log.step('Starting frontend (vite) in this terminal...');
   // shell:true is the reliable way to invoke the "npm" .cmd shim on Windows
   // (naming "npm.cmd" explicitly can throw EINVAL on some Node/Windows
@@ -602,9 +641,16 @@ async function cmdFullDev() {
     if (cleanedUp) return;
     cleanedUp = true;
     if (share) share.stop(); // tear the tunnel down with the launcher
+    // Stop the worker with the launcher (graceful arq SIGTERM drain).
+    const workerState = readState().worker;
+    if (workerState?.pid) {
+      killPidTree(workerState.pid);
+      writeState({ worker: null });
+    }
     if (!reuseBackend) {
-      if (INLINE && backendChild) {
+      if (INLINE) {
         killInlineChild(backendChild);
+        for (const child of inlineChildren) killInlineChild(child);
       } else {
         // wt.exe's own PID can die the instant it hands off to an existing
         // Windows Terminal window, so the recorded PID is best-effort --
@@ -636,6 +682,7 @@ async function cmdFullDev() {
     `API        http://localhost:${BACKEND_PORT}`,
     `API docs   http://localhost:${BACKEND_PORT}/docs`,
     `Database   ${dbSource === 'docker' ? 'Docker (postgres container)' : 'local PostgreSQL install'}`,
+    `Worker     ${INLINE ? '[worker] lines above' : '"SentinelX Worker" window'} (heartbeats every 30s)`,
     `API health ${health.ok ? 'OK' : 'NOT RESPONDING YET'}`,
   ]);
   if (share) {
