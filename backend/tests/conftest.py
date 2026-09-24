@@ -83,3 +83,11 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
     app.dependency_overrides.pop(get_db, None)
+
+    # P07: the per-key event rate limiter holds a module-level Redis
+    # client bound to this test's event loop. Close it so the next test
+    # (a fresh loop, like the NullPool note above) doesn't reuse a dead
+    # connection and die with "Event loop is closed".
+    from app.routers.event_sources import close_rate_limit_redis
+
+    await close_rate_limit_redis()
