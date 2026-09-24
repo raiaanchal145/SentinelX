@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { RefreshCw, ServerOff, Wifi } from "lucide-react"
 
@@ -20,12 +20,12 @@ import {
   getAiInsights,
   getAssetById,
   getDeviceHealth,
-  getEventVolume,
   getSocKpis,
   getTriageQueue,
   getUserById,
   type TriageRow,
 } from "../../../lib/data"
+import { ApiError, apiGetEventsSummary, type EventSummary } from "../../../lib/api"
 import { scopeFor } from "../../../lib/scope"
 import { useMockStore } from "../../../mocks/store"
 
@@ -53,6 +53,25 @@ function SocOverview() {
   const [selectedRow, setSelectedRow] = useState<TriageRow | null>(null)
   const [dismissTarget, setDismissTarget] = useState<TriageRow | null>(null)
 
+  // Real event volume (P07 read API) -- the rest of the dashboard stays
+  // mock until the alerts work (P10). The backend decides visibility.
+  const [eventSummary, setEventSummary] = useState<EventSummary | null>(null)
+  const [eventSummaryError, setEventSummaryError] = useState("")
+
+  const loadEventSummary = useCallback(
+    function loadEventSummary() {
+      // 12 buckets covering the selected window (bucket size = hours/12).
+      const bucketHours = Math.max(1, Math.round(RANGE_HOURS[range] / 12))
+      apiGetEventsSummary({ buckets: 12, bucket_hours: bucketHours })
+        .then((res) => {
+          setEventSummary(res)
+          setEventSummaryError("")
+        })
+        .catch((err: unknown) => setEventSummaryError(err instanceof ApiError ? err.message : "Could not load event volume."))
+    },
+    [range],
+  )
+
   async function reload() {
     setLoading(true)
     await delay(null)
@@ -77,16 +96,32 @@ function SocOverview() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [range])
 
+  // The real event volume follows the same range control.
+  useEffect(() => {
+    loadEventSummary()
+  }, [loadEventSummary])
+
   const kpis = useMemo(() => getSocKpis(state, scope), [state, scope])
   const triageRows = useMemo(() => getTriageQueue(state, scope), [state, scope])
   const visibleTriageRows = triageRows.slice(0, 10)
   const aiInsights = useMemo(() => getAiInsights(state, scope), [state, scope])
-  const volume = useMemo(() => getEventVolume(state, scope, RANGE_HOURS[range]), [state, scope, range])
   const deviceHealth = useMemo(() => getDeviceHealth(state, scope), [state, scope])
   const activeIncidents = useMemo(() => getActiveIncidents(state, scope, 4), [state, scope])
 
-  const volumeTotal = volume.reduce((sum, p) => sum + p.value, 0)
-  const volumeSummary = `${volumeTotal} events across the selected ${range} window`
+  // Real numbers: the sparkline draws the backend's timeline buckets and
+  // the summary line reports the real total for the window.
+  const volume = useMemo(
+    () =>
+      (eventSummary?.timeline ?? []).map((value, i) => ({
+        label: `${i}`,
+        value,
+      })),
+    [eventSummary],
+  )
+  const volumeTotal = eventSummary?.total ?? 0
+  const volumeSummary = eventSummary
+    ? `${volumeTotal} event${volumeTotal === 1 ? "" : "s"} ingested in the selected ${range} window`
+    : "Event volume unavailable"
 
   function handleAcknowledge(row: TriageRow) {
     dispatch({ type: "ACK_ALERT", alertId: row.alert.id, actorName: scope.displayName })
@@ -210,8 +245,13 @@ function SocOverview() {
           </section>
 
           <section aria-label="Event volume" className="rounded-card border border-line bg-surface p-4">
-            <h2 className="text-sm font-semibold text-fg-primary">Event volume</h2>
-            {loading ? (
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-fg-primary">Event volume</h2>
+              <IconButton icon={RefreshCw} label="Refresh event volume" onClick={loadEventSummary} />
+            </div>
+            {eventSummaryError ? (
+              <p className="mt-3 text-xs text-danger-fg">{eventSummaryError}</p>
+            ) : !eventSummary ? (
               <Skeleton className="mt-3 h-12 w-full" />
             ) : (
               <>
