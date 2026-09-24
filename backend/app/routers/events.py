@@ -38,7 +38,7 @@ import base64
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from sqlalchemy import String, false as sqlalchemy_false, func, or_, select
@@ -205,6 +205,39 @@ def _require_soc_read():
 _soc_read = _require_soc_read()
 
 
+async def _organization_filter_scope(
+    db: AsyncSession, scope: Scope, organization_id: uuid.UUID | None
+) -> uuid.UUID | None:
+    """Validate the list endpoints' optional organization_id filter
+    (used by super_admin / platform SOC to scope the UI to one org).
+    Unchecked, it would be a visibility bypass; the rule matches the
+    assets router: an id the caller cannot see is a 404
+    `organization_not_found` (existence never leaked), not a 403. A
+    caller with a single visible organization (an org account) passing
+    that id is fine -- it's a no-op for them."""
+    if organization_id is None:
+        return None
+    from app.models import Organization
+
+    mode, org_ids = await _event_visibility(db, scope)
+    if mode == "forbidden":
+        raise _err("soc_not_visible", "You do not have access to events for this organization.", 403)
+    # "orgs" callers must name one of THEIR organizations; "all"
+    # callers (super_admin) may name anything that exists at all -- an
+    # unknown id is a 404 either way, so a guessed id reveals nothing.
+    if mode == "orgs" and organization_id not in (org_ids or []):
+        raise _err("organization_not_found", "Organization not found.", 404)
+    if mode == "all":
+        exists = (
+            await db.execute(
+                select(Organization.id).where(Organization.id == organization_id)
+            )
+        ).scalar_one_or_none()
+        if exists is None:
+            raise _err("organization_not_found", "Organization not found.", 404)
+    return organization_id
+
+
 async def _event_visibility(db: AsyncSession, scope: Scope) -> tuple[str, list[uuid.UUID] | None]:
     """
     Which events may this caller see (docs/API_CONTRACT.md "Event
@@ -244,6 +277,121 @@ async def _event_visibility(db: AsyncSession, scope: Scope) -> tuple[str, list[u
     return "forbidden", None
 
 
+@router.get("/summary")
+async def events_summary(
+    db: AsyncSession = Depends(get_db),
+    scope: Scope = Depends(_soc_read),
+    time_from: str | None = None,
+    time_to: str | None = None,
+    source_id: uuid.UUID | None = None,
+    event_type: str | None = None,
+    severity: str | None = None,
+    asset_id: uuid.UUID | None = None,
+    user: str | None = None,
+    ip: str | None = None,
+    q: str | None = None,
+    organization_id: uuid.UUID | None = None,
+    buckets: int = 12,
+    bucket_hours: int = 2,
+):
+    """Aggregates for the SOC Overview tile: total events in the window
+    plus severity- and type-breakdowns and `buckets` time buckets of
+    `bucket_hours` each, ending now (the frontend draws the sparkline
+    from these). Same filters and the same visibility rules as the list
+    endpoint -- one indexed aggregate query instead of the frontend
+    paging through everything. Defined BEFORE /{event_id} so "summary"
+    is never parsed as an event id."""
+    mode, org_ids = await _event_visibility(db, scope)
+    if mode == "empty":
+        return _empty_summary(buckets)
+    if mode == "forbidden":
+        raise _err("soc_not_visible", "You do not have access to events for this organization.", 403)
+
+    if organization_id is not None:
+        if mode == "orgs" and organization_id not in (org_ids or []):
+            raise _err("organization_not_found", "Organization not found.", 404)
+        if mode == "all":
+            from app.models import Organization
+
+            exists = (
+                await db.execute(
+                    select(Organization.id).where(Organization.id == organization_id)
+                )
+            ).scalar_one_or_none()
+            if exists is None:
+                raise _err("organization_not_found", "Organization not found.", 404)
+        org_filter = [organization_id]
+    else:
+        org_filter = org_ids if mode == "orgs" else None
+
+    buckets = max(1, min(buckets, 48))
+    bucket_hours = max(1, min(bucket_hours, 720))
+    now_utc = datetime.now(timezone.utc)
+    window_start = now_utc - timedelta(hours=bucket_hours * buckets)
+
+    query = select(SecurityEvent)
+    if org_filter is not None:
+        query = query.where(SecurityEvent.organization_id.in_(org_filter))
+    query = query.where(SecurityEvent.occurred_at >= window_start)
+    # The optional filters reuse the list endpoint's validation by
+    # sharing the filter-building helper below.
+    query = _apply_event_filters(
+        query,
+        time_from=time_from,
+        time_to=time_to,
+        source_id=source_id,
+        event_type=event_type,
+        severity=severity,
+        asset_id=asset_id,
+        user=user,
+        ip=ip,
+        q=q,
+    )
+
+    rows = (
+        await db.execute(
+            select(
+                SecurityEvent.occurred_at,
+                SecurityEvent.severity,
+                SecurityEvent.event_type,
+            ).from_statement(query)
+        )
+    ).all()
+
+    by_severity: dict[str, int] = {}
+    by_type: dict[str, int] = {}
+    timeline = [0] * buckets
+    for occurred_at, severity_value, event_type_value in rows:
+        sev = severity_value.value if hasattr(severity_value, "value") else str(severity_value)
+        by_severity[sev] = by_severity.get(sev, 0) + 1
+        by_type[event_type_value] = by_type.get(event_type_value, 0) + 1
+        bucket_ms = bucket_hours * 3600
+        age_seconds = (now_utc - occurred_at).total_seconds()
+        index = buckets - 1 - int(age_seconds // (bucket_ms))
+        if 0 <= index < buckets:
+            timeline[index] += 1
+
+    return {
+        "total": len(rows),
+        "bucket_hours": bucket_hours,
+        "buckets": buckets,
+        "timeline": timeline,
+        "by_severity": by_severity,
+        "by_type": by_type,
+    }
+
+
+def _empty_summary(buckets: int) -> dict:
+    return {
+        "total": 0,
+        "bucket_hours": 2,
+        "buckets": buckets,
+        "timeline": [0] * buckets,
+        "by_severity": {},
+        "by_type": {},
+    }
+
+
 @router.get("")
 async def list_events(
     db: AsyncSession = Depends(get_db),
@@ -257,21 +405,81 @@ async def list_events(
     user: str | None = None,
     ip: str | None = None,
     q: str | None = None,
+    organization_id: uuid.UUID | None = None,
     limit: int = 50,
     cursor: str | None = None,
 ):
     mode, org_ids = await _event_visibility(db, scope)
-    query = select(SecurityEvent)
-    if mode == "all":
-        pass
-    elif mode == "orgs":
-        query = query.where(SecurityEvent.organization_id.in_(org_ids))
-    elif mode == "empty":
-        query = query.where(sqlalchemy_false())
-    else:
+    if mode == "forbidden":
         raise _err("soc_not_visible", "You do not have access to events for this organization.", 403)
 
-    # ---- Filters ---------------------------------------------------------
+    organization_id = await _organization_filter_scope(db, scope, organization_id)
+
+    query = select(SecurityEvent)
+    if mode == "all":
+        if organization_id is not None:
+            query = query.where(SecurityEvent.organization_id == organization_id)
+    elif mode == "orgs":
+        effective_orgs = [organization_id] if organization_id is not None else org_ids
+        query = query.where(SecurityEvent.organization_id.in_(effective_orgs))
+    elif mode == "empty":
+        query = query.where(sqlalchemy_false())
+
+    # ---- Filters (shared with /summary) ----------------------------------
+    query = _apply_event_filters(
+        query,
+        time_from=time_from,
+        time_to=time_to,
+        source_id=source_id,
+        event_type=event_type,
+        severity=severity,
+        asset_id=asset_id,
+        user=user,
+        ip=ip,
+        q=q,
+    )
+
+    # ---- Cursor pagination: keyset on (occurred_at DESC, id DESC) -------
+    limit = max(1, min(limit, 200))
+    if cursor:
+        cursor_ts, cursor_id = _decode_cursor(cursor)
+        query = query.where(
+            or_(
+                SecurityEvent.occurred_at < cursor_ts,
+                (SecurityEvent.occurred_at == cursor_ts) & (SecurityEvent.id < cursor_id),
+            )
+        )
+
+    query = query.order_by(SecurityEvent.occurred_at.desc(), SecurityEvent.id.desc()).limit(limit + 1)
+    rows = (await db.execute(query)).scalars().all()
+
+    next_cursor = None
+    if len(rows) > limit:
+        rows = rows[:limit]
+        last = rows[-1]
+        next_cursor = _encode_cursor(last.occurred_at, last.id)
+
+    return {
+        "events": [_event_row(e, include_raw=False) for e in rows],
+        "next_cursor": next_cursor,
+    }
+
+
+def _apply_event_filters(
+    query,
+    *,
+    time_from: str | None,
+    time_to: str | None,
+    source_id: uuid.UUID | None,
+    event_type: str | None,
+    severity: str | None,
+    asset_id: uuid.UUID | None,
+    user: str | None,
+    ip: str | None,
+    q: str | None,
+):
+    """The optional WHERE clauses shared by the list and summary
+    endpoints -- validation and shapes must stay identical between them."""
     if time_from:
         ts = parse_timestamp(time_from)
         if ts is None:
@@ -311,31 +519,7 @@ async def list_events(
                 blob.ilike(like),
             )
         )
-
-    # ---- Cursor pagination: keyset on (occurred_at DESC, id DESC) -------
-    limit = max(1, min(limit, 200))
-    if cursor:
-        cursor_ts, cursor_id = _decode_cursor(cursor)
-        query = query.where(
-            or_(
-                SecurityEvent.occurred_at < cursor_ts,
-                (SecurityEvent.occurred_at == cursor_ts) & (SecurityEvent.id < cursor_id),
-            )
-        )
-
-    query = query.order_by(SecurityEvent.occurred_at.desc(), SecurityEvent.id.desc()).limit(limit + 1)
-    rows = (await db.execute(query)).scalars().all()
-
-    next_cursor = None
-    if len(rows) > limit:
-        rows = rows[:limit]
-        last = rows[-1]
-        next_cursor = _encode_cursor(last.occurred_at, last.id)
-
-    return {
-        "events": [_event_row(e, include_raw=False) for e in rows],
-        "next_cursor": next_cursor,
-    }
+    return query
 
 
 @router.get("/{event_id}")

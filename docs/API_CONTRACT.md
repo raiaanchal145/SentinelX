@@ -408,11 +408,26 @@ then IP, against the organization's active assets; matched, it fills
 
 Filters: `time_from`, `time_to` (ISO-8601), `source_id`, `event_type`
 (vocabulary), `severity`, `asset_id`, `user` (partial match), `ip`,
-`q` (free text over type/user/ip and the JSONB payloads). Pagination:
-cursor (keyset on `occurred_at DESC, id DESC`; `limit` 1-200, default
-50), response `{"events": [...], "next_cursor"}`. Detail `GET
-/api/v1/events/{id}` adds `raw_data`. A different organization's event
-id is `404 event_not_found` (existence never leaked).
+`q` (free text over type/user/ip and the JSONB payloads), and
+`organization_id` (optional; super_admin / platform SOC scoping the UI
+to one organization -- an id the caller cannot see, or one that doesn't
+exist, is `404 organization_not_found` so a guessed id reveals
+nothing). Pagination: cursor (keyset on `occurred_at DESC, id DESC`;
+`limit` 1-200, default 50), response `{"events": [...],
+"next_cursor"}`. Detail `GET /api/v1/events/{id}` adds `raw_data`. A
+different organization's event id is `404 event_not_found` (existence
+never leaked).
+
+### `GET /api/v1/events/summary` (aggregates for the SOC Overview tile)
+
+Same auth, visibility and filters as the list endpoint (including
+`organization_id`). One indexed aggregate over the window ending now:
+`{"total", "buckets", "bucket_hours", "timeline": [count per bucket,
+oldest first], "by_severity": {...}, "by_type": {...}}`. `buckets`
+(1-48, default 12) and `bucket_hours` (1-720, default 2) size the
+timeline. A platform SOC analyst with zero assigned organizations gets
+all zeros. Defined before `/{event_id}` so `summary` is never read as
+an event id.
 
 Visibility (the access matrix; `app/access.py
 ::soc_visible_organization_ids` plus the owner's oversight rule):
