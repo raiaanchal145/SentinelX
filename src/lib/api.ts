@@ -805,3 +805,92 @@ export function apiListEventSourceKeys(sourceId: string) {
 export function apiRevokeEventSourceKey(sourceId: string, keyId: string) {
   return request<EventSourceKeyRow>(`/event-sources/${sourceId}/keys/${keyId}`, { method: "DELETE" })
 }
+
+// ---------------------------------------------------------------------------
+// Events -- the read side of the ingestion pipeline (docs/API_CONTRACT.md
+// "Event ingestion and read API"). Cursor pagination is keyset on
+// (occurred_at DESC, id DESC); visibility (super_admin vs platform SOC
+// vs own organization) is decided by the backend.
+// ---------------------------------------------------------------------------
+
+export type EventRow = {
+  id: string
+  organization_id: string
+  event_source_id: string
+  asset_id: string | null
+  occurred_at: string | null
+  ingested_at: string | null
+  event_type: string
+  severity: string
+  username: string | null
+  source_ip: string | null
+  normalized_data: Record<string, unknown> | null
+  /** Only present on the detail endpoint. */
+  raw_data?: Record<string, unknown> | unknown[] | string | null
+}
+
+export type EventListParams = {
+  time_from?: string
+  time_to?: string
+  source_id?: string
+  event_type?: string
+  severity?: string
+  asset_id?: string
+  user?: string
+  ip?: string
+  q?: string
+  /** Optional organization scope (super_admin / platform SOC UIs).
+   * An invisible or unknown id is a 404 from the backend. */
+  organization_id?: string
+  limit?: number
+  cursor?: string | null
+}
+
+export type EventListResponse = {
+  events: EventRow[]
+  next_cursor: string | null
+}
+
+export type EventSummary = {
+  total: number
+  buckets: number
+  bucket_hours: number
+  timeline: number[]
+  by_severity: Record<string, number>
+  by_type: Record<string, number>
+}
+
+function eventQuery(params: EventListParams): string {
+  const query = new URLSearchParams()
+  if (params.time_from) query.set("time_from", params.time_from)
+  if (params.time_to) query.set("time_to", params.time_to)
+  if (params.source_id) query.set("source_id", params.source_id)
+  if (params.event_type) query.set("event_type", params.event_type)
+  if (params.severity) query.set("severity", params.severity)
+  if (params.asset_id) query.set("asset_id", params.asset_id)
+  if (params.user) query.set("user", params.user)
+  if (params.ip) query.set("ip", params.ip)
+  if (params.q) query.set("q", params.q)
+  if (params.organization_id) query.set("organization_id", params.organization_id)
+  if (params.limit) query.set("limit", String(params.limit))
+  if (params.cursor) query.set("cursor", params.cursor)
+  const qs = query.toString()
+  return qs ? `?${qs}` : ""
+}
+
+export function apiListEvents(params: EventListParams = {}) {
+  return request<EventListResponse>(`/events${eventQuery(params)}`)
+}
+
+export function apiGetEvent(eventId: string) {
+  return request<EventRow>(`/events/${eventId}`)
+}
+
+export function apiGetEventsSummary(params: Omit<EventListParams, "limit" | "cursor"> & { buckets?: number; bucket_hours?: number } = {}) {
+  const { buckets, bucket_hours, ...rest } = params
+  const query = new URLSearchParams(eventQuery(rest).replace(/^\?/, ""))
+  if (buckets) query.set("buckets", String(buckets))
+  if (bucket_hours) query.set("bucket_hours", String(bucket_hours))
+  const qs = query.toString()
+  return request<EventSummary>(`/events/summary${qs ? `?${qs}` : ""}`)
+}
