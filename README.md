@@ -108,6 +108,69 @@ Whatever mode is active, for that session only: the backend's `FRONTEND_URL` poi
 
 `npm run dev:doctor` reports whether sharing is currently active (and the URL) plus your machine's candidate LAN URLs. `backend/.env.example` documents `FRONTEND_URL`; you normally never set it by hand — the launcher sets it per session.
 
+### Simulator: demo events for demos and tests
+
+`tools/simulator/` sends realistic, labelled event sequences through the
+real ingestion API (P07) so the SOC pages have something to show -- for
+demos, and for testing detections against known input. **No new
+dependencies**: it's a stdlib-only Python script run with the repo's
+virtual environment from the project root.
+
+First, get an ingestion key: log in, open **Event Sources**, create a
+source, and mint a key (the full `sx_<prefix>_<secret>` key is shown
+exactly once).
+
+```
+.venv\Scripts\python -m tools.simulator --list                       (Windows)
+.venv/bin/python -m tools.simulator --list                           (macOS/Linux)
+
+# See what a scenario generates without sending anything:
+.venv\Scripts\python -m tools.simulator --scenario audit_log_cleared --dry-run
+
+# Send one (make sure the backend, worker and Redis are running -- npm run dev):
+.venv\Scripts\python -m tools.simulator --scenario ssh_or_windows_bruteforce --api-key sx_...
+
+# Slow trickle of everything mixed, for a live demo:
+.venv\Scripts\python -m tools.simulator --scenario mixed --api-key sx_... --rate 3
+```
+
+| Argument | Meaning |
+|---|---|
+| `--api-url` | Backend base URL (default `http://localhost:8000`) |
+| `--api-key` | An event-source ingestion key (`sx_...`); required unless `--list`/`--dry-run` |
+| `--scenario` | One of the names below (required unless `--list`) |
+| `--rate` | Events per second (default 2) |
+| `--duration` | Seconds to keep sending; `0` sends the whole scenario once |
+| `--seed` | RNG seed — the same seed reproduces the exact same events (default 42) |
+
+Scenarios (`--list` prints this too):
+
+| Scenario | Story |
+|---|---|
+| `ssh_or_windows_bruteforce` | 20 failed logons, then a success, then a privileged command (22 events) |
+| `privilege_escalation` | sudo → group change → permission change → `passwd root` (6 events) |
+| `new_user_created` | Account created on Linux + Windows, then a first application login (3 events) |
+| `service_installed` | A new Windows service registered and its process created (2 events) |
+| `audit_log_cleared` | The Windows security log was cleared — critical severity (2 events) |
+| `suspicious_download` | Executable downloaded with a Zone.Identifier marker and a sha256 (3 events) |
+| `benign_noise` | Normal logins and activity, for false-positive testing (12 events) |
+| `mixed` | Benign noise plus one brute-force attack (34 events) |
+
+Sent events appear on the **SOC Events** page within a few seconds (the
+worker normalizes them as they land; turn on the page's **Live** toggle
+to watch without refreshing).
+
+Everything the simulator sends is synthetic and labelled: every event
+carries `{"sim": {"scenario": <name>}}` inside its `raw` data (so tests
+can find exactly what it sent), users are role names like
+`alice.analyst`, hosts are `lab-*`, and IPs come only from the RFC 5737
+documentation ranges and RFC 1918 private space — never real personal
+data.
+
+The scenario generators are pinned by deterministic tests
+(`backend/tests/test_simulator_scenarios.py`): a given seed always
+produces the same counts and event types.
+
 ### Registering the database in pgAdmin (one-time, manual)
 
 pgAdmin can't be scripted, so `npm run dev` prints these values the first time it sets up the database — you only need to do this once:
