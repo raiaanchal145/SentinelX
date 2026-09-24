@@ -28,6 +28,7 @@ last_used_at, and never appear in logs or audit summaries.
 
 import hashlib
 import hmac
+import logging
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -44,6 +45,8 @@ from app.models import ApiKey, EventSource, EventSourceType, Organization, UserR
 from app.scope import Scope
 
 router = APIRouter(prefix="/api/v1/event-sources", tags=["event-sources"])
+
+logger = logging.getLogger(__name__)
 
 
 def _err(code: str, message: str, status_code: int = 400) -> HTTPException:
@@ -105,12 +108,69 @@ def constant_time_equals(a: str, b: str) -> bool:
 
 async def rate_limit_for_key(db: AsyncSession, api_key: ApiKey) -> None:
     """
-    Per-key rate-limit hook -- deliberately a no-op stub here so P07's
-    ingestion endpoints already have the seam to call. Implement with
-    Redis (settings.redis_url) when ingestion lands; raising
-    _err("rate_limited", ..., 429) is the contract.
+    Per-key rate limit (P07): a fixed window in Redis -- one counter per
+    api_keys.id per calendar minute, settings.events_rate_limit_per_minute
+    events (default 600). A Redis outage does not block ingestion: the
+    limit degrades to "no limit" for that request, matching enqueue_work's
+    stance that background infrastructure is optional to a request's
+    success. Raises 429 rate_limited when the window's quota is exhausted.
+
+    The client is a module-level lazy singleton: one pool for the process,
+    reused across requests, closed with the app.
     """
-    return None
+    from app.config import settings
+    from app.event_ingestion import KeyRateLimited, enforce_key_rate_limit
+
+    client = await _get_rate_limit_redis()
+    if client is None:
+        return
+    try:
+        await enforce_key_rate_limit(client, str(api_key.id), settings.events_rate_limit_per_minute)
+    except KeyRateLimited as exc:
+        raise _err(
+            "rate_limited",
+            "Too many events for this API key this minute.",
+            429,
+        ) from exc
+
+
+_rate_limit_redis = None
+
+
+async def _get_rate_limit_redis():
+    """Lazily create the shared rate-limit Redis client. Returns None (and
+    logs once) when Redis is unreachable -- rate limiting degrades to a
+    no-op rather than failing ingestion."""
+    global _rate_limit_redis
+    if _rate_limit_redis is not None:
+        return _rate_limit_redis
+
+    import redis.asyncio as aioredis
+
+    from app.config import settings
+
+    try:
+        client = aioredis.from_url(settings.redis_url, decode_responses=True)
+        await client.ping()
+        _rate_limit_redis = client
+        return client
+    except Exception:  # noqa: BLE001 -- a down Redis must not 500 ingestion
+        logger.warning("Redis unreachable for event rate limiting -- limit disabled this request")
+        try:
+            await client.aclose()
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+
+async def close_rate_limit_redis() -> None:
+    global _rate_limit_redis
+    if _rate_limit_redis is not None:
+        try:
+            await _rate_limit_redis.aclose()
+        except Exception:  # noqa: BLE001
+            pass
+        _rate_limit_redis = None
 
 
 async def get_event_source_from_api_key(
