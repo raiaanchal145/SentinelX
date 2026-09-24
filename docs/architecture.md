@@ -330,6 +330,23 @@ lib/data.ts      getSocKpis(state, scope), getTriageQueue(...), etc. --
   single `worker_status` row the API reads for liveness. The dev
   launcher runs the whole stack: Postgres + Redis (docker compose),
   uvicorn, the worker (`python -m arq app.worker.WorkerSettings`), and
-  Vite. Ingestion endpoints (P07) will authenticate with the
+  Vite. Ingestion endpoints (P07) authenticate with the
   `get_event_source_from_api_key` dependency and enqueue parse jobs
   through `enqueue_work`.
+- **Events are real end to end (P07)** -- the pipeline's second real
+  piece after assets: `POST /api/v1/events` (API-key auth from the
+  event-source keys, batch limits, per-key Redis rate limit, no payload
+  organization_id ever trusted) -> the `process_events` worker job
+  (per-source-type parsers -> normalized schema, dedup via
+  `uq_security_events_org_dedup_hash` + `ON CONFLICT DO NOTHING`,
+  asset enrichment by hostname/IP, severity defaulting, size-capped
+  `raw_data`) -> `GET /api/v1/events[/{id}]` (user token, module `soc`
+  read, keyset cursor pagination, visibility through
+  `soc_visible_organization_ids()` plus the managed-mode owner's
+  read-only oversight). The fixed `event_type` vocabulary and the full
+  schema/access matrix are documented in docs/API_CONTRACT.md "Event
+  ingestion"; the list query is measured against 100k rows in
+  docs/reports/event-ingestion.md. Parsers for all seven source types
+  (`linux_auth`, `application`, `docker`, `network`, `windows`,
+  `custom_json`, `test`) live in `app/worker/parsers.py`; the `windows`
+  parser is for the endpoint agent arriving in P21.

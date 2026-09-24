@@ -295,6 +295,149 @@ until P07), revoked key -> 401 `invalid_api_key`, disabled source -> 403
 | `event_sources_write_required` | 403 | authenticated org account without the owner/security_manager role |
 | `platform_admin_not_supported` | 403 | platform accounts on this router |
 
+## Event ingestion and read API: `/api/v1/events`
+
+The event pipeline: a collector POSTs raw records; the API validates
+them cheaply and enqueues; the Arq worker normalizes, deduplicates,
+enriches and stores (`security_events`); the SOC-side read API serves
+them back. Router: `app/routers/events.py`; shared validation logic
+(`app/event_ingestion.py`); worker job (`app/worker/event_jobs.py`);
+parsers (`app/worker/parsers.py`). List-query performance is measured
+against 100k rows in `docs/reports/event-ingestion.md`.
+
+### `POST /api/v1/events` (ingestion -- API key, no user login)
+
+Auth: `Authorization: Bearer sx_<prefix>_<secret>` (P06's
+`get_event_source_from_api_key` -- constant-time hash compare, updates
+`last_used_at`). One key = one event source = one organization. An
+`organization_id` in the payload is never read: the organization always
+decides from the key.
+
+Body: one event object, a list of event objects, or `{"events": [...]}`.
+Limits (settings-configurable): at most 500 events per batch and at
+most 1 MiB per request (checked before parsing; `413`). A fixed-window
+per-key rate limit in Redis defaults to **600 events/minute**
+(`events_rate_limit_per_minute`); the request itself costs one slot at
+auth time and the endpoint tops up the remaining `accepted - 1`, so a
+batch of N costs exactly N (`429 rate_limited` when exhausted). Redis
+being down degrades the limit to "no limit" rather than failing
+ingestion.
+
+Response: `202` with `{"status", "accepted", "rejected", "results":
+[{"index", "status": "accepted"|"rejected", "reason"?}, ...]}` -- per-item
+reasons for every rejected record. Nothing heavy happens inline:
+accepted records are handed to the worker via `enqueue_work
+("process_events", ...)`; if Redis is unreachable the response is still
+202 with an `X-Ingestion-Warning: queued=false` header telling the
+collector to re-send the batch.
+
+Request-level errors: `413 request_too_large` / `413 batch_too_large`,
+`400 invalid_json`, `400 invalid_batch`, `400 empty_batch`, `401
+invalid_api_key`, `403 event_source_disabled`, `429 rate_limited`.
+
+### The versioned event schema (`schema_version` "1.0")
+
+Every record is validated against this schema (`app/event_ingestion.py
+::validate_event_record`):
+
+| Field | Required | Rules |
+|---|---|---|
+| `schema_version` | no | Defaults to "1.0". Bumped when the schema changes; the worker keeps honoring versions it knows. |
+| `timestamp` | yes | ISO-8601 (naive = UTC). Rejected when more than **24 hours in the future** or **older than 30 days** (per-item reason). |
+| `source_type` | yes | One of `linux_auth`, `application`, `docker`, `network`, `windows`, `custom_json`, `test` (the `EventSourceType` enum; `windows` is for the endpoint agent arriving in P21). |
+| `event_type` | yes | **Fixed vocabulary** below. Anything else is rejected at the API with a per-item reason. |
+| `message` | yes | Non-empty string; the human-readable event text. |
+| `host` / `asset` | no | Strings; host/asset identifier used for asset enrichment by hostname/IP match. |
+| `user` | no | String; the acting/target user. |
+| `ip` | no | String; the source IP. |
+| `process` | no | String; the producing process/service. |
+| `severity_hint` | no | One of `critical\|high\|medium\|low\|info`. Wins over the severity defaults. |
+| `raw` | no | The verbatim original record (string or JSON object), kept for the parsers and stored size-capped in `raw_data`. |
+
+### The fixed `event_type` vocabulary
+
+39 values, grouped by the source types that produce them
+(`app/event_ingestion.py::EVENT_TYPE_VOCABULARY` is the authoritative
+list -- keep that dict and this table in sync):
+
+- **linux_auth:** `auth_success`, `auth_failure`, `sudo_command`,
+  `user_add`, `user_delete`, `group_change`, `package_install`
+- **application:** `app_error`, `app_warning`, `app_login`,
+  `app_login_failed`, `config_change`, `permission_change`,
+  `api_request`, `api_error`
+- **docker:** `container_start`, `container_stop`, `container_kill`,
+  `container_create`, `container_destroy`, `image_pull`, `image_push`,
+  `docker_daemon_event`
+- **network:** `firewall_allow`, `firewall_deny`, `port_scan`,
+  `ids_alert`, `connection_allowed`, `connection_blocked`, `dns_query`,
+  `dns_response`
+- **windows (P21 agent):** `logon_success`, `logon_failure`,
+  `process_create`, `service_install`, `account_created`,
+  `account_disabled`, `account_lockout`, `log_cleared`,
+  `policy_change`, `scheduled_task`
+- **custom_json / test / fallback:** `custom`, `test_event`, `other`
+
+### Normalization (the worker)
+
+The `process_events` job parses each record with its source-type parser
+into the normalized schema and stores `raw_data` (size-capped at
+64 KB) and `normalized_data` (schema_version, types, message,
+host/user/ip/process, asset context, parser-extracted fields). Merge
+rules: the collector's explicit fields win over parser guesses; a
+parser-recognized raw record re-classifies the event type (raw content
+is ground truth); a recognized verb with no vocabulary mapping stores
+`event_type: "other"` with the raw record kept verbatim; an
+unparseable record keeps the declared type. Severity: `severity_hint`
+> the event-type default (e.g. `log_cleared` critical, `port_scan`
+high, `auth_failure` medium) > `info`.
+
+**Dedup:** `dedup_hash` = SHA-256 over (organization, source,
+second-truncated timestamp, event_type, host, user, ip, message),
+uniquely indexed per organization
+(`uq_security_events_org_dedup_hash`); the worker inserts with
+`ON CONFLICT DO NOTHING`, so replaying an identical batch adds zero
+rows. The organization id in the hash means two organizations can
+never collide on identical content.
+
+**Enrichment:** the event's asset context (asset id, criticality,
+owner) is resolved by exact case-insensitive hostname match first,
+then IP, against the organization's active assets; matched, it fills
+`asset_id` and the `normalized_data.asset` object.
+
+### `GET /api/v1/events` (read -- user token, module `soc` read)
+
+Filters: `time_from`, `time_to` (ISO-8601), `source_id`, `event_type`
+(vocabulary), `severity`, `asset_id`, `user` (partial match), `ip`,
+`q` (free text over type/user/ip and the JSONB payloads). Pagination:
+cursor (keyset on `occurred_at DESC, id DESC`; `limit` 1-200, default
+50), response `{"events": [...], "next_cursor"}`. Detail `GET
+/api/v1/events/{id}` adds `raw_data`. A different organization's event
+id is `404 event_not_found` (existence never leaked).
+
+Visibility (the access matrix; `app/access.py
+::soc_visible_organization_ids` plus the owner's oversight rule):
+
+| Caller | Sees |
+|---|---|
+| `super_admin` | every organization. |
+| `platform_soc_analyst` | assigned + `managed` + `active` organizations only; zero assigned -> an empty list. |
+| In-house organization's accounts with module `soc` read | their own organization. |
+| **Managed** organization's owner | read-only oversight of their organization's events (`soc: read` under managed mode). |
+| Managed organization's own members (non-owner) | `403 module_not_available` -- platform SOC staff work managed orgs. |
+| Organization with the `soc` module disabled | `403 module_not_available`. |
+
+### Event error codes
+
+| Code | Status | Where |
+|---|---|---|
+| `request_too_large` / `batch_too_large` | 413 | body > 1 MiB / batch > 500 events |
+| `invalid_json` / `invalid_batch` / `empty_batch` | 400 | body shape |
+| `invalid_api_key` / `event_source_disabled` | 401 / 403 | key auth (P06 semantics) |
+| `rate_limited` | 429 | per-key fixed window exhausted |
+| `invalid_time_range` / `invalid_event_type` / `invalid_severity` / `invalid_cursor` | 400 | read-API filter validation |
+| `event_not_found` | 404 | detail, incl. another organization's id |
+| `soc_not_visible` | 403 | caller with no events visibility at all |
+
 ## Background worker
 
 `app/worker/` (Arq -- docs/DECISIONS.md) consumes the Redis queue
@@ -305,6 +448,9 @@ never fails a request when Redis is down. The worker's heartbeat cron
 Postgres alone; worker startup fails fast with a clear error when Redis
 is unreachable. The dev launcher starts Redis and a worker terminal
 with the rest of the stack and checks both in `dev:doctor`.
+
+The worker's jobs: `heartbeat` and `process_events` (event
+normalization -- see "Event ingestion and read API" above).
 
 ## Error code reference (structured-detail endpoints only)
 

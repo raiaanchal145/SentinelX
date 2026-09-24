@@ -330,6 +330,54 @@ starts Redis, a worker terminal, and checks both in `dev:doctor`.
 Dependencies added: `arq`, `redis` (the async redis-py client) --
 nothing else.
 
+## Event ingestion (P07): the timestamp bucket is whole seconds
+
+The brief's dedup formula named a "timestamp bucket" without saying how
+wide. Chose **truncation to whole seconds** (not minutes): collectors
+that replay a batch replay identical timestamps, so second-truncation
+deduplicates replays exactly, while two genuinely distinct events a
+couple of seconds apart stay distinct -- a minute-wide bucket would
+swallow real events. Anything differing only in sub-second precision is
+deduplicated; document if a future collector emits real sub-second
+distinct events.
+
+## Parser output vs the declared event_type (merge rules)
+
+When the worker's parser disagrees with the collector's declared
+`event_type`, the resolution is (see `app/worker/parsers.py`'s
+docstring): (1) parser-extracted **fields fill blanks** -- a value the
+collector explicitly sent always wins over a parser guess; (2) if the
+parser RECOGNIZES the raw content and derives a concrete classification,
+its event_type wins (raw content is ground truth -- a collector that
+mislabels "Failed password" as `auth_success` does not get to keep the
+mislabel); (3) a recognized verb with no mapping in the fixed vocabulary
+stores `other` with the raw record kept verbatim; (4) an unparseable
+record keeps the declared type, which the API already guaranteed is in
+the vocabulary. Parsers are pure functions and individually wrapped in
+a catch-all so a parser bug degrades to "keep the declared type" and
+never drops an event.
+
+## Rate limit counts events, not requests
+
+The per-key limit (600 events/minute default) is enforced so that a
+batch of N costs exactly N: the request itself consumes one slot at
+authentication time (via P06's `rate_limit_for_key` seam -- a flood of
+garbage requests still burns slots), and the endpoint tops up the
+remaining `accepted - 1` slots after validation, so rejected items cost
+nothing and single-event requests cost exactly 1. Counting requests
+would let a 500-event batch through at 1/500th of its real cost.
+
+## Redis outages degrade, never block: the rate limit and the queue
+
+Both pieces of ingestion infrastructure are optional to a request's
+success. `enqueue_work` returning None (Redis down) still yields a 202
+with an `X-Ingestion-Warning: queued=false` header -- the collector is
+told to re-send. The rate limiter similarly degrades to "no limit" for
+that request when Redis is unreachable (logged once). Ingestion is the
+write path for every security event; a Redis blip must not 500 it. The
+counter is deliberately short-expired (120s) so a crashed request never
+leaks quota.
+
 ## Event sources are managed by organization_admin + security_manager
 
 Minting ingestion API keys is security administration, not device
