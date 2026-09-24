@@ -20,6 +20,10 @@ from app.models import WorkerStatus
 
 logger = logging.getLogger("sentinelx.worker")
 
+# Event normalization (P07) lives in its own module so this registry stays
+# light; the job is re-exported here under its enqueue name.
+from app.worker.event_jobs import process_events  # noqa: E402,F401
+
 
 async def heartbeat(ctx: dict[str, Any], session_factory=None) -> dict[str, Any]:
     """
@@ -83,7 +87,7 @@ async def on_shutdown(ctx: dict[str, Any]) -> None:
 
 
 # The registry: both arq's function list and what enqueue_work() accepts.
-JOB_FUNCTIONS = [heartbeat]
+JOB_FUNCTIONS = [heartbeat, process_events]
 
 
 class WorkerSettings:

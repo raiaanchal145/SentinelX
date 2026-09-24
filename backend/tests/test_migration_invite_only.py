@@ -30,8 +30,8 @@ from alembic.config import Config
 
 from app.config import settings
 
-MIGRATION_HEAD = "e6f7a8b9c0d1"  # worker_status heartbeat (bumped each new migration)
-PREVIOUS_REVISION = "d5e6f7a8b9c0"
+MIGRATION_HEAD = "f7a8b9c0d1e2"  # event ingestion indexes + windows type (bumped each new migration)
+PREVIOUS_REVISION = "e6f7a8b9c0d1"  # -1 from HEAD lands on the worker_status heartbeat migration
 SCRATCH_DB = "sentinelx_migration_scratch"
 
 
@@ -116,10 +116,11 @@ async def test_upgrade_empty_populated_and_downgrade(monkeypatch):
             assert pending_table is None
 
         # ------------------------------------------------------------
-        # 2. Downgrade -1 (the spec's own gate): back to d5e6f7a8b9c0.
-        #    e6f7's own downgrade DROPS worker_status; the invite-only
-        #    state (enum without 'pending', no pending_registrations) is
-        #    UNCHANGED -- that was settled two migrations ago.
+        # 2. Downgrade -1 (the spec's own gate): back to e6f7a8b9c0d1.
+        #    f7a8's downgrade drops the P07 indexes and leaves the
+        #    'windows' event_source_type value (Postgres cannot DROP a
+        #    value -- documented in the migration); worker_status and the
+        #    invite-only state are untouched.
         # ------------------------------------------------------------
         await asyncio.to_thread(command.downgrade, _alembic_config(), "-1")
 
@@ -151,7 +152,7 @@ async def test_upgrade_empty_populated_and_downgrade(monkeypatch):
                     text("SELECT 1 FROM information_schema.tables WHERE table_name = 'worker_status'")
                 )
             ).scalar()
-            assert worker_status is None  # the -1 downgrade drops the heartbeat table
+            assert worker_status == 1  # e6f7 keeps the heartbeat table
 
         # ------------------------------------------------------------
         # 3. Populated database -> upgrade head: a pending organization

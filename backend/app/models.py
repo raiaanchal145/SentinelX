@@ -119,6 +119,11 @@ class EventSourceType(str, enum.Enum):
     network = "network"
     custom_json = "custom_json"
     test = "test"
+    # The endpoint agent arrives in P21 and reports as source_type
+    # "windows"; migration f7a8b9c0d1e2 adds the enum value to existing
+    # databases (Postgres enum values can't be dropped, so the downgrade
+    # leaves it -- harmless, see the migration's docstring).
+    windows = "windows"
 
 
 class EventSeverity(str, enum.Enum):
@@ -820,6 +825,33 @@ class SecurityEvent(Base):
         # Partition-ready: this is the hot query path (an org's event
         # timeline), so it gets a composite index up front.
         Index("ix_security_events_org_occurred_at", "organization_id", "occurred_at"),
+        # Ingestion (P07): replays of the same batch must not duplicate
+        # rows -- the worker inserts with ON CONFLICT DO NOTHING against
+        # this unique index. dedup_hash stays nullable (and its standalone
+        # non-unique index stays): rows are only ever written with a hash,
+        # but NULLs-distinct keeps any future un-hashed row legal.
+        Index(
+            "uq_security_events_org_dedup_hash",
+            "organization_id",
+            "dedup_hash",
+            unique=True,
+        ),
+        # Query-path indexes for the events API (migration
+        # f7a8b9c0d1e2): keyset pagination walks (occurred_at DESC, id)
+        # within an organization, and severity/asset filters get their
+        # own composite so filtered list pages stay index-ordered.
+        Index(
+            "ix_security_events_org_occurred_at_desc",
+            "organization_id",
+            text("occurred_at DESC"),
+        ),
+        Index(
+            "ix_security_events_org_severity",
+            "organization_id",
+            "severity",
+            "occurred_at",
+        ),
+        Index("ix_security_events_org_asset_id", "organization_id", "asset_id"),
     )
 
 
