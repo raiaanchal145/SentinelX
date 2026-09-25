@@ -30,8 +30,8 @@ from alembic.config import Config
 
 from app.config import settings
 
-MIGRATION_HEAD = "f7a8b9c0d1e2"  # event ingestion indexes + windows type (bumped each new migration)
-PREVIOUS_REVISION = "e6f7a8b9c0d1"  # -1 from HEAD lands on the worker_status heartbeat migration
+MIGRATION_HEAD = "a9b0c1d2e3f4"  # detection engine tables + built-in name index (bumped each new migration)
+PREVIOUS_REVISION = "f7a8b9c0d1e2"  # -1 from HEAD lands on the P07 event-ingestion indexes migration
 SCRATCH_DB = "sentinelx_migration_scratch"
 
 

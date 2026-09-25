@@ -37,7 +37,7 @@ from app.event_ingestion import (
     compute_dedup_hash_for_record,
     resolve_severity,
 )
-from app.models import Asset, SecurityEvent
+from app.models import Asset, DetectionRule, SecurityEvent
 from app.worker.parsers import parse_record
 
 logger = logging.getLogger("sentinelx.worker")
@@ -46,8 +46,101 @@ logger = logging.getLogger("sentinelx.worker")
 _ASSET_MATCH_FIELDS = ("host", "ip")
 
 
+# Event types that legitimately carry no asset context (no host/ip at all).
+_ASSET_MATCH_FIELDS = ("host", "ip")
+
+
+async def _run_detection(ctx: dict[str, Any], db, organization_id: uuid.UUID, stored_rows: list[dict]) -> int:
+    """Detection half of the job: get the state store (Redis when
+    reachable, in-memory fallback otherwise), run the engine, commit
+    hits. A detection failure never loses events -- they are already
+    committed; the error is logged and the batch completes."""
+    from app.detection.engine import evaluate_batch_for_organization
+    from app.detection.state import build_store
+
+    store = await _detection_store(ctx)
+    try:
+        hits = await evaluate_batch_for_organization(
+            db, organization_id=organization_id, stored_events=stored_rows, store=store
+        )
+        await db.commit()
+        return len(hits)
+    except Exception:  # noqa: BLE001 -- detection must not break ingestion
+        logger.exception("detection: evaluation failed for org %s -- hits from this batch may be missing", organization_id)
+        await db.rollback()
+        return 0
+
+
+_detection_store_cache: dict[str, Any] = {}
+
+
+async def _detection_store(ctx: dict[str, Any]):
+    """One detection state store per worker process, Redis-backed when
+    possible. Cached on the arq ctx so tests can inject a store."""
+    from app.detection.state import build_store
+
+    injected = ctx.get("detection_store")
+    if injected is not None:
+        return injected
+    if "detection_store" in _detection_store_cache:
+        return _detection_store_cache["detection_store"]
+
+    client = None
+    try:
+        import redis.asyncio as aioredis
+
+        from app.config import settings as app_settings
+
+        client = aioredis.from_url(app_settings.redis_url, decode_responses=True)
+        await client.ping()
+    except Exception:  # noqa: BLE001 -- a down Redis delays detections, never blocks them
+        client = None
+    store = build_store(client)
+    _detection_store_cache["detection_store"] = store
+    return store
+
+
+def reset_detection_store() -> None:
+    """Tests (fresh event loops) and worker shutdown drop the cache."""
+    _detection_store_cache.pop("detection_store", None)
+
+
+async def seed_builtin_rules(session_factory=None) -> int:
+    """Idempotently write the built-in rules as DetectionRule rows
+    (organization_id NULL), keyed on the partial-unique name.
+    ON CONFLICT DO UPDATE refreshes definition/description/severity so
+    tuned rules ship everywhere; per-organization enable/disable lives
+    in organization_rule_settings and is NOT touched. Called at worker
+    startup (and idempotent enough to call manually)."""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from app.detection.builtin_rules import BUILTIN_RULES
+
+    if session_factory is None:
+        from app.database import AsyncSessionLocal
+
+        session_factory = AsyncSessionLocal
+
+    async with session_factory() as db:
+        for rule in BUILTIN_RULES:
+            values = rule.to_row()
+            stmt = pg_insert(DetectionRule).values(**values).on_conflict_do_update(
+                index_elements=["name"],
+                index_where=DetectionRule.organization_id.is_(None),
+                set_={
+                    "description": values["description"],
+                    "rule_type": values["rule_type"],
+                    "condition": values["condition"],
+                    "severity": values["severity"],
+                    "mitre_technique": values["mitre_technique"],
+                },
+            )
+            await db.execute(stmt)
+        await db.commit()
+    return len(BUILTIN_RULES)
+
+
 async def process_events(ctx: dict[str, Any], payload: dict) -> dict:
-    """Job entry point: `enqueue_work("process_events", payload)`."""
     session_factory = ctx.get("session_factory")
     if session_factory is None:
         from app.database import AsyncSessionLocal
@@ -82,6 +175,7 @@ async def process_events(ctx: dict[str, Any], payload: dict) -> dict:
         stored = 0
         duplicates = 0
         unknown_types = 0
+        stored_rows: list[dict] = []  # feeds the detection engine below
 
         for record in records:
             occurred_at = _parse_occurred_at(record["timestamp"])
@@ -135,8 +229,9 @@ async def process_events(ctx: dict[str, Any], payload: dict) -> dict:
                 "extracted": parsed.extracted or None,
             }
 
+            event_id = uuid.uuid4()
             stmt = pg_insert(SecurityEvent).values(
-                id=uuid.uuid4(),
+                id=event_id,
                 organization_id=organization_id,
                 event_source_id=event_source_id,
                 asset_id=asset.id if asset else None,
@@ -154,19 +249,42 @@ async def process_events(ctx: dict[str, Any], payload: dict) -> dict:
             result = await db.execute(stmt)
             if result.rowcount:
                 stored += 1
+                stored_rows.append(
+                    {
+                        "id": event_id,
+                        "event_type": event_type,
+                        "username": user,
+                        "source_ip": ip,
+                        "occurred_at": occurred_at,
+                        "raw_data": cap_raw_data(record.get("raw") if record.get("raw") is not None else record),
+                        "normalized_data": normalized,
+                    }
+                )
             else:
                 duplicates += 1
 
         await db.commit()
+
+        # ---- Detection (P23): evaluate the stored batch against the ----
+        # organization's enabled rules and write rule_hits. Runs inline
+        # (docs/DECISIONS.md): no second queue hop, batch order is
+        # deterministic. Redis down degrades to in-memory windows.
+        hits_written = 0
+        if stored_rows:
+            from app.detection.engine import evaluate_batch_for_organization
+
+            hits_written = await _run_detection(ctx, db, organization_id, stored_rows)
+
         logger.info(
-            "process_events: org=%s source=%s stored=%d duplicates=%d unknown=%d",
+            "process_events: org=%s source=%s stored=%d duplicates=%d unknown=%d hits=%d",
             organization_id,
             event_source_id,
             stored,
             duplicates,
             unknown_types,
+            hits_written,
         )
-        return {"stored": stored, "duplicates": duplicates, "unknown_types": unknown_types}
+        return {"stored": stored, "duplicates": duplicates, "unknown_types": unknown_types, "rule_hits": hits_written}
 
 
 # ---------------------------------------------------------------------------

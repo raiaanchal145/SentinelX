@@ -81,8 +81,24 @@ async def on_startup(ctx: dict[str, Any]) -> None:
             "and that the redis container is up (docker compose up -d redis)."
         )
 
+    # Seed the built-in detection rules (P23) idempotently by name --
+    # ON CONFLICT DO UPDATE refreshes definitions, never the per-org
+    # enable/disable settings. Runs after the DB is reachable (migrations
+    # have run by the time a worker starts via the launcher).
+    from app.worker.event_jobs import reset_detection_store, seed_builtin_rules
+
+    reset_detection_store()
+    try:
+        seeded = await seed_builtin_rules(ctx.get("session_factory"))
+        logger.info("detection: %d built-in rules seeded", seeded)
+    except Exception:  # noqa: BLE001 -- seeding failure is logged, not fatal
+        logger.exception("detection: builtin rule seeding failed -- rules may be stale")
+
 
 async def on_shutdown(ctx: dict[str, Any]) -> None:
+    from app.worker.event_jobs import reset_detection_store
+
+    reset_detection_store()
     logger.info("worker stopped gracefully (pid=%s)", os.getpid())
 
 

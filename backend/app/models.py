@@ -880,6 +880,19 @@ class DetectionRule(Base):
     )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
+    __table_args__ = (
+        # Built-in rules are seeded idempotently by name at worker
+        # startup; the partial index makes ON CONFLICT DO UPDATE safe.
+        # Per-organization custom rules (P24) may reuse a built-in's
+        # name, hence the WHERE.
+        Index(
+            "uq_detection_rules_builtin_name",
+            "name",
+            unique=True,
+            postgresql_where=text("organization_id IS NULL"),
+        ),
+    )
+
 
 class Alert(Base):
     __tablename__ = "alerts"
@@ -919,6 +932,73 @@ class AlertEvent(Base):
     )
     event_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("security_events.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class OrganizationRuleSetting(Base):
+    """
+    Per-organization enable/disable of a BUILT-IN detection rule
+    (P23, docs/API_CONTRACT.md "Detection rules"). One row per
+    (organization, rule) EXPLICITLY overridden; absence means "use the
+    rule row's own enabled flag". Written only by the
+    PATCH /detection/rules/{id}/enabled endpoint (owner or
+    security_manager, audited).
+    """
+
+    __tablename__ = "organization_rule_settings"
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    rule_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("detection_rules.id", ondelete="CASCADE"), primary_key=True
+    )
+    enabled: Mapped[bool] = mapped_column(nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("admins.id", ondelete="SET NULL")
+    )
+
+    __table_args__ = (Index("ix_organization_rule_settings_rule_id", "rule_id"),)
+
+
+class RuleHit(Base):
+    """
+    One detection-engine match (P23): rule, organization, the grouping
+    key (user/ip/host), the contributing event ids and the window they
+    fell in. Written by the worker at the end of process_events; P10's
+    alert pipeline reads this table (see docs/DECISIONS.md -- a table,
+    not a queue message: hits need queryable history with their event
+    ids and window, not fire-and-forget delivery).
+    """
+
+    __tablename__ = "rule_hits"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    rule_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("detection_rules.id", ondelete="CASCADE"), nullable=False
+    )
+    # Denormalized for readable history even if the rule row someday
+    # changes; rules are never deleted in practice (they disable).
+    rule_name: Mapped[str] = mapped_column(String(150), nullable=False)
+    severity: Mapped[EventSeverity] = mapped_column(
+        Enum(EventSeverity, name="event_severity"), nullable=False
+    )
+    # What the events were grouped by, e.g. "user=alice" / "ip=1.2.3.4".
+    group_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_ids: Mapped[list] = mapped_column(JSONB, nullable=False)
+    event_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_rule_hits_org_created", "organization_id", text("created_at DESC")),
     )
 
 
