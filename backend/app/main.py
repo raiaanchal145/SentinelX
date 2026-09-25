@@ -10,6 +10,7 @@ from app.routers import (
     admin_soc,
     assets,
     auth,
+    detection,
     event_sources,
     events,
     invitations,
@@ -82,3 +83,4 @@ app.include_router(invitations.router)
 app.include_router(assets.router)
 app.include_router(event_sources.router)
 app.include_router(events.router)
+app.include_router(detection.router)
