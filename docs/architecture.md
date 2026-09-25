@@ -315,7 +315,28 @@ lib/data.ts      getSocKpis(state, scope), getTriageQueue(...), etc. --
 - The register page was removed entirely along with self-signup
   (invite-only, docs/DECISIONS.md) -- accounts exist only through
   invitation acceptance or the create_super_admin bootstrap.
-- The pipeline tables (`alerts`, `incidents`, `tickets`, etc.) exist in
+- **Alerts are real end to end (P10)** -- rule hits become deduplicated
+  alerts and related alerts are correlated, all worker-side
+  (`app/alerting.py`) INLINE at the end of `process_events`, in the
+  same transaction as the hit writes. Dedup: one alert per (rule,
+  group key, floored time bucket) keyed by `alerts.dedup_key` (partial
+  unique index per organization -- the fold is race-safe); repeated
+  hits grow `event_count` and extend the window instead of stacking
+  rows, with `alert_events` links capped at 50 per alert. Correlation:
+  the built-in "Brute force followed by privileged activity" rule
+  groups the three brute-force alerts into ONE high-severity correlated
+  alert (ALONGSIDE them, never hiding them, docs/DECISIONS.md) with the
+  human-readable reasoning stored on the `correlations` row. The
+  Alerts API (`app/routers/alerts.py`): a filtered, cursor-paginated
+  queue routed by soc mode (`soc_visible_organization_ids()` --
+  platform SOC works managed orgs; in-house orgs work their own;
+  managed orgs' owner/security_manager read-only), a detail view with
+  events/rule/correlation/history, acknowledge/assign/dismiss/reopen
+  validated against the single `ALERT_TRANSITIONS` map, and one
+  `alert_history` + `audit_logs` row per change. The simulator's
+  brute-force scenario produces exactly one correlated alert visible to
+  the right SOC and nobody else (pinned by tests).
+- The pipeline tables (`incidents`, `tickets`, etc.) exist in
   the schema and migrations but have no real API endpoints yet -- the
   dashboards that display this data are still backed entirely by the
   mock layer described above. `assets` is the exception: its endpoints
@@ -365,6 +386,6 @@ lib/data.ts      getSocKpis(state, scope), getTriageQueue(...), etc. --
   sliding windows are Redis sorted sets keyed by org (in-memory
   fallback, docs/DECISIONS.md), evaluators are pure functions
   (`app/detection/evaluators.py`), and matches become `rule_hits` rows
-  (rule, group key, event ids, window) that P10's alert pipeline reads.
-  The simulator's brute-force scenario produces the expected hits and
-  benign noise produces zero (pinned by tests).
+  (rule, group key, event ids, window) that P10's alert pipeline reads
+  (below). The simulator's brute-force scenario produces the expected
+  hits and benign noise produces zero (pinned by tests).

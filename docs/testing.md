@@ -76,6 +76,18 @@ touch it:
   organization isolation. The seeding test must pass the TEST session
   factory (`tests.conftest.TestSessionLocal`) — passing `None` would
   make it fall back to the real app database.
+-  `test_alerts.py` — the P10 pipeline over the same harness: dedup
+  (one batch = three alerts, replay folds nothing, a later batch in a
+  fresh bucket creates new alerts), the done-when correlation (the
+  brute-force scenario yields EXACTLY ONE correlated alert alongside
+  the three detection ones, idempotent on rerun, zero on benign noise),
+  every status transition (valid moves, 409s, dismiss-requires-reason,
+  reopen only from dismissed), the full routing matrix (managed vs
+  in-house × owner/security_manager/soc_analyst/auditor + assigned and
+  unassigned platform SOC + super_admin), cross-organization isolation
+  (404, never a leak), the list filters (status, severity, rule_id,
+  asset_id, assigned_to_me, cursor pagination), assignment scope
+  rules, and the history+audit rows written on every change.
 
 ## Frontend
 

@@ -552,6 +552,131 @@ replayed batch (already-deduplicated events) evaluates nothing new.
 | `detection_rules_write_required` | 403 | PATCH enabled by a non-owner/non-security_manager |
 | `platform_admin_not_supported` | 403 | platform accounts on both endpoints |
 
+## Alerts: `/api/v1/alerts`
+
+P10: rule hits become deduplicated alerts, related alerts are
+correlated, and everything is routed by the organization's soc mode.
+Pipeline: `app/alerting.py` (worker-side, INLINE at the end of
+`process_events`, the same transaction as the hit writes -- a failure
+rolls back hits and alerts together and the next batch retries);
+API: `app/routers/alerts.py`.
+
+### Dedup (hit -> alert)
+
+One alert per (organization, rule, group key, time bucket). The bucket
+is the hit's `window_end` floored to the rule's
+`dedup_window_seconds` (default 900 = 15 minutes, per-rule column).
+Repeated hits inside the window FOLD into the existing alert:
+`event_count` grows, `first_seen_at`/`last_seen_at` extend,
+`alert_events` gains links (capped at 50 stored links per alert -- the
+true count lives in `event_count`). A hit in a fresh bucket creates a
+new alert. The fold is race-safe via the partial unique index on
+`(organization_id, dedup_key) WHERE dedup_key IS NOT NULL`; the dedup
+key is `{rule_name}:{group_key}:{bucket}`. Correlation keys
+(username/source_ip/asset_id) are resolved from the supporting events'
+normalized view -- a pattern hit's group key names ONE event, so the
+"same user/ip/asset" matching needs the resolved values.
+
+### Correlation (exactly one built-in rule)
+
+The `correlation_rules` row "Brute force followed by privileged
+activity" (built-in, `organization_id` NULL, seeded idempotently at
+worker startup like the detection rules -- `correlation_rules` carries
+the same partial unique name index): repeated failed logins + a
+successful login + a privileged group action for the SAME user within
+30 minutes => ONE high-severity correlated alert ALONGSIDE the three
+underlying ones (they stay visible in the queue -- docs/DECISIONS.md),
+a `correlations` row with the human-readable reasoning ("why these
+were grouped"), and `correlation_alerts` links to the grouped alerts.
+Grouping key: the username every candidate alert shares (resolved from
+the supporting events' normalized view); the source IP is only a
+fallback signature when no username resolved -- assets correlate only
+through the user acting on them. Correlation dedup key
+`corr:{rule}:{user}=<name>:{bucket}` -- re-running the same attack
+window never stacks a second correlation.
+
+### Routing matrix (who sees / works which queue)
+
+| Caller | Sees | Writes |
+|---|---|---|
+| super_admin | everything | yes |
+| platform_soc_analyst assigned to the org (managed+active) | that org's queue | yes |
+| platform_soc_analyst, unassigned | empty queue (200) | -- (404 on any id) |
+| owner, soc_mode=managed | own org, read-only | 403 `alert_write_not_allowed` |
+| security_manager, soc_mode=managed | own org, read-only | 403 `alert_write_not_allowed` |
+| soc_analyst, soc_mode=managed | nothing (403) | -- |
+| auditor / it_developer | nothing (403) | -- |
+| owner / security_manager, soc_mode=in_house | own org | yes |
+| soc_analyst, soc_mode=in_house | own org | yes |
+
+A managed organization's alerts are worked by platform SOC staff only;
+its own owner/security_manager keep read oversight. Existence never
+leaks: an invisible or cross-organization id is 404.
+
+### `GET /api/v1/alerts` (module `soc` read)
+
+Query: `status`, `severity`, `rule_id`, `asset_id`, `assigned_to_me`,
+`time_from`/`time_to` (ISO-8601, on `last_seen_at`), `organization_id`
+(platform roles; a non-visible id is 404), `limit` (1..200), `cursor`.
+Sort `(last_seen_at DESC, id DESC)`, keyset cursor (base64 `{t, id}`),
+response `{alerts: [...], next_cursor}`. Each row: id,
+organization_id, kind ("detection"|"correlation"), rule_id,
+rule_name, asset_id, severity, status, title, summary, group_key,
+username, source_ip, event_count, first_seen_at, last_seen_at,
+dismissed_reason, assigned_account_type, assigned_account_id,
+correlation_id (pointer when the alert belongs to one), created_at.
+
+### `GET /api/v1/alerts/{id}`
+
+The alert plus: `events` (the supporting security_events, ordered by
+occurred_at, max 200), `rule` (the detection rule; null on
+correlation alerts), `correlation` (null, or {title, severity,
+reasoning, first_seen_at, last_seen_at, event_count,
+grouped_alerts: [...]} -- grouped_alerts are full alert rows), and
+`history` (the alert's own timeline).
+
+### Status transitions (one map, tested)
+
+```
+new          -> triaged | dismissed
+triaged      -> investigating | dismissed
+investigating -> triaged | dismissed | converted
+dismissed    -> (only via /reopen)
+converted    -> (terminal)
+```
+
+`ALERT_TRANSITIONS` in `app/routers/alerts.py` is the single source of
+truth; an invalid move is `409 invalid_alert_transition`.
+
+- `POST .../acknowledge` -- new -> triaged ONLY.
+- `POST .../assign` -- body `{account_type: "admin"|"user",
+  account_id}`. An in-house queue assigns to that org's own
+  soc_analyst users; a platform-SOC-worked queue assigns to a platform
+  SOC analyst assigned to that organization. Wrong-org/role targets
+  are `422 assignee_not_in_scope` (unknown account:
+  `404 assignee_not_found`).
+- `POST .../dismiss` -- body `{reason}` REQUIRED (missing/empty: 422);
+  the reason is stored on the alert and in history/audit.
+- `POST .../reopen` -- only from dismissed, back to new; clears the
+  dismissal reason.
+
+Every change writes ONE `alert_history` row (the per-alert timeline;
+worker-created alerts carry a `create` row with actor_type=system) and
+ONE `audit_logs` row (`alert.acknowledge|assign|dismiss|reopen`).
+
+### Alerts error code reference
+
+| Code | Status | Where |
+|---|---|---|
+| `soc_not_visible` | 403 | list/detail for callers with no soc access at all |
+| `alert_not_found` | 404 | invisible or cross-org ids; unassigned platform SOC |
+| `alert_write_not_allowed` | 403 | managed-org accounts attempting writes |
+| `invalid_alert_transition` | 409 | moves outside the map; reopen of a non-dismissed alert |
+| `assignee_not_found` | 404 | assign to an unknown account |
+| `assignee_not_in_scope` | 422 | assign outside the queue's scope rules |
+| `invalid_status` / `invalid_severity` | 400 | unknown filter values on the list |
+| `invalid_time_range` / `invalid_cursor` | 400 | malformed time/cursor query values |
+
 ## Background worker
 
 `app/worker/` (Arq -- docs/DECISIONS.md) consumes the Redis queue
@@ -564,9 +689,10 @@ is unreachable. The dev launcher starts Redis and a worker terminal
 with the rest of the stack and checks both in `dev:doctor`.
 
 The worker's jobs: `heartbeat` and `process_events` (event
-normalization, then inline detection evaluation -- see "Event
-ingestion and read API" and "Detection rules" above). Worker startup
-also seeds the 8 built-in detection rules idempotently.
+normalization, then inline detection evaluation AND the P10 alerting
+halves -- see "Event ingestion and read API", "Detection rules" and
+"Alerts" above). Worker startup also seeds the 8 built-in detection
+rules and the built-in correlation rule idempotently.
 
 ## Error code reference (structured-detail endpoints only)
 

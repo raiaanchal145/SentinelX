@@ -451,3 +451,79 @@ organization_admin/security_manager (the event-sources pattern), is
 audited as `detection_rule.enable`/`detection_rule.disable`, and
 never touches the shared built-in row -- per-organization overrides
 only.
+
+## Alerting runs inline at the end of process_events, one transaction with the hits
+
+P10 continues P23's shape: `create_alerts_for_hits` and
+`run_correlations` run inside the same session/transaction that wrote
+the batch's rule hits, committed together. A failure rolls back hits
+AND alerts as one unit and the next batch re-evaluates and re-alerts
+from the same events -- ingestion itself is never affected (events are
+committed first). A separate queue job would reintroduce the ordering
+problem P23 rejected and make "hits exist but their alert vanished"
+a possible state.
+
+## Alert dedup buckets on {rule, group key, floored window}, not "latest open alert"
+
+The dedup key is `{rule_name}:{group_key}:{bucket}` where bucket =
+`window_end` epoch floored to the rule's `dedup_window_seconds`. A
+lookup-then-fold keyed on "the newest open alert for this rule+key"
+would need row locking to be race-safe and has no deterministic
+answer for which alert a hit belongs to after a quiet gap. A floored
+bucket is stateless, race-safe via the partial unique index on
+`(organization_id, dedup_key)`, and matches analyst intuition: one
+alert per rule per entity per time slice. Folding (not updating by
+conflict -- the fold extends windows, counts and links) happens in
+Python inside the same transaction.
+
+## Correlated alerts sit ALONGSIDE the underlying ones (no hiding)
+
+When the correlation rule fires, the queue gains a fourth high-severity
+alert; the three detection alerts it groups stay visible. Hiding or
+collapsing the underlying alerts would break the SOC's ability to triage
+the pieces independently (acknowledge/dismiss one, keep another) and
+make the "exactly one correlated alert" property untestable from the
+queue alone. `correlations` + `correlation_alerts` keep the grouping
+queryable; the correlated alert shares the correlation's `dedup_key`
+so the detail view can find the reasoning from either side.
+
+## Alert status transitions live in ONE map, and history captures status_from explicitly
+
+`ALERT_TRANSITIONS` in `app/routers/alerts.py` is the only definition
+of what may move to what; every endpoint validates through it and the
+unit tests pin the whole map. The endpoints capture the previous
+status BEFORE mutating the row and pass it to the history writer --
+reading `alert.status` after mutation would record status_from ==
+status_to everywhere and silently make the timeline useless. Every
+change writes one `alert_history` row (the per-alert story) plus one
+`audit_logs` row (the platform-level record) in the same transaction.
+
+## Correlation groups by USER, with the source IP only as a fallback
+
+The built-in brute-force rule matches its three detection alerts on
+the username they share (resolved per alert from the supporting
+events' normalized view). An attacker's failed logins, the eventual
+success and the privileged group change can come from different
+source IPs (a distributed brute force, a VPN hop after takeover) --
+keying the correlation on IP would miss exactly the attacks worth
+correlating, while the account is the constant. The IP is still
+resolved and stored on every alert (and only becomes the grouping
+key for alerts whose events named no user). Assets correlate only
+through the user acting on them. Also: a rule's
+`dedup_window_seconds` column exists and the worker honors it, but
+there is deliberately no API to change it yet -- tuning arrives with
+per-organization custom rules (P24), so owners cannot silently widen
+the dedup window of a built-in detection.
+
+## Managed organizations: owner + security_manager keep READ oversight, writes stay platform-side
+
+A managed org's alerts are worked by platform SOC staff -- that is
+what "managed" means -- but the owner and security manager are
+accountable for their organization's security posture, so they keep
+read access to the queue and details (the security_manager's soc read
+is not soc-mode-gated in access.py; the owner's oversight rule already
+drops soc to read in managed mode). Writes return 403
+`alert_write_not_allowed`: letting a managed org's own accounts
+dismiss alerts would create two authorities over one queue. In-house
+mode flips the table: the org's own soc_analyst (and owner/security
+manager via the module matrix) work their own queue.
