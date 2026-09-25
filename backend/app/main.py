@@ -8,6 +8,7 @@ from app.database import get_db
 from app.routers import (
     admin_organizations,
     admin_soc,
+    alerts,
     assets,
     auth,
     detection,
@@ -84,3 +85,4 @@ app.include_router(assets.router)
 app.include_router(event_sources.router)
 app.include_router(events.router)
 app.include_router(detection.router)
+app.include_router(alerts.router)
