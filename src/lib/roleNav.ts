@@ -6,6 +6,7 @@ import {
   ClipboardList,
   FileText,
   LayoutDashboard,
+  Radio,
   ScrollText,
   Server,
   ShieldAlert,
@@ -54,6 +55,7 @@ export const ROLE_NAV: Partial<Record<Role, NavItem[]>> = {
     { label: "Approvals", path: "/manager/approvals", icon: SquareCheck, module: "approvals" },
     { label: "Reports", path: "/manager/reports", icon: FileText, module: "reports" },
     { label: "Assets", path: "/manager/assets", icon: Server, module: "assets" },
+    { label: "Event sources", path: "/manager/event-sources", icon: Radio },
     { label: "Audit", path: "/manager/audit", icon: ScrollText, module: "audit_logs" },
   ],
   auditor: [

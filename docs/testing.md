@@ -57,6 +57,38 @@ a role guard directly (call `require_admin`/`require_roles(...)` with a
 hand-built `Scope`, no HTTP or database needed) — reuse it instead of
 inventing a new way to test guards.
 
+### Detection engine tests (`test_detection_*.py`)
+
+The rule engine is covered at two levels, and both matter when you
+touch it:
+
+- `test_detection_evaluators.py` — the pure evaluator functions with
+  no DB and no Redis (invented event dicts, explicit window
+  boundaries). Every built-in rule needs at least one positive and one
+  negative case here, plus the window edge cases: an event exactly at
+  the boundary counts (left edge is inclusive), out-of-order arrival
+  still counts, and two users' interleaved events stay separate
+  groups.
+- `test_detection_engine.py` — end-to-end through the real
+  `process_events` job with the API and an in-memory window store:
+  seeding idempotence, the simulator scenarios (brute force hits,
+  benign noise zero hits), disabled rules never firing, and
+  organization isolation. The seeding test must pass the TEST session
+  factory (`tests.conftest.TestSessionLocal`) — passing `None` would
+  make it fall back to the real app database.
+-  `test_alerts.py` — the P10 pipeline over the same harness: dedup
+  (one batch = three alerts, replay folds nothing, a later batch in a
+  fresh bucket creates new alerts), the done-when correlation (the
+  brute-force scenario yields EXACTLY ONE correlated alert alongside
+  the three detection ones, idempotent on rerun, zero on benign noise),
+  every status transition (valid moves, 409s, dismiss-requires-reason,
+  reopen only from dismissed), the full routing matrix (managed vs
+  in-house × owner/security_manager/soc_analyst/auditor + assigned and
+  unassigned platform SOC + super_admin), cross-organization isolation
+  (404, never a leak), the list filters (status, severity, rule_id,
+  asset_id, assigned_to_me, cursor pagination), assignment scope
+  rules, and the history+audit rows written on every change.
+
 ## Frontend
 
 No automated test runner is configured yet. The current gates are:

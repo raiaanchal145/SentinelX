@@ -10,6 +10,8 @@ import { ROOT, readState, writeState, parseDatabaseUrl } from './checks.mjs';
 import { LauncherError } from './first-run.mjs';
 
 const CONTAINER_NAME = 'sentinelx-postgres';
+const REDIS_CONTAINER_NAME = 'sentinelx-redis';
+const REDIS_PORT = 6379;
 
 function tcpProbe(host, port, timeoutMs = 2000) {
   return new Promise((resolve) => {
@@ -158,6 +160,49 @@ export function portOwnedByOurContainer() {
     encoding: 'utf8',
   });
   return result.status === 0 && (result.stdout || '').includes(CONTAINER_NAME);
+}
+
+// ---------------------------------------------------------------------------
+// Redis (background-work queue -- docs/DECISIONS.md). Same pattern as
+// postgres: use whatever already answers on 6379, else docker compose.
+// ---------------------------------------------------------------------------
+
+export async function probeRedis(port = REDIS_PORT) {
+  return tcpProbe('localhost', port);
+}
+
+export async function ensureRedisReady() {
+  if (await probeRedis()) return;
+
+  await ensureDockerReady();
+  log.step('Starting the redis service (docker compose up -d redis)...');
+  const result = spawnSync('docker', ['compose', 'up', '-d', 'redis'], { cwd: ROOT, stdio: 'inherit' });
+  if (result.status !== 0) {
+    throw new LauncherError(
+      'docker compose up -d redis failed -- see the output above.',
+      'Check Docker Desktop is fully started, then re-run `npm run dev`.'
+    );
+  }
+
+  const spin = log.spinner('Waiting for the redis container to become healthy');
+  const start = Date.now();
+  while (Date.now() - start < 60000) {
+    if (await probeRedis()) {
+      spin.stop('redis is up.');
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  spin.stop(null);
+  throw new LauncherError(
+    `The ${REDIS_CONTAINER_NAME} container did not become reachable within 60 seconds.`,
+    'Run `docker compose logs redis` to see what is wrong.'
+  );
+}
+
+export function stopRedis() {
+  const result = spawnSync('docker', ['compose', 'stop', 'redis'], { cwd: ROOT, encoding: 'utf8' });
+  return result.status === 0;
 }
 
 export function explainPortConflict(port) {

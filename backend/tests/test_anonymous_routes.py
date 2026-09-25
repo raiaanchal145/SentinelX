@@ -11,6 +11,13 @@ Allowed anonymous endpoints (docs/API_CONTRACT.md):
   resend-verification, invitations validate/accept, health.
 FastAPI's own /docs, /redoc and /openapi.json are documentation, not
 data; they are excluded here.
+
+POST /api/v1/events (P07) is listed here too, but it is NOT anonymous
+in practice: it authenticates with an event-source API key (P06's
+get_event_source_from_api_key), which is not part of the user-token
+chain this scanner recognizes. It is allow-listed with an explicit
+companion test below that pins 401 without a valid key, so the route
+can never silently become truly anonymous.
 """
 
 from fastapi.routing import APIRoute
@@ -26,6 +33,9 @@ ALLOWED_ANONYMOUS = {
     ("GET", "/api/v1/invitations/{token}"),
     ("POST", "/api/v1/invitations/accept"),
     ("GET", "/api/v1/health"),
+    # Key-authenticated (not user-token) -- see the docstring + the
+    # companion test pinning 401 without a valid key.
+    ("POST", "/api/v1/events"),
 }
 
 
@@ -104,3 +114,19 @@ async def test_health_is_anonymous(client):
     resp = await client.get("/api/v1/health")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+async def test_event_ingestion_is_key_gated(client):
+    """POST /api/v1/events is allow-listed above only because its auth
+    is an event-source API key, not the user-token chain the scanner
+    knows. This pins that it is NOT actually anonymous: garbage/missing
+    keys get 401 invalid_api_key and nothing is stored."""
+    resp = await client.post("/api/v1/events", json={})
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["code"] == "invalid_api_key"
+
+    resp = await client.post(
+        "/api/v1/events", json={}, headers={"Authorization": "Bearer sx_bogus_0000"}
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["code"] == "invalid_api_key"

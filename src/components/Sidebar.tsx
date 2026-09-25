@@ -3,6 +3,7 @@ import {
   Building2,
   ClipboardList,
   LayoutDashboard,
+  Radio,
   Server,
   Settings,
   ShieldAlert,
@@ -101,6 +102,11 @@ function Sidebar() {
       name: "Assets",
       icon: Server,
       path: "/organization/assets",
+    },
+    {
+      name: "Event sources",
+      icon: Radio,
+      path: "/organization/event-sources",
     },
     {
       name: "Access",

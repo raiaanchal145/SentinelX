@@ -9,6 +9,10 @@ passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
 python-jose[cryptography]==3.3.0
 
+# Background work (docs/DECISIONS.md: Arq over RQ -- async-native)
+arq==0.26.1
+redis==5.2.1
+
 # Test-only dependencies
 pytest==8.3.4
 pytest-asyncio==0.25.2

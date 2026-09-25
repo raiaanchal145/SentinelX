@@ -315,3 +315,215 @@ API base follows the page origin (with Vite proxying `/api` to
 loopback) so a phone hits the right backend without the backend ever
 leaving localhost. Emails baked with a localhost URL before a share
 session keep that URL forever; the launcher tells the user to resend.
+
+## Background work: Arq over RQ, Redis in compose
+
+The backend is async end to end (FastAPI + async SQLAlchemy + asyncpg),
+so the worker runs **Arq** (async job functions share the app's session
+factory) rather than RQ, whose sync jobs would need a second sync DB
+engine or loop-wrangling. Arq also ships cron scheduling (the worker
+heartbeat is config, not a hand-rolled loop) and graceful SIGTERM
+drain. `redis:7-alpine` joins docker-compose with a **named volume**
+(jobs in flight survive a restart, same pattern as pgdata) and a
+healthcheck; `settings.redis_url` points at it, and the dev launcher
+starts Redis, a worker terminal, and checks both in `dev:doctor`.
+Dependencies added: `arq`, `redis` (the async redis-py client) --
+nothing else.
+
+## Event ingestion (P07): the timestamp bucket is whole seconds
+
+The brief's dedup formula named a "timestamp bucket" without saying how
+wide. Chose **truncation to whole seconds** (not minutes): collectors
+that replay a batch replay identical timestamps, so second-truncation
+deduplicates replays exactly, while two genuinely distinct events a
+couple of seconds apart stay distinct -- a minute-wide bucket would
+swallow real events. Anything differing only in sub-second precision is
+deduplicated; document if a future collector emits real sub-second
+distinct events.
+
+## Parser output vs the declared event_type (merge rules)
+
+When the worker's parser disagrees with the collector's declared
+`event_type`, the resolution is (see `app/worker/parsers.py`'s
+docstring): (1) parser-extracted **fields fill blanks** -- a value the
+collector explicitly sent always wins over a parser guess; (2) if the
+parser RECOGNIZES the raw content and derives a concrete classification,
+its event_type wins (raw content is ground truth -- a collector that
+mislabels "Failed password" as `auth_success` does not get to keep the
+mislabel); (3) a recognized verb with no mapping in the fixed vocabulary
+stores `other` with the raw record kept verbatim; (4) an unparseable
+record keeps the declared type, which the API already guaranteed is in
+the vocabulary. Parsers are pure functions and individually wrapped in
+a catch-all so a parser bug degrades to "keep the declared type" and
+never drops an event.
+
+## Rate limit counts events, not requests
+
+The per-key limit (600 events/minute default) is enforced so that a
+batch of N costs exactly N: the request itself consumes one slot at
+authentication time (via P06's `rate_limit_for_key` seam -- a flood of
+garbage requests still burns slots), and the endpoint tops up the
+remaining `accepted - 1` slots after validation, so rejected items cost
+nothing and single-event requests cost exactly 1. Counting requests
+would let a 500-event batch through at 1/500th of its real cost.
+
+## Redis outages degrade, never block: the rate limit and the queue
+
+Both pieces of ingestion infrastructure are optional to a request's
+success. `enqueue_work` returning None (Redis down) still yields a 202
+with an `X-Ingestion-Warning: queued=false` header -- the collector is
+told to re-send. The rate limiter similarly degrades to "no limit" for
+that request when Redis is unreachable (logged once). Ingestion is the
+write path for every security event; a Redis blip must not 500 it. The
+counter is deliberately short-expired (120s) so a crashed request never
+leaks quota.
+
+## Event sources are managed by organization_admin + security_manager
+
+Minting ingestion API keys is security administration, not device
+management. Reusing the `assets`-write module rule would let IT
+developers mint keys for their team's assets, widening the key-minting
+surface for no operational need; the dedicated role check keeps key
+creation with the owner and security manager (the same audience as the
+frontend page). soc_analyst and auditor get read-only lists. Keys are
+SHA-256 hashed (format `sx_<prefix>_<secret>`, shown exactly once),
+revocable, and record `last_used_at`; a rate-limit hook exists for P07
+to implement.
+
+## Rule hits are a table (rule_hits), not a queue message
+
+A detection match needs queryable history: which rule, which group key,
+WHICH contributing event ids, over which window -- and P10's alert
+pipeline wants to read "recent hits for this organization" with
+filters, not consume fire-and-forget messages. A Redis Streams/list
+entry would force hits to be read exactly once and lose the window
+context; a table is trivially auditable and re-readable, and the
+worker already owns a Postgres session at evaluation time. Duplicates
+are acceptable at this layer (an ongoing attack re-fires while the
+window stays saturated); coalescing/deduplication into alerts is
+P10's job, where `dedup_key` already exists on `alerts`.
+
+## Detection evaluates inline at the end of process_events (no second queue hop)
+
+A separate `evaluate_detections` job would buy nothing and cost two
+things: ordering (arq makes no cross-job ordering guarantees, so two
+batches could evaluate out of arrival order and split a threshold
+across workers) and failure isolation that is already handled better
+inline -- the events are committed before detection runs, so a
+detection failure logs and rolls back only the hit writes, never the
+events. Inline evaluation on the same batch keeps determinism (one
+worker, batch order = arrival order) and makes the
+simulator-scenario tests pin real end-to-end behavior.
+
+## Detection sliding windows live in Redis; Redis down degrades to in-memory
+
+Incremental evaluation needs each (organization, rule, group) window
+kept between batches. Redis sorted sets (score = event epoch, member =
+event JSON) give O(log n) sliding windows and -- because the
+organization id is IN the key name -- structural cross-organization
+isolation, the same stance as per-organization dedup hashes. When
+Redis is unreachable the worker falls back to per-process in-memory
+windows: a lost window can only DELAY a detection until real events
+refill it, never fabricate one, and ingestion itself never blocks
+(same degradation philosophy as the rate limit and the queue).
+
+## Built-in rules seed by name with ON CONFLICT DO UPDATE, per-org settings survive
+
+Built-in rules are platform data every environment should converge
+on, so worker startup re-seeds the 8 rows (refreshing definition,
+description, severity, MITRE id) against a partial unique index on
+`name WHERE organization_id IS NULL`. An organization's
+enable/disable choice deliberately lives in a SEPARATE table
+(`organization_rule_settings`, one row per explicit override,
+absence = use the default) rather than mutating the shared rule row:
+the choice survives re-seeding and never leaks across organizations.
+Custom rules (P24) may reuse a built-in's name, hence the partial
+index.
+
+## Detection rules are toggled by owner + security_manager (not soc-write)
+
+Same call as event-source key minting: flipping a detection on or off
+changes what an organization's SOC can and cannot see, which is
+security administration, not analyst work. Reusing the `assets`-write
+module rule would hand it_developers detection control over their own
+assets' telemetry. The PATCH endpoint therefore guards on
+organization_admin/security_manager (the event-sources pattern), is
+audited as `detection_rule.enable`/`detection_rule.disable`, and
+never touches the shared built-in row -- per-organization overrides
+only.
+
+## Alerting runs inline at the end of process_events, one transaction with the hits
+
+P10 continues P23's shape: `create_alerts_for_hits` and
+`run_correlations` run inside the same session/transaction that wrote
+the batch's rule hits, committed together. A failure rolls back hits
+AND alerts as one unit and the next batch re-evaluates and re-alerts
+from the same events -- ingestion itself is never affected (events are
+committed first). A separate queue job would reintroduce the ordering
+problem P23 rejected and make "hits exist but their alert vanished"
+a possible state.
+
+## Alert dedup buckets on {rule, group key, floored window}, not "latest open alert"
+
+The dedup key is `{rule_name}:{group_key}:{bucket}` where bucket =
+`window_end` epoch floored to the rule's `dedup_window_seconds`. A
+lookup-then-fold keyed on "the newest open alert for this rule+key"
+would need row locking to be race-safe and has no deterministic
+answer for which alert a hit belongs to after a quiet gap. A floored
+bucket is stateless, race-safe via the partial unique index on
+`(organization_id, dedup_key)`, and matches analyst intuition: one
+alert per rule per entity per time slice. Folding (not updating by
+conflict -- the fold extends windows, counts and links) happens in
+Python inside the same transaction.
+
+## Correlated alerts sit ALONGSIDE the underlying ones (no hiding)
+
+When the correlation rule fires, the queue gains a fourth high-severity
+alert; the three detection alerts it groups stay visible. Hiding or
+collapsing the underlying alerts would break the SOC's ability to triage
+the pieces independently (acknowledge/dismiss one, keep another) and
+make the "exactly one correlated alert" property untestable from the
+queue alone. `correlations` + `correlation_alerts` keep the grouping
+queryable; the correlated alert shares the correlation's `dedup_key`
+so the detail view can find the reasoning from either side.
+
+## Alert status transitions live in ONE map, and history captures status_from explicitly
+
+`ALERT_TRANSITIONS` in `app/routers/alerts.py` is the only definition
+of what may move to what; every endpoint validates through it and the
+unit tests pin the whole map. The endpoints capture the previous
+status BEFORE mutating the row and pass it to the history writer --
+reading `alert.status` after mutation would record status_from ==
+status_to everywhere and silently make the timeline useless. Every
+change writes one `alert_history` row (the per-alert story) plus one
+`audit_logs` row (the platform-level record) in the same transaction.
+
+## Correlation groups by USER, with the source IP only as a fallback
+
+The built-in brute-force rule matches its three detection alerts on
+the username they share (resolved per alert from the supporting
+events' normalized view). An attacker's failed logins, the eventual
+success and the privileged group change can come from different
+source IPs (a distributed brute force, a VPN hop after takeover) --
+keying the correlation on IP would miss exactly the attacks worth
+correlating, while the account is the constant. The IP is still
+resolved and stored on every alert (and only becomes the grouping
+key for alerts whose events named no user). Assets correlate only
+through the user acting on them. Also: a rule's
+`dedup_window_seconds` column exists and the worker honors it, but
+there is deliberately no API to change it yet -- tuning arrives with
+per-organization custom rules (P24), so owners cannot silently widen
+the dedup window of a built-in detection.
+
+## Managed organizations: owner + security_manager keep READ oversight, writes stay platform-side
+
+A managed org's alerts are worked by platform SOC staff -- that is
+what "managed" means -- but the owner and security manager are
+accountable for their organization's security posture, so they keep
+read access to the queue and details (the security_manager's soc read
+is not soc-mode-gated in access.py; the owner's oversight rule already
+drops soc to read in managed mode). Writes return 403
+`alert_write_not_allowed`: letting a managed org's own accounts
+dismiss alerts would create two authorities over one queue. In-house
+mode flips the table: the org's own soc_analyst (and owner/security
+manager via the module matrix) work their own queue.
