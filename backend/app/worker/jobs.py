@@ -94,6 +94,16 @@ async def on_startup(ctx: dict[str, Any]) -> None:
     except Exception:  # noqa: BLE001 -- seeding failure is logged, not fatal
         logger.exception("detection: builtin rule seeding failed -- rules may be stale")
 
+    # Seed the built-in correlation rule (P10) -- same idempotent-by-name
+    # pattern as the detection rules above.
+    from app.alerting import seed_builtin_correlation_rules
+
+    try:
+        correlated = await seed_builtin_correlation_rules(ctx.get("session_factory"))
+        logger.info("alerting: %d built-in correlation rules seeded", correlated)
+    except Exception:  # noqa: BLE001 -- seeding failure is logged, not fatal
+        logger.exception("alerting: correlation rule seeding failed -- rules may be stale")
+
 
 async def on_shutdown(ctx: dict[str, Any]) -> None:
     from app.worker.event_jobs import reset_detection_store

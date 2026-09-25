@@ -53,8 +53,12 @@ _ASSET_MATCH_FIELDS = ("host", "ip")
 async def _run_detection(ctx: dict[str, Any], db, organization_id: uuid.UUID, stored_rows: list[dict]) -> int:
     """Detection half of the job: get the state store (Redis when
     reachable, in-memory fallback otherwise), run the engine, commit
-    hits. A detection failure never loses events -- they are already
-    committed; the error is logged and the batch completes."""
+    hits -- then create/fold alerts from those hits and run the
+    correlation rules over the organization's recent alerts (P10), all
+    in ONE transaction: a failure rolls back hits AND alerts together
+    so the next batch retries from the same events. Detection/alerting
+    failure never loses events -- they are already committed."""
+    from app.alerting import create_alerts_for_hits, run_correlations
     from app.detection.engine import evaluate_batch_for_organization
     from app.detection.state import build_store
 
@@ -63,7 +67,27 @@ async def _run_detection(ctx: dict[str, Any], db, organization_id: uuid.UUID, st
         hits = await evaluate_batch_for_organization(
             db, organization_id=organization_id, stored_events=stored_rows, store=store
         )
+        alerts_created = 0
+        correlations_created = 0
+        if hits:
+            alerts_created = await create_alerts_for_hits(
+                db,
+                organization_id=organization_id,
+                hits=hits,
+                stored_events=stored_rows,
+            )
+            # Correlation sees the alerts created so far (including this
+            # batch's) -- it reads committed-or-pending rows in this
+            # same session/transaction.
+            correlations_created = await run_correlations(db, organization_id=organization_id)
         await db.commit()
+        if alerts_created or correlations_created:
+            logger.info(
+                "alerting: org=%s alerts_created=%d correlations_created=%d",
+                organization_id,
+                alerts_created,
+                correlations_created,
+            )
         return len(hits)
     except Exception:  # noqa: BLE001 -- detection must not break ingestion
         logger.exception("detection: evaluation failed for org %s -- hits from this batch may be missing", organization_id)
