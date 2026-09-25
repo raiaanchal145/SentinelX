@@ -875,6 +875,9 @@ class DetectionRule(Base):
     )
     enabled: Mapped[bool] = mapped_column(default=True)
     mitre_technique: Mapped[str | None] = mapped_column(String(20))
+    # How long a matching hit folds into an existing alert instead of
+    # creating a new one (P10's dedup window; 15 minutes default).
+    dedup_window_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=900)
     created_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("admins.id", ondelete="SET NULL")
     )
@@ -895,6 +898,16 @@ class DetectionRule(Base):
 
 
 class Alert(Base):
+    """
+    One deduplicated alert (P10): created from a RuleHit by the worker
+    (app/alerting.py), folded forward while hits with the same dedup
+    key keep arriving inside the rule's dedup window, correlated into
+    incidents later. kind: "detection" (created from a rule hit) or
+    "correlation" (created by a correlation rule grouping other
+    alerts). Routing/visibility is soc_visible_organization_ids() --
+    see docs/API_CONTRACT.md "Alerts".
+    """
+
     __tablename__ = "alerts"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -904,6 +917,12 @@ class Alert(Base):
     detection_rule_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("detection_rules.id", ondelete="SET NULL")
     )
+    # Denormalized from the rule row for readable history (same stance
+    # as rule_hits.rule_name); NULL on correlation alerts.
+    rule_name: Mapped[str | None] = mapped_column(String(150))
+    # "detection" | "correlation" (plain string, the lightweight-state
+    # convention used across this schema).
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="detection")
     asset_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("assets.id", ondelete="SET NULL")
     )
@@ -919,9 +938,46 @@ class Alert(Base):
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     event_count: Mapped[int] = mapped_column(Integer, default=1)
-    dedup_key: Mapped[str | None] = mapped_column(String(150), index=True)
+    # The same "user=alice" / "ip=1.2.3.4" / "event=<id>" key a hit
+    # carried; NULL on correlation alerts (they group several keys).
+    group_key: Mapped[str | None] = mapped_column(String(255))
+    # Correlation keys resolved from the supporting events' normalized
+    # view -- a pattern hit's group key names one event, so the "same
+    # user/asset/ip" correlation matches on these columns instead.
+    username: Mapped[str | None] = mapped_column(String(150))
+    source_ip: Mapped[str | None] = mapped_column(String(64))
+    # "{rule}:{group}:{bucket}" for detection alerts (rule name + hit
+    # group key + the hit window's dedup bucket epoch); "{corr-rule}:{
+    # username}:{bucket}" for correlation alerts. One row per
+    # (organization, dedup_key) while the window stays open -- see the
+    # partial unique index below and docs/DECISIONS.md.
+    dedup_key: Mapped[str | None] = mapped_column(String(255), index=True)
+    # Required when status=dismissed (the /dismiss endpoint enforces it).
+    dismissed_reason: Mapped[str | None] = mapped_column(Text)
+    # Polymorphic assignee: a platform SOC analyst (admins row) or an
+    # in-house soc_analyst (users row) -- which table depends on
+    # assigned_account_type, same pattern as AuditLog.actor_id.
+    assigned_account_type: Mapped[str | None] = mapped_column(String(10))  # "admin" | "user"
+    assigned_account_id: Mapped[uuid.UUID | None] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
-    __table_args__ = (Index("ix_alerts_org_status", "organization_id", "status"),)
+    __table_args__ = (
+        Index("ix_alerts_org_status", "organization_id", "status"),
+        # The dedup lock: a second open window for the same (org, key)
+        # must fold into this row, not race a duplicate into existence.
+        # NULL dedup keys (future manual/AI alerts) stay unrestricted.
+        Index(
+            "uq_alerts_org_dedup_key",
+            "organization_id",
+            "dedup_key",
+            unique=True,
+            postgresql_where=text("dedup_key IS NOT NULL"),
+        ),
+        # Queue-path indexes: the list endpoint's default sort and the
+        # assignee filter.
+        Index("ix_alerts_org_last_seen", "organization_id", text("last_seen_at DESC")),
+        Index("ix_alerts_assigned", "assigned_account_type", "assigned_account_id"),
+    )
 
 
 class AlertEvent(Base):
@@ -933,6 +989,46 @@ class AlertEvent(Base):
     event_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("security_events.id", ondelete="CASCADE"), primary_key=True
     )
+    # Order the supporting events for the detail view without re-deriving
+    # it from security_events.occurred_at (a cheap denormalization -- the
+    # link rows are written once by the worker and never updated).
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class AlertHistory(Base):
+    """
+    The alert's own timeline (P10): one row per status change,
+    assignment or dismissal, written in the same transaction as the
+    change (and alongside the audit_logs entry, which is the
+    platform-level record -- this one is the per-alert story the detail
+    drawer shows). Append-only like audit_logs.
+    """
+
+    __tablename__ = "alert_history"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    alert_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("alerts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Short machine action: "acknowledge", "assign", "dismiss",
+    # "reopen", "create" (the worker writes one on alert creation).
+    action: Mapped[str] = mapped_column(String(40), nullable=False)
+    actor_type: Mapped[ActorType] = mapped_column(
+        Enum(ActorType, name="actor_type"), nullable=False
+    )
+    actor_id: Mapped[uuid.UUID | None] = mapped_column()
+    # "system" for worker-written rows; otherwise "admin"/"user".
+    status_from: Mapped[AlertStatus | None] = mapped_column(
+        Enum(AlertStatus, name="alert_status")
+    )
+    status_to: Mapped[AlertStatus | None] = mapped_column(
+        Enum(AlertStatus, name="alert_status")
+    )
+    detail: Mapped[dict | None] = mapped_column(JSONB)  # e.g. {"reason": ..., "assigned_to": ...}
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 class OrganizationRuleSetting(Base):
@@ -1015,8 +1111,29 @@ class CorrelationRule(Base):
     enabled: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
+    __table_args__ = (
+        # Built-in rules are seeded idempotently by name at worker
+        # startup (app/alerting.py, ON CONFLICT (name) DO UPDATE); the
+        # partial index makes that legal -- same shape detection_rules
+        # got in a9b0c1d2e3f4. Per-organization rules (future) may
+        # reuse a built-in's name, hence the WHERE.
+        Index(
+            "uq_correlation_rules_builtin_name",
+            "name",
+            unique=True,
+            postgresql_where=text("organization_id IS NULL"),
+        ),
+    )
+
 
 class Correlation(Base):
+    """
+    One correlation-rule match (P10): the alerts it grouped and the
+    human-readable reasoning ("why these were grouped") the detail view
+    shows. dedup_key follows the alerts convention so re-running the
+    same attack window produces one correlation, not a stack.
+    """
+
     __tablename__ = "correlations"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -1026,8 +1143,29 @@ class Correlation(Base):
     correlation_rule_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("correlation_rules.id", ondelete="SET NULL")
     )
+    title: Mapped[str] = mapped_column(String(250), nullable=False, default="")
+    severity: Mapped[EventSeverity] = mapped_column(
+        Enum(EventSeverity, name="event_severity"), default=EventSeverity.high
+    )
+    # The explainability text: which alerts, which keys, which window,
+    # and why the rule considers them one activity.
+    reasoning: Mapped[str | None] = mapped_column(Text)
+    first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    event_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    dedup_key: Mapped[str | None] = mapped_column(String(255), index=True)
     summary: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        Index(
+            "uq_correlations_org_dedup_key",
+            "organization_id",
+            "dedup_key",
+            unique=True,
+            postgresql_where=text("dedup_key IS NOT NULL"),
+        ),
+    )
 
 
 class CorrelationAlert(Base):

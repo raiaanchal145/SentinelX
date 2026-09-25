@@ -30,8 +30,8 @@ from alembic.config import Config
 
 from app.config import settings
 
-MIGRATION_HEAD = "a9b0c1d2e3f4"  # detection engine tables + built-in name index (bumped each new migration)
-PREVIOUS_REVISION = "f7a8b9c0d1e2"  # -1 from HEAD lands on the P07 event-ingestion indexes migration
+MIGRATION_HEAD = "b1c2d3e4f5a6"  # alerts pipeline: dedup, correlation, history (bumped each new migration)
+PREVIOUS_REVISION = "a9b0c1d2e3f4"  # -1 from HEAD lands on the P23 detection engine migration
 SCRATCH_DB = "sentinelx_migration_scratch"
 
 
