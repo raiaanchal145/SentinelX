@@ -350,3 +350,21 @@ lib/data.ts      getSocKpis(state, scope), getTriageQueue(...), etc. --
   (`linux_auth`, `application`, `docker`, `network`, `windows`,
   `custom_json`, `test`) live in `app/worker/parsers.py`; the `windows`
   parser is for the endpoint agent arriving in P21.
+- **Detection is real end to end (P23)** -- the deterministic rule
+  engine running in the worker over normalized events. Rules are DATA
+  (Pydantic-validated JSON definitions in `app/detection/definitions.py`):
+  threshold (N events / window / group), sequence (ordered event types
+  for the same key) and pattern (per-event field match with
+  allowlist/blocklist excludes). Eight built-in rules seed idempotently
+  at worker startup (`app/detection/builtin_rules.py`, org NULL,
+  partial-unique name); per-organization enable/disable lives in
+  `organization_rule_settings` and is toggled through
+  `PATCH /api/v1/detection/rules/{id}/enabled` (owner or
+  security_manager, audited -- `app/routers/detection.py`). Evaluation
+  runs inline at the end of `process_events` (`app/detection/engine.py`):
+  sliding windows are Redis sorted sets keyed by org (in-memory
+  fallback, docs/DECISIONS.md), evaluators are pure functions
+  (`app/detection/evaluators.py`), and matches become `rule_hits` rows
+  (rule, group key, event ids, window) that P10's alert pipeline reads.
+  The simulator's brute-force scenario produces the expected hits and
+  benign noise produces zero (pinned by tests).

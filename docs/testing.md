@@ -57,6 +57,26 @@ a role guard directly (call `require_admin`/`require_roles(...)` with a
 hand-built `Scope`, no HTTP or database needed) — reuse it instead of
 inventing a new way to test guards.
 
+### Detection engine tests (`test_detection_*.py`)
+
+The rule engine is covered at two levels, and both matter when you
+touch it:
+
+- `test_detection_evaluators.py` — the pure evaluator functions with
+  no DB and no Redis (invented event dicts, explicit window
+  boundaries). Every built-in rule needs at least one positive and one
+  negative case here, plus the window edge cases: an event exactly at
+  the boundary counts (left edge is inclusive), out-of-order arrival
+  still counts, and two users' interleaved events stay separate
+  groups.
+- `test_detection_engine.py` — end-to-end through the real
+  `process_events` job with the API and an in-memory window store:
+  seeding idempotence, the simulator scenarios (brute force hits,
+  benign noise zero hits), disabled rules never firing, and
+  organization isolation. The seeding test must pass the TEST session
+  factory (`tests.conftest.TestSessionLocal`) — passing `None` would
+  make it fall back to the real app database.
+
 ## Frontend
 
 No automated test runner is configured yet. The current gates are:

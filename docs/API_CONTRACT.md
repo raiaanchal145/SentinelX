@@ -453,6 +453,105 @@ Visibility (the access matrix; `app/access.py
 | `event_not_found` | 404 | detail, incl. another organization's id |
 | `soc_not_visible` | 403 | caller with no events visibility at all |
 
+## Detection rules: `/api/v1/detection`
+
+The deterministic rule engine running in the worker over normalized
+events (P23). Rules are DATA: every rule's `condition` is a JSON
+definition validated by Pydantic (`app/detection/definitions.py`), and
+only the three evaluator functions are code. Router:
+`app/routers/detection.py`; engine: `app/detection/`.
+
+### Rule types and their definitions
+
+| Type | Definition fields | Fires when |
+|---|---|---|
+| `threshold` | `event_types` (1+), `threshold` (2..10000), `window_seconds` (60..86400), `group_by` (`user\|ip\|host`, default `user`) | any group reaches `threshold` matching events inside the window |
+| `sequence` | `steps` (2..5, each `{event_type, fields?}`), `window_seconds`, `group_by` | the steps occur IN ORDER within the window for the same group key |
+| `pattern` | `match` (1+ conditions, AND), `exclude` (0+ conditions, the allowlist/blocklist) | an event matches all `match` conditions and none of `exclude` |
+
+A condition is `{field, op, value}` with `op` one of `eq`, `contains`,
+`starts_with`, `ends_with`, `regex`; `field` names a normalized column
+(`event_type`, `user`, `ip`, `host`, `process`, ...) or digs one level
+into the payloads with `raw.<key>` / `normalized.<key>`. Events missing
+the `group_by` value are skipped for that rule (never folded into one
+shared None group). Windows are LEFT-EDGE INCLUSIVE; out-of-order
+arrival never matters (evaluators sort by time).
+
+### Built-in rules (8, seeded idempotently at worker startup)
+
+`organization_id` is NULL on these rows; the partial unique index on
+`name WHERE organization_id IS NULL` makes the seed's
+`ON CONFLICT DO UPDATE` safe -- re-seeding refreshes
+definition/description/severity but never touches per-organization
+enable/disable. All 8 carry a MITRE ATT&CK technique id and a one-line
+"why it matters":
+
+| Stable id | Name | Type | Severity | MITRE |
+|---|---|---|---|---|
+| `repeated-failed-logins` | Repeated failed logins | threshold: 20 failures / 10 min / per user | high | T1110 |
+| `success-after-failures` | Successful login after many failures | sequence: failure -> success / 15 min / per user | critical | T1110 |
+| `privileged-group-change` | Privileged group membership change | pattern: group_change/process_create naming sudo, wheel, Domain Admins; `svc.*` excluded | high | T1098 |
+| `new-local-user` | New local user created | pattern: `user_add` or `account_created` | medium | T1136 |
+| `service-installed` | Service installed | pattern: `service_install` (7045) | high | T1543.003 |
+| `audit-log-cleared` | Audit log cleared | pattern: `log_cleared` (1102) | critical | T1070.001 |
+| `suspicious-process-path` | Suspicious process from a user-writable path | pattern: `process_create` from Temp/Downloads/AppData; msedge.exe excluded | high | T1059 |
+| `admin-login-new-ip` | Admin login from a new IP | sequence: app_login -> sudo_command / 30 min / per IP | high | T1078 |
+
+### `GET /api/v1/detection/rules` (module `soc` read)
+
+Built-in rules + this organization's own (custom creation arrives in
+P24), sorted by name, each row:
+
+```json
+{
+  "id": "uuid", "name": "...", "description": "...",
+  "rule_type": "threshold|sequence|pattern", "condition": {...},
+  "severity": "critical|high|medium|low|info",
+  "mitre_technique": "T1110", "builtin": true,
+  "default_enabled": true, "enabled": true,
+  "organization_id": null, "created_at": "..."
+}
+```
+
+`default_enabled` is the rule row's own flag; `enabled` is the
+EFFECTIVE state (the organization's `organization_rule_settings`
+override when present, else the default). Platform accounts get `403
+platform_admin_not_supported`.
+
+### `PATCH /api/v1/detection/rules/{id}/enabled`
+
+Body `{"enabled": bool}`. The organization owner
+(organization_admin) or a security_manager only -- the event-sources
+guard pattern (toggling detections is security administration, not
+soc-write). Never touches the shared rule row: the choice is written
+to `organization_rule_settings` (one row per explicit override,
+survives re-seeding) and audited as `detection_rule.enable` /
+`detection_rule.disable`. Unknown or another organization's rule id is
+`404 detection_rule_not_found`.
+
+### Rule hits (worker output, P10's input)
+
+Every newly stored event batch is evaluated inline at the end of
+`process_events` against the organization's enabled rules; a match
+writes a `rule_hits` row -- `{rule, organization, rule_name, severity,
+group_key ("user=alice" / "ip=1.2.3.4" / "event=<id>"), event_ids,
+event_count, window_start, window_end}`. Chosen over a queue message:
+hits need queryable history (see docs/DECISIONS.md). Sliding-window
+state lives in Redis sorted sets keyed by
+`detection:window:{org}:{rule}:{group_by}:{group_value}` -- the
+organization id in the key makes cross-organization isolation
+structural; Redis down degrades to in-memory windows (a detection may
+be delayed, never fabricated). A disabled rule never fires, and a
+replayed batch (already-deduplicated events) evaluates nothing new.
+
+### Detection error code reference
+
+| Code | Status | Where |
+|---|---|---|
+| `detection_rule_not_found` | 404 | PATCH enabled, incl. another organization's id |
+| `detection_rules_write_required` | 403 | PATCH enabled by a non-owner/non-security_manager |
+| `platform_admin_not_supported` | 403 | platform accounts on both endpoints |
+
 ## Background worker
 
 `app/worker/` (Arq -- docs/DECISIONS.md) consumes the Redis queue
@@ -465,7 +564,9 @@ is unreachable. The dev launcher starts Redis and a worker terminal
 with the rest of the stack and checks both in `dev:doctor`.
 
 The worker's jobs: `heartbeat` and `process_events` (event
-normalization -- see "Event ingestion and read API" above).
+normalization, then inline detection evaluation -- see "Event
+ingestion and read API" and "Detection rules" above). Worker startup
+also seeds the 8 built-in detection rules idempotently.
 
 ## Error code reference (structured-detail endpoints only)
 

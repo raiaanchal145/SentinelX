@@ -389,3 +389,65 @@ frontend page). soc_analyst and auditor get read-only lists. Keys are
 SHA-256 hashed (format `sx_<prefix>_<secret>`, shown exactly once),
 revocable, and record `last_used_at`; a rate-limit hook exists for P07
 to implement.
+
+## Rule hits are a table (rule_hits), not a queue message
+
+A detection match needs queryable history: which rule, which group key,
+WHICH contributing event ids, over which window -- and P10's alert
+pipeline wants to read "recent hits for this organization" with
+filters, not consume fire-and-forget messages. A Redis Streams/list
+entry would force hits to be read exactly once and lose the window
+context; a table is trivially auditable and re-readable, and the
+worker already owns a Postgres session at evaluation time. Duplicates
+are acceptable at this layer (an ongoing attack re-fires while the
+window stays saturated); coalescing/deduplication into alerts is
+P10's job, where `dedup_key` already exists on `alerts`.
+
+## Detection evaluates inline at the end of process_events (no second queue hop)
+
+A separate `evaluate_detections` job would buy nothing and cost two
+things: ordering (arq makes no cross-job ordering guarantees, so two
+batches could evaluate out of arrival order and split a threshold
+across workers) and failure isolation that is already handled better
+inline -- the events are committed before detection runs, so a
+detection failure logs and rolls back only the hit writes, never the
+events. Inline evaluation on the same batch keeps determinism (one
+worker, batch order = arrival order) and makes the
+simulator-scenario tests pin real end-to-end behavior.
+
+## Detection sliding windows live in Redis; Redis down degrades to in-memory
+
+Incremental evaluation needs each (organization, rule, group) window
+kept between batches. Redis sorted sets (score = event epoch, member =
+event JSON) give O(log n) sliding windows and -- because the
+organization id is IN the key name -- structural cross-organization
+isolation, the same stance as per-organization dedup hashes. When
+Redis is unreachable the worker falls back to per-process in-memory
+windows: a lost window can only DELAY a detection until real events
+refill it, never fabricate one, and ingestion itself never blocks
+(same degradation philosophy as the rate limit and the queue).
+
+## Built-in rules seed by name with ON CONFLICT DO UPDATE, per-org settings survive
+
+Built-in rules are platform data every environment should converge
+on, so worker startup re-seeds the 8 rows (refreshing definition,
+description, severity, MITRE id) against a partial unique index on
+`name WHERE organization_id IS NULL`. An organization's
+enable/disable choice deliberately lives in a SEPARATE table
+(`organization_rule_settings`, one row per explicit override,
+absence = use the default) rather than mutating the shared rule row:
+the choice survives re-seeding and never leaks across organizations.
+Custom rules (P24) may reuse a built-in's name, hence the partial
+index.
+
+## Detection rules are toggled by owner + security_manager (not soc-write)
+
+Same call as event-source key minting: flipping a detection on or off
+changes what an organization's SOC can and cannot see, which is
+security administration, not analyst work. Reusing the `assets`-write
+module rule would hand it_developers detection control over their own
+assets' telemetry. The PATCH endpoint therefore guards on
+organization_admin/security_manager (the event-sources pattern), is
+audited as `detection_rule.enable`/`detection_rule.disable`, and
+never touches the shared built-in row -- per-organization overrides
+only.
