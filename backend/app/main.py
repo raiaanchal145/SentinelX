@@ -14,6 +14,7 @@ from app.routers import (
     detection,
     event_sources,
     events,
+    incidents,
     invitations,
     organization,
     stats,
@@ -86,3 +87,4 @@ app.include_router(event_sources.router)
 app.include_router(events.router)
 app.include_router(detection.router)
 app.include_router(alerts.router)
+app.include_router(incidents.router)

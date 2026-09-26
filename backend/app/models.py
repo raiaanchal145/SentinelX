@@ -1202,6 +1202,23 @@ class Incident(Base):
         Enum(IncidentStatus, name="incident_status", values_callable=_by_value),
         default=IncidentStatus.new,
     )
+    # Polymorphic assignee -- same shape as alerts.assigned_*: a platform
+    # SOC analyst admins row (managed orgs) or an in-house soc_analyst
+    # users row (in-house orgs). Who may be assigned is validated by the
+    # incidents router against the organization's soc mode.
+    assigned_account_type: Mapped[str | None] = mapped_column(String(10))
+    assigned_account_id: Mapped[uuid.UUID | None] = mapped_column()
+    # Required when the lifecycle moves an incident to CLOSED.
+    resolution_summary: Mapped[str | None] = mapped_column(Text)
+    # Required when the lifecycle moves an incident to FALSE_POSITIVE or
+    # DUPLICATE; DUPLICATE additionally names its parent below.
+    closure_reason: Mapped[str | None] = mapped_column(Text)
+    # DUPLICATE only: the incident this one was merged into (same
+    # organization, never itself). Named so test create_all/drop_all and
+    # alembic agree on the constraint's identity.
+    duplicate_of_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("incidents.id", ondelete="SET NULL", use_alter=True, name="fk_incidents_duplicate_of")
+    )
     primary_asset_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("assets.id", ondelete="SET NULL")
     )
