@@ -677,6 +677,20 @@ ONE `audit_logs` row (`alert.acknowledge|assign|dismiss|reopen`).
 | `invalid_status` / `invalid_severity` | 400 | unknown filter values on the list |
 | `invalid_time_range` / `invalid_cursor` | 400 | malformed time/cursor query values |
 
+### Frontend consumption (the SOC workspace pages)
+
+The SOC UI (`src/features/soc/` shared components; pages at `/soc`,
+`/soc/alerts`, `/admin/soc-queue`, and the read-only
+`/organization|manager/security-activity`) is the reference client for
+this section: it calls list + detail + the four actions directly via
+`src/lib/api.ts` (`apiListAlerts`/`apiGetAlert`/`apiAcknowledgeAlert`/
+`apiAssignAlert`/`apiDismissAlert`/`apiReopenAlert`), never the mock
+layer. KPI/per-organization counts are computed client-side from the
+loaded page (limit 200 -- docs/DECISIONS.md), write buttons render
+only when the caller may write (a managed org's own accounts get a
+read-only view matching the 403s above), and event volume uses
+`GET /events/summary`.
+
 ## Background worker
 
 `app/worker/` (Arq -- docs/DECISIONS.md) consumes the Redis queue

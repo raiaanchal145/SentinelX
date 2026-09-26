@@ -527,3 +527,31 @@ drops soc to read in managed mode). Writes return 403
 dismiss alerts would create two authorities over one queue. In-house
 mode flips the table: the org's own soc_analyst (and owner/security
 manager via the module matrix) work their own queue.
+
+## SOC KPIs are computed client-side from the alert page (no summary endpoint)
+
+The SOC workspace's KPI row (open, unacknowledged, median age, by
+severity) and the platform queue's per-organization counts are
+computed in the browser from the loaded `GET /alerts` page (limit 200)
+instead of adding a `GET /alerts/summary` aggregate. Why: the queue
+itself is the source of truth an analyst acts on, so the numbers can
+drift at most by what pagination already caps; the endpoints stay
+exactly as tested in P10; and median age is presentation, not a
+domain fact. The cost is stated in the UI ("counts cover the most
+recent 200 alerts in the selected window") so nobody mistakes the
+cap for the whole queue. Revisit with a real aggregate endpoint only
+if a queue outgrows one page in practice.
+
+## One shared SOC component set, two placements
+
+The in-house analyst's `/soc` pages and the platform analyst's
+`/admin/soc-queue` render the SAME AlertTable/AlertFilters/AlertDrawer/
+TriageQueue components rather than parallel copies. Scope differences
+are data, not components: the backend's visibility matrix already
+returns the right rows, the platform page passes an `orgName` resolver
+(and so gets the Organization column), and `canWrite` follows soc_mode
+-- a managed org's owner/security_manager get the drawer with no
+action buttons at all, mirroring the backend's 403s instead of
+offering actions that fail. Dependent work (incidents, AI, device
+agents) appears only as clearly-labelled disabled placeholders, never
+as silent absence.
