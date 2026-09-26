@@ -30,8 +30,8 @@ from alembic.config import Config
 
 from app.config import settings
 
-MIGRATION_HEAD = "b1c2d3e4f5a6"  # alerts pipeline: dedup, correlation, history (bumped each new migration)
-PREVIOUS_REVISION = "a9b0c1d2e3f4"  # -1 from HEAD lands on the P23 detection engine migration
+MIGRATION_HEAD = "c2d3e4f5a6b7"  # incidents lifecycle: assignee, resolution, duplicate parent (bumped each new migration)
+PREVIOUS_REVISION = "b1c2d3e4f5a6"  # -1 from HEAD lands on the P10 alerts pipeline migration
 SCRATCH_DB = "sentinelx_migration_scratch"
 
 
