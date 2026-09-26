@@ -555,3 +555,46 @@ action buttons at all, mirroring the backend's 403s instead of
 offering actions that fail. Dependent work (incidents, AI, device
 agents) appears only as clearly-labelled disabled placeholders, never
 as silent absence.
+
+## The incident lifecycle table and its naming quirks
+
+- **State names.** The milestone brief says CONTAINED and
+  PENDING_VERIFICATION; the pre-existing `IncidentStatus` enum (and the
+  stored Postgres enum, uppercase via `values_callable`) says
+  CONTAINMENT and VERIFICATION. The enum wins -- the lifecycle maps
+  onto the members that already exist rather than widening a shared
+  enum for cosmetics. The API contract documents the mapping.
+- **Escalation starts at TRIAGED.** NEW cannot jump to ESCALATED:
+  an incident must at least be triaged before it is escalated -- the
+  request-for-escalation is a deliberate act on something understood,
+  not a reflex on a fresh queue item.
+- **One-step back everywhere.** INVESTIGATING -> TRIAGED,
+  CONTAINMENT -> INVESTIGATING, REMEDIATION -> CONTAINMENT,
+  VERIFICATION -> REMEDIATION are legal: real investigations step
+  back a stage when a hypothesis fails, and forcing them through
+  REOPENED would pollute the reopen metric.
+- **FALSE_POSITIVE / DUPLICATE from every active state.** Anything
+  before RESOLVED (including VERIFICATION, which can fail) may be
+  closed out as FP/DUPLICATE; RESOLVED/CLOSED close via REOPENED
+  instead. Both are terminal; REOPENED exists for RESOLVED/CLOSED.
+
+## Alert status follows the incident -- including dismissal
+
+Creation from an alert (or later linking) marks a NEW alert TRIAGED;
+the incident reaching RESOLVED/CLOSED marks its linked alerts
+CONVERTED; the incident closing as FALSE_POSITIVE/DUPLICATE DISMISSES
+its linked alerts with the incident's closure reason (one
+`alert_history` row each, `detail.via="incident_transition"`). Why:
+an incident's verdict IS the verdict on its evidence -- leaving the
+alerts open would rot the queue with rows nobody will ever work.
+
+## IT developers get a shared-only window, not a wall
+
+The brief says IT developers "only ever see shared entries." Rather
+than a bare 403 on everything (which forces SOC to relay remediation
+context by hand) or module-level access (which would expose internal
+SOC notes), IT developers get read-only list/detail for their OWN
+organization with internal timeline entries filtered out SERVER-SIDE
+-- shared comments only, every write endpoint refused. The filter
+lives in the detail endpoint, so the data never reaches an
+unauthorized caller regardless of what a client renders.

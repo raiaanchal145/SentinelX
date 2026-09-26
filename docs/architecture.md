@@ -409,3 +409,19 @@ lib/data.ts      getSocKpis(state, scope), getTriageQueue(...), etc. --
   backend's `alert_write_not_allowed`). Keyboard operation: j/k move
   in the triage queue, `a` acknowledges with confirmation; drawers
   trap focus and close on Escape.
+- **Incidents are real end to end (the lifecycle milestone)** --
+  `app/routers/incidents.py` on the previously dormant pipeline
+  tables: create manually or from 1+ alerts (which become TRIAGED --
+  alert status follows the incident), a controlled lifecycle validated
+  against the single `INCIDENT_TRANSITIONS` map (NEW -> TRIAGED ->
+  INVESTIGATING -> CONTAINMENT -> REMEDIATION -> VERIFICATION ->
+  RESOLVED -> CLOSED, one-step back, ESCALATED in/out, terminal
+  FALSE_POSITIVE/DUPLICATE -- docs/API_CONTRACT.md "Incidents" for the
+  full table), polymorphic assignees routed by soc mode, and merge
+  of duplicates with link migration. Every change appends one
+  `incident_timeline` row (comments carry `visibility`
+  internal/shared; IT developers read their own org's incidents with
+  internal entries filtered server-side) and one `audit_logs` row.
+  Migration `c2d3e4f5a6b7` widens `incidents` (assignee, resolution
+  summary, closure reason, duplicate parent). What is still mock
+  elsewhere (tickets UI) is untouched.

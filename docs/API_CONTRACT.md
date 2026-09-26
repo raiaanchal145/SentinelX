@@ -691,6 +691,118 @@ only when the caller may write (a managed org's own accounts get a
 read-only view matching the 403s above), and event volume uses
 `GET /events/summary`.
 
+## Incidents: `/api/v1/incidents`
+
+The controlled incident lifecycle with a timeline. Router:
+`app/routers/incidents.py`; the transition map
+(`INCIDENT_TRANSITIONS`) is the single source of truth. Tables:
+`incidents` (+ `incident_alerts`, `incident_events`, `incident_assets`,
+`incident_timeline`), widened by migration `c2d3e4f5a6b7` (assignee,
+resolution summary, closure reason, duplicate parent). The enum
+`IncidentStatus` stores UPPERCASE values (`NEW`, `TRIAGED`, ...
+`CONTAINMENT`, `VERIFICATION` are the enum's own names for the
+lifecycle's contained / pending-verification states).
+
+### Creation
+
+| Method & path | Notes |
+|---|---|
+| `POST /` | Manual creation: `title` (required), `description`, `severity` (default medium), `priority` (suggested `P1`..`P4` -- P13 derives the real one), `category`, plus optional `asset_id` and `event_ids`. Status starts `NEW`. Org-scoped callers create in their own organization; platform roles/super_admin must name `organization_id` (400 `organization_id_required` without it; an invisible id is 404). |
+| `POST /from-alerts` | Create from 1+ alerts of ONE organization (`400 alerts_from_multiple_organizations` otherwise). Links the alerts and their supporting events, sets severity to the max of the alerts, and marks NEW alerts `TRIAGED` -- alert status follows the incident. An already-converted alert is 409 `alert_already_converted`. |
+
+### The transition table (one map, tested)
+
+```
+NEW           -> TRIAGED | INVESTIGATING | FALSE_POSITIVE | DUPLICATE
+TRIAGED       -> INVESTIGATING | ESCALATED | FALSE_POSITIVE | DUPLICATE
+INVESTIGATING -> TRIAGED | CONTAINMENT | ESCALATED | FALSE_POSITIVE | DUPLICATE
+CONTAINMENT   -> INVESTIGATING | REMEDIATION | ESCALATED | FALSE_POSITIVE | DUPLICATE
+REMEDIATION   -> CONTAINMENT | VERIFICATION | ESCALATED | FALSE_POSITIVE | DUPLICATE
+VERIFICATION  -> REMEDIATION | RESOLVED | ESCALATED | FALSE_POSITIVE | DUPLICATE
+RESOLVED      -> CLOSED | REOPENED
+CLOSED        -> REOPENED
+REOPENED      -> TRIAGED | INVESTIGATING | CONTAINMENT | ESCALATED | FALSE_POSITIVE | DUPLICATE
+ESCALATED     -> TRIAGED | INVESTIGATING | CONTAINMENT
+FALSE_POSITIVE, DUPLICATE -> (terminal)
+```
+
+Who may transition: super_admin, an assigned platform SOC analyst
+(managed orgs), an in-house org's own soc_analyst -- EXCEPT the
+security_manager, whose ONE write is requesting `ESCALATED` from any
+state that allows it. An invalid move is `409
+invalid_incident_transition` with `allowed_next_states` in the detail.
+
+Payload requirements per target: `CLOSED` requires a non-empty
+`resolution_summary` (422 `resolution_summary_required`);
+`FALSE_POSITIVE`/`DUPLICATE` require a `reason` (422
+`closure_reason_required`); `DUPLICATE` additionally requires
+`parent_incident_id` -- same organization, not itself (422
+`duplicate_parent_required` / `duplicate_parent_invalid`, unknown id
+404). Moving to RESOLVED stamps `resolved_at`; CLOSED also stamps
+`closed_at`; REOPENED clears the closure fields.
+
+**Alert status follows the incident:** creation (or later linking) of
+a NEW alert marks it TRIAGED; the incident reaching RESOLVED/CLOSED
+marks its linked alerts CONVERTED; the incident closing as
+FALSE_POSITIVE/DUPLICATE DISMISSES its linked alerts with the
+incident's closure reason (each also writes one `alert_history` row
+with `detail.via="incident_transition"`).
+
+### Ownership by SOC mode (the alerts matrix, reused)
+
+Visibility is `soc_visible_organization_ids()` everywhere plus the
+owner's oversight: managed orgs' incidents are worked by platform SOC
+analysts assigned to them (owner + security_manager keep READ
+oversight); in-house orgs' incidents are worked by their own
+soc_analyst users. Existence never leaks: an invisible or cross-org id
+is 404 `incident_not_found`.
+
+### Reading and editing
+
+| Method & path | Notes |
+|---|---|
+| `GET /` | Filters: `status`, `severity`, `assignee` ("me" or an account id), `asset_id`, `time_from`/`time_to` (on `opened_at`), `organization_id` (platform roles; invisible id 404). Keyset cursor on `(opened_at DESC, id DESC)`; rows carry `alert_count`. |
+| `GET /{id}` | The incident plus `alerts`, `events`, `assets`, `duplicate_of` and the full `timeline`. |
+| `PATCH /{id}` | `title`, `description`, `severity`, `assigned_account_type`+`assigned_account_id` (assignee validated by soc mode: a managed org's incidents assign to assigned platform SOC analysts, an in-house org's to its own soc_analyst users; unknown id 404 `assignee_not_found`, wrong role 422 `assignee_not_in_scope`). No-op changes write nothing. |
+| `POST /{id}/transition` | The one state-change door (table above). |
+| `POST /{id}/links` | `{action: add\|remove, alert_id | event_id | asset_id}` -- exactly one target (400 `link_target_required`); every row must belong to the incident's organization (404). Adding an asset with no primary asset set makes it primary. |
+| `POST /{id}/merge` | Merge ANOTHER incident into this one: the duplicate is marked DUPLICATE with reason + parent, its alert/event/asset links MOVE to the parent, and both timelines record the merge. Already-terminal duplicate/FP is 409 `incident_already_closed`. |
+| `POST /{id}/comments` | `{body, visibility: internal|shared}` (default internal). Every comment is an `incident_timeline` row with `entry_type=comment`. |
+
+### The timeline and who sees what
+
+Every creation, state change, assignment, link change, comment and
+merge appends one `incident_timeline` row (`entry_type`, actor
+type/id, description, metadata) and one `audit_logs` row in the same
+transaction. `entry_metadata.visibility` on a comment is `internal`
+(SOC-only, the default) or `shared`. **IT developers** get a narrow
+read-only window: their own organization's incidents via list/detail,
+with internal timeline entries filtered out server-side -- they see
+shared comments only, and every write endpoint is refused (403
+`module_not_available`/`incident_write_not_allowed`).
+
+### Incidents error code reference
+
+| Code | Status | Where |
+|---|---|---|
+| `soc_not_visible` | 403 | list/create for callers with no incidents visibility at all |
+| `incident_not_found` | 404 | invisible or cross-org ids; unassigned platform SOC |
+| `incident_write_not_allowed` | 403 | managed-org accounts, owner, security_manager (except escalation), IT developers |
+| `invalid_incident_transition` | 409 | moves outside the table (detail carries `allowed_next_states`) |
+| `resolution_summary_required` | 422 | CLOSE without a summary |
+| `closure_reason_required` | 422 | FALSE_POSITIVE/DUPLICATE without a reason |
+| `duplicate_parent_required` / `duplicate_parent_invalid` | 422 | DUPLICATE without a parent / parent = itself |
+| `incident_already_closed` | 409 | merging an already-terminal duplicate |
+| `alert_already_converted` | 409 | from-alerts with an alert already in an incident |
+| `alerts_from_multiple_organizations` | 400 | from-alerts across orgs |
+| `organization_id_required` | 400 | platform-role create without organization_id |
+| `alert_not_found` / `event_not_found` / `asset_not_found` | 404 | links/creation naming a foreign or unknown row |
+| `assignee_not_found` | 404 | assign to an unknown account |
+| `assignee_not_in_scope` | 422 | assign outside the soc-mode scope rules |
+| `link_target_required` | 400 | links payload naming 0 or 2+ targets |
+| `invalid_status` / `invalid_severity` | 400 | unknown status/severity values |
+| `invalid_time_range` / `invalid_cursor` / `invalid_assignee` | 400 | malformed query values |
+
 ## Background worker
 
 `app/worker/` (Arq -- docs/DECISIONS.md) consumes the Redis queue
