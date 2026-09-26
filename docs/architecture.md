@@ -389,3 +389,39 @@ lib/data.ts      getSocKpis(state, scope), getTriageQueue(...), etc. --
   (rule, group key, event ids, window) that P10's alert pipeline reads
   (below). The simulator's brute-force scenario produces the expected
   hits and benign noise produces zero (pinned by tests).
+- **The SOC workspace UI is real (alerts milestone)** -- one set of
+  shared components (`src/features/soc/components/`: AlertTable,
+  AlertFilters, AlertDrawer, TriageQueue, AlertKpiRow, EventDetailDrawer)
+  serves both placements: the in-house SOC analyst's pages under
+  `UserLayout` (SocOverview at `/soc`, SocAlerts at `/soc/alerts`) and
+  the platform SOC analyst's multi-organization queue at
+  `/admin/soc-queue` (admin Sidebar layout, organization filter +
+  per-organization counts). All of it reads the real `/alerts` and
+  `/events` APIs -- no mock data or demo chips remain on these pages;
+  what is still mock elsewhere (incidents, tickets) appears only as
+  clearly-labelled disabled placeholder buttons. Device/agent health
+  and AI insights are labelled placeholders until their milestones.
+  Managed-mode oversight: the owner
+  (`/organization/security-activity`, Sidebar) and security_manager
+  (`/manager/security-activity`, top nav) get a read-only "Security
+  activity" view -- counts and details, no action buttons, with a
+  note that the platform SOC team handles the queue (matching the
+  backend's `alert_write_not_allowed`). Keyboard operation: j/k move
+  in the triage queue, `a` acknowledges with confirmation; drawers
+  trap focus and close on Escape.
+- **Incidents are real end to end (the lifecycle milestone)** --
+  `app/routers/incidents.py` on the previously dormant pipeline
+  tables: create manually or from 1+ alerts (which become TRIAGED --
+  alert status follows the incident), a controlled lifecycle validated
+  against the single `INCIDENT_TRANSITIONS` map (NEW -> TRIAGED ->
+  INVESTIGATING -> CONTAINMENT -> REMEDIATION -> VERIFICATION ->
+  RESOLVED -> CLOSED, one-step back, ESCALATED in/out, terminal
+  FALSE_POSITIVE/DUPLICATE -- docs/API_CONTRACT.md "Incidents" for the
+  full table), polymorphic assignees routed by soc mode, and merge
+  of duplicates with link migration. Every change appends one
+  `incident_timeline` row (comments carry `visibility`
+  internal/shared; IT developers read their own org's incidents with
+  internal entries filtered server-side) and one `audit_logs` row.
+  Migration `c2d3e4f5a6b7` widens `incidents` (assignee, resolution
+  summary, closure reason, duplicate parent). What is still mock
+  elsewhere (tickets UI) is untouched.

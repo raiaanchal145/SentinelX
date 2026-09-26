@@ -527,3 +527,92 @@ drops soc to read in managed mode). Writes return 403
 dismiss alerts would create two authorities over one queue. In-house
 mode flips the table: the org's own soc_analyst (and owner/security
 manager via the module matrix) work their own queue.
+
+## SOC KPIs are computed client-side from the alert page (no summary endpoint)
+
+The SOC workspace's KPI row (open, unacknowledged, median age, by
+severity) and the platform queue's per-organization counts are
+computed in the browser from the loaded `GET /alerts` page (limit 200)
+instead of adding a `GET /alerts/summary` aggregate. Why: the queue
+itself is the source of truth an analyst acts on, so the numbers can
+drift at most by what pagination already caps; the endpoints stay
+exactly as tested in P10; and median age is presentation, not a
+domain fact. The cost is stated in the UI ("counts cover the most
+recent 200 alerts in the selected window") so nobody mistakes the
+cap for the whole queue. Revisit with a real aggregate endpoint only
+if a queue outgrows one page in practice.
+
+## One shared SOC component set, two placements
+
+The in-house analyst's `/soc` pages and the platform analyst's
+`/admin/soc-queue` render the SAME AlertTable/AlertFilters/AlertDrawer/
+TriageQueue components rather than parallel copies. Scope differences
+are data, not components: the backend's visibility matrix already
+returns the right rows, the platform page passes an `orgName` resolver
+(and so gets the Organization column), and `canWrite` follows soc_mode
+-- a managed org's owner/security_manager get the drawer with no
+action buttons at all, mirroring the backend's 403s instead of
+offering actions that fail. Dependent work (incidents, AI, device
+agents) appears only as clearly-labelled disabled placeholders, never
+as silent absence.
+
+## The incident lifecycle table and its naming quirks
+
+- **State names.** The milestone brief says CONTAINED and
+  PENDING_VERIFICATION; the pre-existing `IncidentStatus` enum (and the
+  stored Postgres enum, uppercase via `values_callable`) says
+  CONTAINMENT and VERIFICATION. The enum wins -- the lifecycle maps
+  onto the members that already exist rather than widening a shared
+  enum for cosmetics. The API contract documents the mapping.
+- **Escalation starts at TRIAGED.** NEW cannot jump to ESCALATED:
+  an incident must at least be triaged before it is escalated -- the
+  request-for-escalation is a deliberate act on something understood,
+  not a reflex on a fresh queue item.
+- **One-step back everywhere.** INVESTIGATING -> TRIAGED,
+  CONTAINMENT -> INVESTIGATING, REMEDIATION -> CONTAINMENT,
+  VERIFICATION -> REMEDIATION are legal: real investigations step
+  back a stage when a hypothesis fails, and forcing them through
+  REOPENED would pollute the reopen metric.
+- **FALSE_POSITIVE / DUPLICATE from every active state.** Anything
+  before RESOLVED (including VERIFICATION, which can fail) may be
+  closed out as FP/DUPLICATE; RESOLVED/CLOSED close via REOPENED
+  instead. Both are terminal; REOPENED exists for RESOLVED/CLOSED.
+
+## Alert status follows the incident -- including dismissal
+
+Creation from an alert (or later linking) marks a NEW alert TRIAGED;
+the incident reaching RESOLVED/CLOSED marks its linked alerts
+CONVERTED; the incident closing as FALSE_POSITIVE/DUPLICATE DISMISSES
+its linked alerts with the incident's closure reason (one
+`alert_history` row each, `detail.via="incident_transition"`). Why:
+an incident's verdict IS the verdict on its evidence -- leaving the
+alerts open would rot the queue with rows nobody will ever work.
+
+## IT developers get a shared-only window, not a wall
+
+The brief says IT developers "only ever see shared entries." Rather
+than a bare 403 on everything (which forces SOC to relay remediation
+context by hand) or module-level access (which would expose internal
+SOC notes), IT developers get read-only list/detail for their OWN
+organization with internal timeline entries filtered out SERVER-SIDE
+-- shared comments only, every write endpoint refused. The filter
+lives in the detail endpoint, so the data never reaches an
+unauthorized caller regardless of what a client renders.
+
+## alerts.created_at: model/DB drift and how it hid from pytest
+
+`models.Alert` always defined `created_at`, but no migration ever
+added it: f2a3b4c5d6e7 created `alerts` without the column and
+b1c2d3e4f5a6 restored every other P10 column EXCEPT this one, so any
+migrated database 500ed on `GET /alerts` with UndefinedColumnError.
+Two things to keep from this incident: (1) the repair
+(d3e4f5a6b7c8) adds plain TIMESTAMP NOT NULL DEFAULT now() --
+matching the model and every other created_at in the schema; a
+TIMESTAMPTZ would have re-created the drift one layer up. (2) The
+pytest suite could never catch this class of bug because the fixture
+builds the schema with `Base.metadata.create_all` (models as truth),
+never alembic -- a full-model-to-DB introspection diff (script kept
+in this report's history) is the check that actually catches it, and
+it now reports zero missing columns. Existing rows backfill with the
+migration timestamp: the honest value for a column that never
+existed.
