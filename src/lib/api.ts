@@ -807,6 +807,166 @@ export function apiRevokeEventSourceKey(sourceId: string, keyId: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Alerts -- the SOC queue (docs/API_CONTRACT.md "Alerts"). List/detail
+// are module `soc` READ; acknowledge/assign/dismiss/reopen are the four
+// write actions with the backend's transition map and per-queue
+// visibility deciding who may write (a managed org's own accounts get
+// 403 alert_write_not_allowed). Visibility itself is entirely
+// server-side: the frontend just renders what comes back.
+// ---------------------------------------------------------------------------
+
+export type AlertStatus = "new" | "triaged" | "investigating" | "dismissed" | "converted"
+export type AlertSeverity = "critical" | "high" | "medium" | "low" | "info"
+export type AlertKind = "detection" | "correlation"
+
+export type AlertRow = {
+  id: string
+  organization_id: string
+  kind: AlertKind
+  rule_id: string | null
+  rule_name: string | null
+  asset_id: string | null
+  severity: AlertSeverity
+  status: AlertStatus
+  title: string
+  summary: string
+  group_key: string | null
+  username: string | null
+  source_ip: string | null
+  event_count: number
+  first_seen_at: string | null
+  last_seen_at: string | null
+  dismissed_reason: string | null
+  assigned_account_type: string | null
+  assigned_account_id: string | null
+  correlation_id: string | null
+  created_at: string | null
+}
+
+export type AlertListParams = {
+  status?: AlertStatus
+  severity?: AlertSeverity
+  rule_id?: string
+  asset_id?: string
+  assigned_to_me?: boolean
+  time_from?: string
+  time_to?: string
+  /** Platform roles scoping the queue to one organization; an id the
+   * caller cannot see is a 404 from the backend. */
+  organization_id?: string
+  limit?: number
+  cursor?: string | null
+}
+
+export type AlertListResponse = {
+  alerts: AlertRow[]
+  next_cursor: string | null
+}
+
+export type AlertHistoryEntry = {
+  action: string
+  actor_type: string
+  actor_id: string | null
+  status_from: string | null
+  status_to: string | null
+  detail: Record<string, unknown> | null
+  created_at: string | null
+}
+
+export type AlertSupportingEvent = {
+  id: string
+  event_type: string
+  username: string | null
+  source_ip: string | null
+  occurred_at: string | null
+  message: string | null
+}
+
+export type AlertCorrelation = {
+  id: string
+  title: string
+  severity: AlertSeverity
+  reasoning: string
+  first_seen_at: string | null
+  last_seen_at: string | null
+  event_count: number
+  grouped_alerts: AlertRow[]
+}
+
+export type AlertRule = {
+  id: string
+  name: string
+  description: string | null
+  severity: AlertSeverity
+  mitre_technique: string | null
+}
+
+export type AlertDetail = {
+  alert: AlertRow
+  rule: AlertRule | null
+  events: AlertSupportingEvent[]
+  correlation: AlertCorrelation | null
+  history: AlertHistoryEntry[]
+}
+
+function alertQuery(params: AlertListParams): string {
+  const query = new URLSearchParams()
+  if (params.status) query.set("status", params.status)
+  if (params.severity) query.set("severity", params.severity)
+  if (params.rule_id) query.set("rule_id", params.rule_id)
+  if (params.asset_id) query.set("asset_id", params.asset_id)
+  if (params.assigned_to_me) query.set("assigned_to_me", "true")
+  if (params.time_from) query.set("time_from", params.time_from)
+  if (params.time_to) query.set("time_to", params.time_to)
+  if (params.organization_id) query.set("organization_id", params.organization_id)
+  if (params.limit) query.set("limit", String(params.limit))
+  if (params.cursor) query.set("cursor", params.cursor)
+  const qs = query.toString()
+  return qs ? `?${qs}` : ""
+}
+
+export function apiListAlerts(params: AlertListParams = {}) {
+  return request<AlertListResponse>(`/alerts${alertQuery(params)}`)
+}
+
+export function apiGetAlert(alertId: string) {
+  return request<AlertDetail>(`/alerts/${alertId}`)
+}
+
+export function apiAcknowledgeAlert(alertId: string) {
+  return request<{ id: string; status: AlertStatus; previous_status: AlertStatus }>(
+    `/alerts/${alertId}/acknowledge`,
+    { method: "POST" },
+  )
+}
+
+export function apiAssignAlert(
+  alertId: string,
+  payload: { account_type: "admin" | "user"; account_id: string },
+) {
+  return request<{
+    id: string
+    assigned_account_type: string
+    assigned_account_id: string
+    previous_assigned_account_id: string | null
+  }>(`/alerts/${alertId}/assign`, { method: "POST", body: JSON.stringify(payload) })
+}
+
+export function apiDismissAlert(alertId: string, reason: string) {
+  return request<{ id: string; status: AlertStatus; dismissed_reason: string; previous_status: AlertStatus }>(
+    `/alerts/${alertId}/dismiss`,
+    { method: "POST", body: JSON.stringify({ reason }) },
+  )
+}
+
+export function apiReopenAlert(alertId: string) {
+  return request<{ id: string; status: AlertStatus; previous_status: AlertStatus }>(
+    `/alerts/${alertId}/reopen`,
+    { method: "POST" },
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Events -- the read side of the ingestion pipeline (docs/API_CONTRACT.md
 // "Event ingestion and read API"). Cursor pagination is keyset on
 // (occurred_at DESC, id DESC); visibility (super_admin vs platform SOC
