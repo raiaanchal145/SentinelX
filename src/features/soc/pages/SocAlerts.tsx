@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 
-import AlertFilters, { alertRangeHours, INITIAL_ALERT_FILTERS, type AlertFilterState } from "../components/AlertFilters"
+import AlertFilters from "../components/AlertFilters"
+import { alertRangeHours, INITIAL_ALERT_FILTERS, type AlertFilterState } from "../components/alertFilterShared"
 import AlertTable from "../components/AlertTable"
 import AlertDrawer from "../components/AlertDrawer"
 import ConfirmDialog from "../../../components/ui/ConfirmDialog"

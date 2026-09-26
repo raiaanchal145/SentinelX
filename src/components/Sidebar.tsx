@@ -119,6 +119,13 @@ function Sidebar() {
       path: "/admin/soc-oversight",
     },
     {
+      // Read-only alert oversight; the page notes that a managed org's
+      // queue is worked by the platform SOC team.
+      name: "Security activity",
+      icon: Activity,
+      path: "/organization/security-activity",
+    },
+    {
       name: "IT Oversight",
       icon: Wrench,
       path: "/admin/it-oversight",

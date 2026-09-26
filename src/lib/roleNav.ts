@@ -51,6 +51,7 @@ export const ROLE_NAV: Partial<Record<Role, NavItem[]>> = {
   ],
   security_manager: [
     { label: "Overview", path: "/manager", icon: LayoutDashboard, end: true },
+    { label: "Security activity", path: "/manager/security-activity", icon: Activity, module: "soc" },
     { label: "Incidents", path: "/manager/incidents", icon: ShieldAlert, module: "incidents" },
     { label: "Approvals", path: "/manager/approvals", icon: SquareCheck, module: "approvals" },
     { label: "Reports", path: "/manager/reports", icon: FileText, module: "reports" },

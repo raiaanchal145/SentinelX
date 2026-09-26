@@ -16,7 +16,7 @@ type AlertKpiRowProps = {
  * page: open, unacknowledged, median age, and counts by severity.
  * Deliberately no new backend endpoint (docs/DECISIONS.md).
  */
-function AlertKpiRow({ alerts, loading, alertsPath = "/soc/alerts" }: AlertKpiRowProps) {
+function AlertKpiRow({ alerts, loading, alertsPath }: AlertKpiRowProps) {
   if (loading) {
     return (
       <section aria-label="Key metrics" className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
@@ -28,11 +28,14 @@ function AlertKpiRow({ alerts, loading, alertsPath = "/soc/alerts" }: AlertKpiRo
   }
 
   const kpis = computeAlertKpis(alerts)
+  // When no queue path is given (read-only oversight), the cards render
+  // without links instead of pointing at a page the viewer can't use.
+  const link = (suffix = "") => (alertsPath ? `${alertsPath}${suffix}` : undefined)
 
   return (
     <section aria-label="Key metrics" className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-      <KpiCard label="Open alerts" value={kpis.open} link={alertsPath} />
-      <KpiCard label="Unacknowledged" value={kpis.unacknowledged} link={`${alertsPath}?status=new`} tone="high" />
+      <KpiCard label="Open alerts" value={kpis.open} link={link()} />
+      <KpiCard label="Unacknowledged" value={kpis.unacknowledged} link={link("?status=new")} tone="high" />
       <KpiCard label="Median age" value={kpis.medianAge === 0 ? "--" : `${kpis.medianAge}m`} />
       {(["critical", "high", "medium", "low"] as const).map((severity) => (
         <KpiCard
@@ -40,7 +43,7 @@ function AlertKpiRow({ alerts, loading, alertsPath = "/soc/alerts" }: AlertKpiRo
           label={`${severity.charAt(0).toUpperCase()}${severity.slice(1)} severity`}
           value={kpis.bySeverity[severity] ?? 0}
           tone={severity === "critical" ? "critical" : severity === "high" ? "high" : severity === "medium" ? "medium" : "low"}
-          link={`${alertsPath}?severity=${severity}`}
+          link={link(`?severity=${severity}`)}
         />
       ))}
     </section>

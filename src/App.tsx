@@ -30,6 +30,7 @@ import ModuleGuard from "./components/ModuleGuard"
 
 import SocOverview from "./features/soc/pages/SocOverview"
 import SocAlerts from "./features/soc/pages/SocAlerts"
+import SecurityActivity from "./features/soc/pages/SecurityActivity"
 import SocIncidents from "./features/soc/pages/SocIncidents"
 import IncidentDetail from "./features/soc/pages/IncidentDetail"
 import SocEvents from "./features/soc/pages/SocEvents"
@@ -282,6 +283,19 @@ function App() {
         }
       />
 
+      {/* READ-ONLY SECURITY ACTIVITY (managed-mode oversight): the owner
+          sees their organization's alert counts and details but never
+          action buttons -- the platform SOC team works a managed
+          organization's queue. */}
+      <Route
+        path="/organization/security-activity"
+        element={
+          <ProtectedRoute allowedRoles={["organization_admin"]}>
+            <SecurityActivity />
+          </ProtectedRoute>
+        }
+      />
+
       {/* SUPER ADMIN DASHBOARD (admin side -- unchanged) */}
 
       <Route
@@ -387,6 +401,9 @@ function App() {
         <Route path="/manager/reports" element={<ModuleGuard module="reports"><ManagerReports /></ModuleGuard>} />
         <Route path="/manager/assets" element={<ModuleGuard module="assets"><ManagerAssets /></ModuleGuard>} />
         <Route path="/manager/event-sources" element={<ManagerEventSources />} />
+        {/* Managed-mode oversight for the security_manager -- read-only,
+            same shared page as the owner's (soc_mode decides the note). */}
+        <Route path="/manager/security-activity" element={<SecurityActivity />} />
         <Route path="/manager/audit" element={<ModuleGuard module="audit_logs"><ManagerAudit /></ModuleGuard>} />
       </Route>
 

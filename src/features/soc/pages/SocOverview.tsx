@@ -8,7 +8,16 @@ import Skeleton from "../../../components/ui/Skeleton"
 import Sparkline from "../../../components/ui/Sparkline"
 import { useToast } from "../../../components/ui/Toast"
 
-import { ApiError, apiGetEventsSummary, apiListAlerts, apiListAssets, type AlertRow, type EventSummary } from "../../../lib/api"
+import {
+  ApiError,
+  apiAcknowledgeAlert,
+  apiDismissAlert,
+  apiGetEventsSummary,
+  apiListAlerts,
+  apiListAssets,
+  type AlertRow,
+  type EventSummary,
+} from "../../../lib/api"
 import { useMe } from "../../../lib/me"
 
 import AlertDrawer from "../components/AlertDrawer"
@@ -117,7 +126,7 @@ function SocOverview() {
     const target = ackTarget
     setAckTarget(null)
     try {
-      await import("../../../lib/api").then(({ apiAcknowledgeAlert }) => apiAcknowledgeAlert(target.id))
+      await apiAcknowledgeAlert(target.id)
       toast.show(`Acknowledged "${target.title}".`, { tone: "success" })
       loadAlerts()
     } catch (err) {
@@ -130,7 +139,7 @@ function SocOverview() {
     const target = dismissTarget
     setDismissTarget(null)
     try {
-      await import("../../../lib/api").then(({ apiDismissAlert }) => apiDismissAlert(target.id, reason.trim()))
+      await apiDismissAlert(target.id, reason.trim())
       toast.show(`Dismissed "${target.title}".`, { tone: "info" })
       loadAlerts()
     } catch (err) {
