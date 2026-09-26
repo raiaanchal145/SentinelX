@@ -598,3 +598,21 @@ organization with internal timeline entries filtered out SERVER-SIDE
 -- shared comments only, every write endpoint refused. The filter
 lives in the detail endpoint, so the data never reaches an
 unauthorized caller regardless of what a client renders.
+
+## alerts.created_at: model/DB drift and how it hid from pytest
+
+`models.Alert` always defined `created_at`, but no migration ever
+added it: f2a3b4c5d6e7 created `alerts` without the column and
+b1c2d3e4f5a6 restored every other P10 column EXCEPT this one, so any
+migrated database 500ed on `GET /alerts` with UndefinedColumnError.
+Two things to keep from this incident: (1) the repair
+(d3e4f5a6b7c8) adds plain TIMESTAMP NOT NULL DEFAULT now() --
+matching the model and every other created_at in the schema; a
+TIMESTAMPTZ would have re-created the drift one layer up. (2) The
+pytest suite could never catch this class of bug because the fixture
+builds the schema with `Base.metadata.create_all` (models as truth),
+never alembic -- a full-model-to-DB introspection diff (script kept
+in this report's history) is the check that actually catches it, and
+it now reports zero missing columns. Existing rows backfill with the
+migration timestamp: the honest value for a column that never
+existed.
