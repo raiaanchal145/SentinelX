@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import { RefreshCw } from "lucide-react"
 
 import Sidebar from "../../../components/Sidebar"
@@ -7,6 +8,7 @@ import Badge from "../../../components/ui/Badge"
 import EmptyState from "../../../components/EmptyState"
 import IconButton from "../../../components/ui/IconButton"
 import Skeleton from "../../../components/ui/Skeleton"
+import Tabs from "../../../components/ui/Tabs"
 import { useToast } from "../../../components/ui/Toast"
 import {
   ApiError,
@@ -14,7 +16,9 @@ import {
   apiDismissAlert,
   apiGetMyAssignedOrganizations,
   apiListAlerts,
+  apiListIncidents,
   type AlertRow,
+  type IncidentRow,
   type SocAnalystAssignedOrg,
 } from "../../../lib/api"
 import { useMe } from "../../../lib/me"
@@ -26,11 +30,134 @@ import AlertKpiRow from "../../soc/components/AlertKpiRow"
 import AlertTable from "../../soc/components/AlertTable"
 import ConfirmDialog from "../../../components/ui/ConfirmDialog"
 import { minutesSince } from "../../soc/components/alertShared"
+import IncidentFilters from "../../soc/components/IncidentFilters"
+import {
+  INITIAL_INCIDENT_FILTERS,
+  incidentRangeHours,
+  type IncidentFilterState,
+} from "../../soc/components/IncidentFilters"
+import IncidentTable from "../../soc/components/IncidentTable"
 
 const PAGE_SIZE = 200
+const INCIDENT_PAGE_SIZE = 50
 
 function isoAgo(hours: number): string {
   return new Date(Date.now() - hours * 3_600_000).toISOString()
+}
+
+/** The platform SOC's incident queue (the Alerts tab's sibling). Same
+ * assigned-organizations visibility -- GET /incidents returns only the
+ * caller's assigned managed+active orgs, so the Organization column and
+ * filter list exactly those. */
+function PlatformIncidentsSection({
+  orgs,
+  orgsLoading,
+}: {
+  orgs: SocAnalystAssignedOrg[]
+  orgsLoading: boolean
+}) {
+  const { me } = useMe()
+  const navigate = useNavigate()
+  const [filters, setFilters] = useState<IncidentFilterState>(INITIAL_INCIDENT_FILTERS)
+  const [incidents, setIncidents] = useState<IncidentRow[]>([])
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+
+  const load = useCallback(
+    async function load() {
+      setLoading(true)
+      setError("")
+      try {
+        const res = await apiListIncidents({
+          status: filters.status || undefined,
+          severity: filters.severity || undefined,
+          assignee: filters.assignedToMe ? "me" : undefined,
+          time_from: filters.range === "all" ? undefined : isoAgo(incidentRangeHours(filters.range)),
+          organization_id: filters.organizationId || undefined,
+          limit: INCIDENT_PAGE_SIZE,
+        })
+        setIncidents(res.incidents)
+        setNextCursor(res.next_cursor)
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message : "Could not load incidents.")
+      } finally {
+        setLoading(false)
+      }
+    },
+    [filters],
+  )
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const orgName = useCallback(
+    (organizationId: string) => orgs.find((o) => o.id === organizationId)?.name ?? `${organizationId.slice(0, 8)}…`,
+    [orgs],
+  )
+
+  const assigneeName = useCallback(
+    (incident: IncidentRow): string | null => {
+      if (!incident.assigned_account_id) return null
+      if (incident.assigned_account_id === me?.id) return me?.name || "Me"
+      return "Another analyst"
+    },
+    [me],
+  )
+
+  return (
+    <div className="space-y-4">
+      <IncidentFilters value={filters} onChange={setFilters} orgOptions={orgs.map((o) => ({ id: o.id, name: o.name }))} />
+
+      <IncidentTable
+        incidents={incidents}
+        loading={loading}
+        error={error}
+        onRetry={load}
+        onOpen={(incident) => navigate(`/admin/soc-queue/incidents/${incident.id}`)}
+        orgName={orgName}
+        assigneeName={assigneeName}
+        emptyTitle="No incidents in your queue"
+        emptyDescription={
+          orgsLoading
+            ? "Loading your organizations…"
+            : orgs.length === 0
+              ? "You are not assigned to any organizations yet, so there are no incidents to work."
+              : "No incidents match the current filters in your assigned organizations."
+        }
+        ariaLabel="Platform SOC incident queue"
+      />
+
+      {!loading && !error && nextCursor && (
+        <div className="flex justify-center">
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const res = await apiListIncidents({
+                  status: filters.status || undefined,
+                  severity: filters.severity || undefined,
+                  assignee: filters.assignedToMe ? "me" : undefined,
+                  time_from: filters.range === "all" ? undefined : isoAgo(incidentRangeHours(filters.range)),
+                  organization_id: filters.organizationId || undefined,
+                  limit: INCIDENT_PAGE_SIZE,
+                  cursor: nextCursor,
+                })
+                setIncidents((prev) => [...prev, ...res.incidents.filter((i) => !prev.some((p) => p.id === i.id))])
+                setNextCursor(res.next_cursor)
+              } catch (err) {
+                setError(err instanceof ApiError ? err.message : "Could not load more incidents.")
+              }
+            }}
+            className="rounded-control border border-line bg-surface px-4 py-2 text-xs text-fg-secondary hover:border-line-strong hover:text-fg-primary"
+          >
+            Load more
+          </button>
+        </div>
+      )}
+    </div>
+  )
 }
 
 /** The platform SOC analyst's single workspace (Prompt B section A5, now
@@ -210,29 +337,50 @@ function SocQueue() {
             <p className="mt-2 text-[11px] text-fg-faint">Counts cover the most recent {PAGE_SIZE} alerts in the selected window.</p>
           </section>
 
-          <AlertFilters value={filters} onChange={setFilters} orgOptions={orgs.map((o) => ({ id: o.id, name: o.name }))} />
+          {/* Alerts and incidents share the workspace as tabs; the
+              incidents queue is the same shared component set with the
+              Organization column for the multi-org view. */}
+          <Tabs
+            ariaLabel="SOC queues"
+            tabs={[
+              {
+                id: "alerts",
+                label: "Alerts",
+                content: (
+                  <div className="space-y-4">
+                    <AlertFilters value={filters} onChange={setFilters} orgOptions={orgs.map((o) => ({ id: o.id, name: o.name }))} />
 
-          <AlertTable
-            alerts={alerts}
-            loading={loading}
-            error={error}
-            onRetry={loadAlerts}
-            onOpen={setSelected}
-            orgName={orgName}
-            assigneeName={(alert) => {
-              if (!alert.assigned_account_id) return null
-              if (alert.assigned_account_id === me?.id) return me?.name ?? "Me"
-              return "Another analyst"
-            }}
-            emptyTitle="No alerts in your queue"
-            emptyDescription={
-              orgs.length === 0
-                ? "You are not assigned to any organizations yet, so there is nothing to triage."
-                : lastEventMinutes !== null
-                  ? `No alerts match -- the most recent activity across your organizations was ${lastEventMinutes} minute${lastEventMinutes === 1 ? "" : "s"} ago.`
-                  : "No alerts have fired in your assigned organizations recently."
-            }
-            ariaLabel="Platform SOC alert queue"
+                    <AlertTable
+                      alerts={alerts}
+                      loading={loading}
+                      error={error}
+                      onRetry={loadAlerts}
+                      onOpen={setSelected}
+                      orgName={orgName}
+                      assigneeName={(alert) => {
+                        if (!alert.assigned_account_id) return null
+                        if (alert.assigned_account_id === me?.id) return me?.name ?? "Me"
+                        return "Another analyst"
+                      }}
+                      emptyTitle="No alerts in your queue"
+                      emptyDescription={
+                        orgs.length === 0
+                          ? "You are not assigned to any organizations yet, so there is nothing to triage."
+                          : lastEventMinutes !== null
+                            ? `No alerts match -- the most recent activity across your organizations was ${lastEventMinutes} minute${lastEventMinutes === 1 ? "" : "s"} ago.`
+                            : "No alerts have fired in your assigned organizations recently."
+                      }
+                      ariaLabel="Platform SOC alert queue"
+                    />
+                  </div>
+                ),
+              },
+              {
+                id: "incidents",
+                label: "Incidents",
+                content: <PlatformIncidentsSection orgs={orgs} orgsLoading={orgsLoading} />,
+              },
+            ]}
           />
 
           <AlertDrawer alert={selected} onClose={() => setSelected(null)} canWrite assignees={assignees} onChanged={loadAlerts} />

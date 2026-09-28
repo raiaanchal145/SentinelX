@@ -68,7 +68,7 @@ function EventDrawer({ event, onClose }: { event: IncidentLinkedEvent | null; on
   )
 }
 
-function IncidentDetail() {
+function IncidentDetail({ platform = false }: { platform?: boolean }) {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { me } = useMe()
@@ -167,15 +167,18 @@ function IncidentDetail() {
 
   if (!data) return null
 
+  // The platform analyst reaches this page from /admin/soc-queue's
+  // Incidents tab; the back-link follows whichever surface they came from.
+  const listPath = platform ? "/admin/soc-queue" : "/soc/incidents"
   const incident = data.incident
   const allowed = data.allowed_next_states ?? []
 
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
-        <IconButton icon={ArrowLeft} label="Back to incidents" onClick={() => navigate("/soc/incidents")} />
+        <IconButton icon={ArrowLeft} label="Back to incidents" onClick={() => navigate(listPath)} />
         <p className="text-xs text-fg-muted">
-          <Link to="/soc/incidents" className="hover:text-fg-primary">
+          <Link to={listPath} className="hover:text-fg-primary">
             Incidents
           </Link>{" "}
           / <span className="text-fg-secondary">{incident.id.slice(0, 8)}…</span>

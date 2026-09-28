@@ -34,6 +34,8 @@ import SocAlerts from "./features/soc/pages/SocAlerts"
 import SecurityActivity from "./features/soc/pages/SecurityActivity"
 import SocIncidents from "./features/soc/pages/SocIncidents"
 import IncidentDetail from "./features/soc/pages/IncidentDetail"
+// IncidentDetail takes a `platform` prop for the /admin/soc-queue route
+// (back-link target), rendered inline below.
 import SocEvents from "./features/soc/pages/SocEvents"
 import SocAssets from "./features/soc/pages/SocAssets"
 import SocReports from "./features/soc/pages/SocReports"
@@ -213,6 +215,19 @@ function App() {
         element={
           <ProtectedRoute allowedRoles={["platform_soc_analyst"]}>
             <SocQueue />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* The platform SOC analyst's incident detail (backlink returns to
+          the queue's Incidents tab). The page itself guards on module and
+          renders from allowed_next_states, so it doubles as the analyst's
+          working view. */}
+      <Route
+        path="/admin/soc-queue/incidents/:id"
+        element={
+          <ProtectedRoute allowedRoles={["platform_soc_analyst"]}>
+            <IncidentDetail platform />
           </ProtectedRoute>
         }
       />
