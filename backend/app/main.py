@@ -9,6 +9,8 @@ from app.routers import (
     admin_organizations,
     admin_soc,
     alerts,
+    approvals,
+    assignment_rules,
     assets,
     auth,
     detection,
@@ -18,6 +20,7 @@ from app.routers import (
     invitations,
     organization,
     stats,
+    tickets,
 )
 
 app = FastAPI(title="SentinelX API")
@@ -88,3 +91,6 @@ app.include_router(events.router)
 app.include_router(detection.router)
 app.include_router(alerts.router)
 app.include_router(incidents.router)
+app.include_router(tickets.router)
+app.include_router(approvals.router)
+app.include_router(assignment_rules.router)

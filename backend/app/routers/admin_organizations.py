@@ -245,6 +245,11 @@ async def create_organization(
     db.add(org)
     await db.flush()
     await seed_default_modules(db, org.id)
+    # Default SLA policies (P1..P4) so tickets created in this organization
+    # always find deadlines to stamp (docs/DECISIONS.md).
+    from app.tickets import seed_default_sla_policies
+
+    await seed_default_sla_policies(db, org.id)
 
     await check_invitation_rate_limit(db, org.id)
     invitation, raw_token = await create_invitation(
