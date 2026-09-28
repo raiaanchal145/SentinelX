@@ -77,7 +77,11 @@ import {
 const BACKEND_PORT = 8000;
 const FRONTEND_PORT = 5173;
 const WORKER_PORT = null; // the worker listens nowhere -- it connects out to Postgres+Redis
-const HEALTH_URL = `http://localhost:${BACKEND_PORT}/api/v1/health`;
+// 127.0.0.1, not localhost: uvicorn binds IPv4 only, and on Windows
+// `localhost` resolves to ::1 FIRST -- a health probe that lands there
+// gets connection-refused and misreports the (healthy) backend as down.
+const BACKEND_HOST = '127.0.0.1';
+const HEALTH_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}/api/v1/health`;
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);
@@ -455,7 +459,7 @@ async function cmdApiOnly() {
   const venvPython = ensurePythonVenv();
   ensureBackendEnv();
   log.step(`Starting the backend (uvicorn) in this terminal -- Ctrl+C to stop.`);
-  spawnSync(venvPython, ['-m', 'uvicorn', 'app.main:app', '--reload', '--port', String(BACKEND_PORT)], {
+  spawnSync(venvPython, ['-m', 'uvicorn', 'app.main:app', '--reload', '--host', BACKEND_HOST, '--port', String(BACKEND_PORT)], {
     cwd: path.join(ROOT, 'backend'),
     stdio: 'inherit',
   });
@@ -585,7 +589,10 @@ async function cmdFullDev() {
           SENTINELX_SHARE_ACTIVE: share.origin,
         }
       : process.env;
-    const backendArgs = ['-m', 'uvicorn', 'app.main:app', '--reload', '--port', String(BACKEND_PORT)];
+    // Bind 127.0.0.1 explicitly (uvicorn's default, now stated): the
+    // frontend's API base names 127.0.0.1 directly (src/lib/apiBase.ts),
+    // so the backend must answer on that exact address.
+    const backendArgs = ['-m', 'uvicorn', 'app.main:app', '--reload', '--host', BACKEND_HOST, '--port', String(BACKEND_PORT)];
     const backendCwd = path.join(ROOT, 'backend');
 
     if (INLINE) {
