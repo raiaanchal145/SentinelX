@@ -27,7 +27,11 @@ export default defineConfig({
           allowedHosts: true,
           proxy: {
             '/api': {
-              target: 'http://localhost:8000',
+              // 127.0.0.1, not localhost: uvicorn binds IPv4 only and
+              // `localhost` resolves to ::1 first on Windows, so a proxy
+              // connection landing there is refused (same reason
+              // src/lib/apiBase.ts names 127.0.0.1 directly).
+              target: 'http://127.0.0.1:8000',
               changeOrigin: true,
             },
           },

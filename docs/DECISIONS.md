@@ -694,3 +694,48 @@ by name (same person every time given the same load -- no
 nondeterminism for tests or UIs to trip over). Only it_developer users
 of the ticket's organization are eligible at all: the organization's
 IT fixes its own tickets, in both SOC modes, structurally.
+
+## P14: the UI renders transitions from allowed_next_states, never a client map
+
+The incident detail response carries `allowed_next_states` -- the
+transition map's row for the current status, then filtered to what
+THIS caller may do (a writer gets the full row; the security_manager
+only ESCALATED in both soc modes; the owner and the IT developer's
+shared window get `[]`). The frontend renders one button per entry and
+hard-codes nothing: adding a lifecycle edge in `INCIDENT_TRANSITIONS`
+changes the UI with no client release, and a read-only caller is never
+offered a button the backend would 403. The client keeps a
+label/tone/required-fields table keyed by TARGET (which words to show,
+which fields the 422s will demand) -- presentation, not permissions;
+the server stays the only authority on what may move to what.
+
+## P14: managed-org oversight reads the shared timeline only
+
+A managed organization's owner and security_manager see the incident's
+SHARED timeline entries only -- the same server-side filter the IT
+developer's window already had. Why: in managed mode the platform SOC
+works the incident and its internal notes are that team's working
+space (half-formed hypotheses, names in a blame draft); the owner's
+oversight covers the story shared with the organization, and the IT
+precedent already settled that "shared entries only" is the oversight
+shape. An in-house org's owner/manager keep the full timeline -- their
+own SOC team wrote those notes, there is no platform boundary to
+respect. The filter lives in the detail endpoint (data never leaves
+the API for an unauthorized caller), and the caller-shaped
+`allowed_next_states` follows the same rule: a managed owner gets `[]`,
+a managed manager keeps exactly the ESCALATED request.
+
+## P14: list rows carry the open ticket; the SOC preview's the priority
+
+Two UI-serving payloads, both deliberately cheap. (1) `GET
+/incidents` rows carry `open_ticket` (`{id, ticket_number, status,
+priority}`) from ONE aggregate query per page -- the "linked ticket"
+column in the incident queue needs no per-row detail round-trip, and
+resolved/closed tickets do not count (the column answers "is there
+active remediation work?"). (2) The ticket-create form shows a
+priority PREVIEW computed client-side with the documented formula's
+exact weights. The backend recomputes (or applies the audited SOC
+override); the preview exists so the analyst understands the price of
+the override before choosing it. Mirroring the weight table client-side
+is a documented drift risk: change `app/tickets.py` and the preview in
+the same commit or they diverge silently.

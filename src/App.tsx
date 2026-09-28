@@ -24,6 +24,7 @@ import OwnerAccess from "./features/owner/pages/OwnerAccess"
 import OwnerAssets from "./features/owner/pages/OwnerAssets"
 import OwnerEventSources from "./features/owner/pages/OwnerEventSources"
 import OwnerSettings from "./features/owner/pages/OwnerSettings"
+import OwnerIncidents from "./features/owner/pages/OwnerIncidents"
 
 import UserLayout from "./layouts/UserLayout"
 import ModuleGuard from "./components/ModuleGuard"
@@ -33,6 +34,8 @@ import SocAlerts from "./features/soc/pages/SocAlerts"
 import SecurityActivity from "./features/soc/pages/SecurityActivity"
 import SocIncidents from "./features/soc/pages/SocIncidents"
 import IncidentDetail from "./features/soc/pages/IncidentDetail"
+// IncidentDetail takes a `platform` prop for the /admin/soc-queue route
+// (back-link target), rendered inline below.
 import SocEvents from "./features/soc/pages/SocEvents"
 import SocAssets from "./features/soc/pages/SocAssets"
 import SocReports from "./features/soc/pages/SocReports"
@@ -216,6 +219,19 @@ function App() {
         }
       />
 
+      {/* The platform SOC analyst's incident detail (backlink returns to
+          the queue's Incidents tab). The page itself guards on module and
+          renders from allowed_next_states, so it doubles as the analyst's
+          working view. */}
+      <Route
+        path="/admin/soc-queue/incidents/:id"
+        element={
+          <ProtectedRoute allowedRoles={["platform_soc_analyst"]}>
+            <IncidentDetail platform />
+          </ProtectedRoute>
+        }
+      />
+
       {/* ORGANIZATION OWNER (Prompt B section B -- organization_admin's new
           home; see homePathFor() in lib/auth.ts). Distinct from the
           legacy /organization-dashboard route below, kept as-is. */}
@@ -296,6 +312,17 @@ function App() {
         }
       />
 
+      {/* READ-ONLY INCIDENT OVERSIGHT (owner): same shared component set,
+          no write controls -- the backend refuses owner writes. */}
+      <Route
+        path="/organization/incidents"
+        element={
+          <ProtectedRoute allowedRoles={["organization_admin"]}>
+            <OwnerIncidents />
+          </ProtectedRoute>
+        }
+      />
+
       {/* SUPER ADMIN DASHBOARD (admin side -- unchanged) */}
 
       <Route
@@ -365,6 +392,10 @@ function App() {
         <Route path="/soc/alerts" element={<ModuleGuard module="soc"><SocAlerts /></ModuleGuard>} />
         <Route path="/soc/incidents" element={<ModuleGuard module="incidents"><SocIncidents /></ModuleGuard>} />
         <Route path="/soc/incidents/:id" element={<ModuleGuard module="incidents"><IncidentDetail /></ModuleGuard>} />
+        {/* Manager/owner read-only detail reuses the same page: the API's
+            allowed_next_states renders no write buttons for them. */}
+        <Route path="/manager/incidents/:id" element={<ModuleGuard module="incidents"><IncidentDetail /></ModuleGuard>} />
+        <Route path="/organization/incidents/:id" element={<IncidentDetail />} />
         <Route path="/soc/events" element={<ModuleGuard module="soc"><SocEvents /></ModuleGuard>} />
         <Route path="/soc/assets" element={<ModuleGuard module="assets"><SocAssets /></ModuleGuard>} />
         <Route path="/soc/reports" element={<ModuleGuard module="reports"><SocReports /></ModuleGuard>} />

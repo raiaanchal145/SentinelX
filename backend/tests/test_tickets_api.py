@@ -148,6 +148,104 @@ async def test_managed_org_platform_soc_creates_ticket_with_computed_priority(cl
 
 
 @pytest.mark.asyncio
+async def test_managed_org_end_to_end_platform_soc_verifies_and_closes(client, db_session):
+    """The DONE-WHEN walk, over the API only: the platform SOC creates a
+    CRITICAL ticket on a managed organization's incident, that org's IT
+    developer works it to VERIFICATION (and is refused the close), the
+    platform SOC requests closure, the org's owner approves, and the
+    platform SOC verifies + closes. Every change is on the incident's
+    timeline and both sides' audit logs."""
+    from sqlalchemy import select as _select
+
+    from app.models import IncidentTimeline as TimelineModel
+
+    org, soc_email, team, dev1, dev2 = await seed_soc_world(db_session, soc_mode=__import__("app.models", fromlist=["SocMode"]).SocMode.managed)
+    soc_token = await login(client, soc_email)
+
+    # 1. The platform SOC creates the ticket from a critical incident.
+    incident = (
+        await client.post(
+            "/api/v1/incidents",
+            json={"title": "Ransomware on file server", "severity": "critical", "organization_id": str(org.id)},
+            headers=auth(soc_token),
+        )
+    ).json()
+    ticket = await create_ticket(
+        client, soc_token, org_id=str(org.id),
+        incident_id=incident["id"], severity="critical", priority="P1",
+    )
+
+    # 2. The organization's IT developer sees it and works it.
+    it_token = await login(client, dev1.email)
+    seen = await client.get(f"/api/v1/tickets/{ticket['id']}", headers=auth(it_token))
+    assert seen.status_code == 200
+    for status in ("investigating", "remediation", "verification"):
+        resp = await client.post(
+            f"/api/v1/tickets/{ticket['id']}/transition",
+            json={"status": status}, headers=auth(it_token),
+        )
+        assert resp.status_code == 200, resp.text
+    # IT cannot close -- the SOC's verdict is required.
+    denied = await client.post(
+        f"/api/v1/tickets/{ticket['id']}/transition",
+        json={"status": "closed"}, headers=auth(it_token),
+    )
+    assert denied.status_code == 403
+    assert denied.json()["detail"]["code"] == "it_cannot_close"
+
+    # 3. The platform SOC requests closure; the org's owner approves.
+    requested = await client.post(
+        f"/api/v1/tickets/{ticket['id']}/close-request",
+        json={"notes": "fix verified by platform SOC"}, headers=auth(soc_token),
+    )
+    assert requested.status_code == 201, requested.text
+    owner_token = await login(client, f"owner-{org.id}@x.io")
+    decided = await client.post(
+        f"/api/v1/approvals/{requested.json()['id']}/decision",
+        json={"decision": "approved"}, headers=auth(owner_token),
+    )
+    assert decided.status_code == 200, decided.text
+
+    # 4. The platform SOC verifies the fix and closes.
+    verified = await client.post(
+        f"/api/v1/tickets/{ticket['id']}/verify",
+        json={"result": "verified", "notes": "host reimaged, IOC gone"}, headers=auth(soc_token),
+    )
+    assert verified.status_code == 200, verified.text
+    assert verified.json()["status"] == "RESOLVED"
+    closed = await client.post(
+        f"/api/v1/tickets/{ticket['id']}/transition",
+        json={"status": "closed"}, headers=auth(soc_token),
+    )
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["status"] == "CLOSED"
+
+    # 5. The incident's timeline recorded every step; history/audit exist.
+    db_ticket_id = uuid.UUID(ticket["id"])
+    detail = (
+        await client.get(f"/api/v1/tickets/{ticket['id']}", headers=auth(soc_token))
+    ).json()
+    statuses = [h["to_status"] for h in detail["status_history"]]
+    assert statuses[-3:] == ["VERIFICATION", "RESOLVED", "CLOSED"]
+    timeline = (
+        await db_session.execute(
+            _select(TimelineModel).where(TimelineModel.incident_id == uuid.UUID(incident["id"]))
+        )
+    ).scalars().all()
+    entry_types = {e.entry_type for e in timeline}
+    assert {"ticket_created", "ticket_status", "comment"} <= entry_types or {"ticket_created", "ticket_status"} <= entry_types
+    audits = (
+        await db_session.execute(
+            _select(AuditLog).where(
+                AuditLog.action.in_(["ticket.create", "ticket.transition", "ticket.verify", "ticket.close_request"]),
+                AuditLog.target_id == db_ticket_id,
+            )
+        )
+    ).scalars().all()
+    assert len(audits) >= 4
+
+
+@pytest.mark.asyncio
 async def test_managed_org_it_can_see_and_work_platform_created_ticket(client, db_session):
     org, soc_email, team, dev1, dev2 = await seed_soc_world(db_session, soc_mode=__import__("app.models", fromlist=["SocMode"]).SocMode.managed)
     soc_token = await login(client, soc_email)

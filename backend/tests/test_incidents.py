@@ -771,3 +771,148 @@ async def test_it_developer_sees_shared_only(db_session, client):
         f"/api/v1/incidents/{incident['id']}/merge", json={"duplicate_incident_id": str(uuid.uuid4())}, headers=auth(it_token)
     )
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Caller-shaped detail: allowed_next_states, the open-ticket stub on list
+# rows, and shared-only timeline for managed-org oversight.
+# ---------------------------------------------------------------------------
+
+
+async def test_detail_allowed_next_states_follow_caller(db_session, client):
+    """The detail carries allowed_next_states shaped by WHO is asking:
+    a writer sees the full map row, the security_manager only ESCALATED,
+    and read-only callers (owner, IT) get an empty list -- the UI renders
+    its buttons from this field, never from a hard-coded map."""
+    org = await make_organization(db_session, soc_mode=SocMode.in_house)
+    token = await _token_for(client, db_session, org=org, role=UserRole.soc_analyst)
+    incident = await _incident_for(client, db_session, org, token)
+
+    detail = await client.get(f"/api/v1/incidents/{incident['id']}", headers=auth(token))
+    assert detail.status_code == 200
+    assert detail.json()["allowed_next_states"] == ["DUPLICATE", "FALSE_POSITIVE", "INVESTIGATING", "TRIAGED"]
+
+    # The security_manager's read oversight + one write: only ESCALATED
+    # survives the filter (ESCALATED is reachable from TRIAGED+).
+    manager_token = await _token_for(client, db_session, org=org, role=UserRole.security_manager)
+    resp = await client.post(f"/api/v1/incidents/{incident['id']}/transition", json=_transition("TRIAGED"), headers=auth(token))
+    assert resp.status_code == 200
+    detail = await client.get(f"/api/v1/incidents/{incident['id']}", headers=auth(manager_token))
+    assert detail.json()["allowed_next_states"] == ["ESCALATED"]
+
+    # The owner is read-only oversight: no transitions at all.
+    owner_token = await _token_for(client, db_session, org=org, level=AdminLevel.organization_admin)
+    detail = await client.get(f"/api/v1/incidents/{incident['id']}", headers=auth(owner_token))
+    assert detail.status_code == 200
+    assert detail.json()["allowed_next_states"] == []
+
+    # The IT developer's shared window is read-only too.
+    it_token = await _token_for(client, db_session, org=org, role=UserRole.it_developer)
+    detail = await client.get(f"/api/v1/incidents/{incident['id']}", headers=auth(it_token))
+    assert detail.json()["allowed_next_states"] == []
+
+
+async def test_list_rows_carry_open_ticket_stub(db_session, client):
+    """List rows expose the incident's open remediation ticket
+    (number/status/priority) so the queue shows the linked-ticket column
+    without a detail round-trip per row."""
+    org = await make_organization(db_session, soc_mode=SocMode.in_house)
+    token = await _token_for(client, db_session, org=org, role=UserRole.soc_analyst)
+    incident = await _incident_for(client, db_session, org, token)
+
+    # No ticket yet: the key is absent.
+    listing = await client.get("/api/v1/incidents", headers=auth(token))
+    rows = {r["id"]: r for r in listing.json()["incidents"]}
+    assert "open_ticket" not in rows[incident["id"]]
+
+    from app.models import Ticket, TicketStatus
+
+    ticket = Ticket(
+        organization_id=org.id,
+        ticket_number="TICK-1",
+        incident_id=uuid.UUID(incident["id"]),
+        title="Patch the server",
+        severity=EventSeverity.high,
+        priority="P2",
+        status=TicketStatus.investigating,
+    )
+    db_session.add(ticket)
+    await db_session.commit()
+
+    listing = await client.get("/api/v1/incidents", headers=auth(token))
+    rows = {r["id"]: r for r in listing.json()["incidents"]}
+    stub = rows[incident["id"]]["open_ticket"]
+    assert stub["ticket_number"] == "TICK-1"
+    assert stub["status"] == "INVESTIGATING"
+    assert stub["priority"] == "P2"
+
+    # Resolved tickets stop counting as "open".
+    ticket.status = TicketStatus.resolved
+    await db_session.commit()
+    listing = await client.get("/api/v1/incidents", headers=auth(token))
+    rows = {r["id"]: r for r in listing.json()["incidents"]}
+    assert "open_ticket" not in rows[incident["id"]]
+
+
+async def test_managed_org_oversight_sees_shared_timeline_only(db_session, client):
+    """A MANAGED org's owner and security_manager read the incident's
+    shared story; the platform SOC's internal notes never leave the API
+    for them (same server-side filter as the IT window). An in-house
+    org's owner is NOT subject to it."""
+    from app.models import AdminLevel as AL
+
+    org = await make_organization(db_session, soc_mode=SocMode.managed)
+    platform_admin = await make_admin(db_session, email=f"psa-{uuid.uuid4().hex[:8]}@x.io", admin_level=AL.platform_soc_analyst)
+    from app.models import SocOrganizationAssignment
+
+    db_session.add(SocOrganizationAssignment(admin_id=platform_admin.id, organization_id=org.id))
+    await db_session.commit()
+    soc_token = await login(client, platform_admin.email)
+
+    incident = await _create_incident(client, soc_token, org=org)
+    await client.post(
+        f"/api/v1/incidents/{incident['id']}/comments",
+        json={"body": "SOC-only internal note", "visibility": "internal"},
+        headers=auth(soc_token),
+    )
+    await client.post(
+        f"/api/v1/incidents/{incident['id']}/comments",
+        json={"body": "shared with the organization", "visibility": "shared"},
+        headers=auth(soc_token),
+    )
+
+    # The writer (platform SOC) sees both.
+    detail = await client.get(f"/api/v1/incidents/{incident['id']}", headers=auth(soc_token))
+    comments = [t for t in detail.json()["timeline"] if t["entry_type"] == "comment"]
+    assert len(comments) == 2
+
+    # The managed org's owner: shared only.
+    owner = await make_admin(db_session, email=f"owner-{uuid.uuid4().hex[:8]}@x.io", organization_id=org.id)
+    owner_token = await login(client, owner.email)
+    detail = await client.get(f"/api/v1/incidents/{incident['id']}", headers=auth(owner_token))
+    comments = [t for t in detail.json()["timeline"] if t["entry_type"] == "comment"]
+    assert {c["description"] for c in comments} == {"shared with the organization"}
+    assert all(c["visibility"] == "shared" for c in comments)
+
+    # The managed org's security_manager: the same filter.
+    manager = await make_user(db_session, email=f"mgr-{uuid.uuid4().hex[:8]}@x.io", role=UserRole.security_manager, organization_id=org.id)
+    manager_token = await login(client, manager.email)
+    detail = await client.get(f"/api/v1/incidents/{incident['id']}", headers=auth(manager_token))
+    comments = [t for t in detail.json()["timeline"] if t["entry_type"] == "comment"]
+    assert {c["description"] for c in comments} == {"shared with the organization"}
+
+    # In-house org: the owner keeps the full timeline (they run their own SOC).
+    in_house = await make_organization(db_session, soc_mode=SocMode.in_house, name="InHouse")
+    analyst = await make_user(db_session, email=f"a-{uuid.uuid4().hex[:8]}@x.io", role=UserRole.soc_analyst, organization_id=in_house.id)
+    analyst_token = await login(client, analyst.email)
+    ih_incident = await _create_incident(client, analyst_token, org=in_house)
+    await client.post(
+        f"/api/v1/incidents/{ih_incident['id']}/comments",
+        json={"body": "internal note in-house", "visibility": "internal"},
+        headers=auth(analyst_token),
+    )
+    ih_owner = await make_admin(db_session, email=f"ihowner-{uuid.uuid4().hex[:8]}@x.io", organization_id=in_house.id)
+    ih_owner_token = await login(client, ih_owner.email)
+    detail = await client.get(f"/api/v1/incidents/{ih_incident['id']}", headers=auth(ih_owner_token))
+    comments = [t for t in detail.json()["timeline"] if t["entry_type"] == "comment"]
+    assert {c["description"] for c in comments} == {"internal note in-house"}

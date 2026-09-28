@@ -1054,3 +1054,281 @@ export function apiGetEventsSummary(params: Omit<EventListParams, "limit" | "cur
   const qs = query.toString()
   return request<EventSummary>(`/events/summary${qs ? `?${qs}` : ""}`)
 }
+
+// ---------------------------------------------------------------------------
+// Incidents -- the controlled lifecycle (docs/API_CONTRACT.md "Incidents").
+// List/detail are module `incidents` READ; transitions/comments/assign are
+// the SOC-side writes with the backend's transition map and soc-mode
+// ownership deciding who may write (owner/security_manager read-only,
+// except the security_manager's ESCALATED request). Visibility is
+// server-side; the frontend renders what comes back, and the detail's
+// `allowed_next_states` is already filtered to what THIS caller may do --
+// the UI's action buttons come from it, never a hard-coded map.
+// ---------------------------------------------------------------------------
+
+export type IncidentStatus =
+  | "NEW"
+  | "TRIAGED"
+  | "INVESTIGATING"
+  | "CONTAINMENT"
+  | "REMEDIATION"
+  | "VERIFICATION"
+  | "RESOLVED"
+  | "CLOSED"
+  | "REOPENED"
+  | "ESCALATED"
+  | "FALSE_POSITIVE"
+  | "DUPLICATE"
+
+export type IncidentRow = {
+  id: string
+  organization_id: string
+  title: string
+  summary: string | null
+  severity: AlertSeverity
+  priority: string | null
+  confidence: number | null
+  status: IncidentStatus
+  primary_asset_id: string | null
+  assigned_account_type: string | null
+  assigned_account_id: string | null
+  resolution_summary: string | null
+  closure_reason: string | null
+  duplicate_of_id: string | null
+  opened_at: string | null
+  resolved_at: string | null
+  closed_at: string | null
+  /** Present on list rows only. */
+  alert_count?: number
+  /** The incident's OPEN remediation ticket (list rows only; absent when
+   * none is open -- see the contract's list row notes). */
+  open_ticket?: {
+    id: string
+    ticket_number: string
+    status: string
+    priority: string | null
+  }
+}
+
+export type IncidentTimelineEntry = {
+  id: string
+  entry_type: string
+  description: string
+  actor_type: string
+  actor_id: string | null
+  visibility: string
+  metadata: Record<string, unknown> | null
+  occurred_at: string | null
+}
+
+export type IncidentLinkedAlert = {
+  id: string
+  title: string
+  severity: AlertSeverity
+  status: AlertStatus
+  rule_name: string | null
+}
+
+export type IncidentLinkedEvent = {
+  id: string
+  event_type: string
+  username: string | null
+  source_ip: string | null
+  occurred_at: string | null
+  message: string | null
+}
+
+export type IncidentLinkedAsset = {
+  id: string
+  name: string
+  hostname: string | null
+  criticality: string
+}
+
+export type IncidentDetailResponse = {
+  incident: IncidentRow
+  /** Transition targets for THIS caller (owner/IT get [], the
+   * security_manager gets ["ESCALATED"]). */
+  allowed_next_states: string[]
+  alerts: IncidentLinkedAlert[]
+  events: IncidentLinkedEvent[]
+  assets: IncidentLinkedAsset[]
+  duplicate_of: { id: string; title: string; status: string } | null
+  timeline: IncidentTimelineEntry[]
+}
+
+export type IncidentListParams = {
+  status?: string
+  severity?: string
+  assignee?: string
+  asset_id?: string
+  time_from?: string
+  time_to?: string
+  /** Platform roles scoping the queue to one organization; an id the
+   * caller cannot see is a 404 from the backend. */
+  organization_id?: string
+  limit?: number
+  cursor?: string | null
+}
+
+export type IncidentListResponse = {
+  incidents: IncidentRow[]
+  next_cursor: string | null
+}
+
+function incidentQuery(params: IncidentListParams): string {
+  const query = new URLSearchParams()
+  if (params.status) query.set("status", params.status)
+  if (params.severity) query.set("severity", params.severity)
+  if (params.assignee) query.set("assignee", params.assignee)
+  if (params.asset_id) query.set("asset_id", params.asset_id)
+  if (params.time_from) query.set("time_from", params.time_from)
+  if (params.time_to) query.set("time_to", params.time_to)
+  if (params.organization_id) query.set("organization_id", params.organization_id)
+  if (params.limit) query.set("limit", String(params.limit))
+  if (params.cursor) query.set("cursor", params.cursor)
+  const qs = query.toString()
+  return qs ? `?${qs}` : ""
+}
+
+export function apiListIncidents(params: IncidentListParams = {}) {
+  return request<IncidentListResponse>(`/incidents${incidentQuery(params)}`)
+}
+
+export function apiGetIncident(incidentId: string) {
+  return request<IncidentDetailResponse>(`/incidents/${incidentId}`)
+}
+
+export type IncidentTransitionPayload = {
+  status: string
+  /** Required for FALSE_POSITIVE / DUPLICATE. */
+  reason?: string
+  /** Required for CLOSED. */
+  resolution_summary?: string
+  /** Required for DUPLICATE. */
+  parent_incident_id?: string
+}
+
+export function apiTransitionIncident(incidentId: string, payload: IncidentTransitionPayload) {
+  return request<IncidentRow>(`/incidents/${incidentId}/transition`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function apiCreateIncidentFromAlerts(payload: {
+  alert_ids: string[]
+  title?: string
+  description?: string
+  severity?: string
+}) {
+  return request<IncidentRow>("/incidents/from-alerts", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function apiAddIncidentComment(incidentId: string, body: string, visibility: "internal" | "shared" = "internal") {
+  return request<{ id: string; visibility: string }>(`/incidents/${incidentId}/comments`, {
+    method: "POST",
+    body: JSON.stringify({ body, visibility }),
+  })
+}
+
+export function apiAssignIncident(
+  incidentId: string,
+  payload: { account_type: "admin" | "user"; account_id: string },
+) {
+  return request<IncidentRow>(`/incidents/${incidentId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Tickets -- the remediation workflow (docs/API_CONTRACT.md "Tickets").
+// SOC-side writers create/verify/close; IT developers work the ticket
+// through its own states. The SOC panel reads a ticket by incident_id.
+// ---------------------------------------------------------------------------
+
+export type TicketRow = {
+  id: string
+  organization_id: string
+  ticket_number: string
+  incident_id: string | null
+  asset_id: string | null
+  title: string
+  description: string | null
+  category: string | null
+  severity: AlertSeverity
+  priority: string | null
+  status: string
+  assigned_team_id: string | null
+  assigned_user_id: string | null
+  sla: {
+    state: string
+    ack_due_at: string | null
+    resolve_due_at: string | null
+    acknowledged_at: string | null
+    resolved_at: string | null
+    closed_at: string | null
+  }
+  created_at: string | null
+}
+
+export type TicketListResponse = {
+  tickets: TicketRow[]
+  total: number
+}
+
+export function apiListTickets(params: {
+  incident_id?: string
+  status?: string
+  organization_id?: string
+  limit?: number
+} = {}) {
+  const query = new URLSearchParams()
+  if (params.incident_id) query.set("incident_id", params.incident_id)
+  if (params.status) query.set("status", params.status)
+  if (params.organization_id) query.set("organization_id", params.organization_id)
+  if (params.limit) query.set("limit", String(params.limit))
+  const qs = query.toString()
+  return request<TicketListResponse>(`/tickets${qs ? `?${qs}` : ""}`)
+}
+
+export function apiCreateTicket(payload: {
+  title: string
+  description?: string
+  category?: string
+  severity?: string
+  /** SOC priority override (audited); computed from the documented
+   * formula when omitted. */
+  priority?: string
+  incident_id?: string
+  asset_id?: string
+  /** Required for platform roles / super_admin. */
+  organization_id?: string
+}) {
+  return request<TicketRow>("/tickets", { method: "POST", body: JSON.stringify(payload) })
+}
+
+export function apiVerifyTicket(
+  ticketId: string,
+  payload: { result: "verified" | "failed" | "reopened"; notes?: string; method?: string },
+) {
+  return request<TicketRow>(`/tickets/${ticketId}/verify`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function apiTransitionTicket(ticketId: string, payload: { status: string; note?: string }) {
+  return request<TicketRow>(`/tickets/${ticketId}/transition`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function apiAutoAssignTicket(ticketId: string) {
+  return request<TicketRow>(`/tickets/${ticketId}/auto-assign`, { method: "POST" })
+}

@@ -126,6 +126,13 @@ function Sidebar() {
       path: "/organization/security-activity",
     },
     {
+      // Read-only incident oversight (backend refuses owner writes; the
+      // detail page renders only what allowed_next_states permits).
+      name: "Incidents",
+      icon: ShieldAlert,
+      path: "/organization/incidents",
+    },
+    {
       name: "IT Oversight",
       icon: Wrench,
       path: "/admin/it-oversight",

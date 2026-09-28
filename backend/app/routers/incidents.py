@@ -45,7 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.access import require_module, soc_visible_organization_ids
 from app.audit import audit_from_scope
 from app.database import get_db
-from app.models import TicketStatus as TicketStatusOpen
+from app.models import Ticket, TicketStatus as TicketStatusOpen
 from app.models import (
     ActorType,
     Admin,
@@ -360,7 +360,17 @@ def _append_alert_history(
 # ---------------------------------------------------------------------------
 
 
-def _row(incident: Incident, *, alert_count: int | None = None) -> dict:
+def _ticket_stub(ticket: Ticket) -> dict:
+    """The list view's open-ticket summary (id/number/status/priority)."""
+    return {
+        "id": str(ticket.id),
+        "ticket_number": ticket.ticket_number,
+        "status": ticket.status.value if hasattr(ticket.status, "value") else ticket.status,
+        "priority": ticket.priority,
+    }
+
+
+def _row(incident: Incident, *, alert_count: int | None = None, open_ticket: Ticket | None = None) -> dict:
     row = {
         "id": str(incident.id),
         "organization_id": str(incident.organization_id),
@@ -385,6 +395,8 @@ def _row(incident: Incident, *, alert_count: int | None = None) -> dict:
     }
     if alert_count is not None:
         row["alert_count"] = alert_count
+    if open_ticket is not None:
+        row["open_ticket"] = _ticket_stub(open_ticket)
     return row
 
 
@@ -904,8 +916,36 @@ async def list_incidents(
         ).all()
         counts = {incident_id: count for incident_id, count in count_rows}
 
+    # Batch the per-incident OPEN remediation ticket (the "linked ticket
+    # status" column): one query for the whole page, not one per row.
+    # An incident has at most one OPEN ticket per asset (the auto-creation
+    # duplicate guard groups by (incident, asset)) and the SOC creates at
+    # most one open one per incident in practice; if several exist the
+    # most recent wins.
+    open_tickets: dict[uuid.UUID, Ticket] = {}
+    if rows:
+        ticket_rows = (
+            await db.execute(
+                select(Ticket)
+                .where(
+                    Ticket.incident_id.in_([i.id for i in rows]),
+                    Ticket.status.notin_([TicketStatusOpen.resolved, TicketStatusOpen.closed]),
+                )
+                .order_by(Ticket.created_at.desc())
+            )
+        ).scalars().all()
+        for ticket in ticket_rows:
+            open_tickets.setdefault(ticket.incident_id, ticket)
+
     return {
-        "incidents": [_row(i, alert_count=counts.get(i.id, 0)) for i in rows],
+        "incidents": [
+            _row(
+                i,
+                alert_count=counts.get(i.id, 0),
+                open_ticket=open_tickets.get(i.id),
+            )
+            for i in rows
+        ],
         "next_cursor": next_cursor,
     }
 
@@ -980,14 +1020,38 @@ async def get_incident(
     # The IT developer's window: internal (SOC-only) timeline entries are
     # filtered out server-side -- they see the shared story only. The
     # filter happens HERE, not in the client, so the data never leaves
-    # the API for an unauthorized caller.
+    # the API for an unauthorized caller. The same filter applies to a
+    # MANAGED organization's owner/security_manager: their oversight is
+    # of the shared story, the platform SOC's internal notes stay
+    # SOC-only. An in-house org's owner/manager keep the full timeline
+    # (their own SOC team wrote it).
     mode_for_filter, _ = await _incident_visibility(db, scope)
-    if mode_for_filter == "it_shared":
+    is_owner = scope.account_type == "admin" and scope.role == AdminLevel.organization_admin.value
+    is_security_manager = scope.role == UserRole.security_manager.value
+    managed_oversight = False
+    if (is_owner or is_security_manager) and mode_for_filter == "orgs":
+        org_row = await db.get(Organization, incident.organization_id)
+        managed_oversight = org_row is not None and org_row.soc_mode == SocMode.managed
+    if mode_for_filter == "it_shared" or managed_oversight:
         timeline = [
             t
             for t in timeline
             if t.entry_type != "comment" or (t.entry_metadata or {}).get("visibility") == "shared"
         ]
+
+    # Allowed next states, filtered to what THIS caller may actually do:
+    # the security_manager's one write is requesting ESCALATED (allowed
+    # targets reduce to that, in both soc modes -- the transition
+    # endpoint permits exactly that), and read-only callers (owner, IT's
+    # shared window) get an empty list so the UI renders no action
+    # buttons instead of offering transitions the backend will 403.
+    allowed_next: list[str] = sorted(
+        s.value for s in INCIDENT_TRANSITIONS.get(incident.status, set())
+    )
+    if is_owner or mode_for_filter == "it_shared":
+        allowed_next = []
+    elif is_security_manager:
+        allowed_next = [s for s in allowed_next if s == IncidentStatus.escalated.value]
 
     parent = None
     if incident.duplicate_of_id:
@@ -997,6 +1061,7 @@ async def get_incident(
 
     return {
         "incident": _row(incident),
+        "allowed_next_states": allowed_next,
         "alerts": [
             {
                 "id": str(a.id),

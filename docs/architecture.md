@@ -68,9 +68,10 @@ Current routes / screens (see `App.tsx` for the authoritative list):
 | `/organization/access` | organization_admin | `OwnerAccess.tsx` — role x module access matrix, per-member override drawer |
 | `/organization/settings` | organization_admin | `OwnerSettings.tsx` — read-only organization settings |
 | `/admin/soc-oversight`, `/admin/it-oversight` | super_admin, organization_admin | aggregate rollups (unchanged) |
-| `/soc`, `/soc/alerts`, `/soc/incidents(/:id)`, `/soc/events`, `/soc/assets`, `/soc/reports` | soc_analyst | `/soc/assets` is the real, read-only asset inventory; every other route is a mock-data dashboard; every route but `/soc` itself is `ModuleGuard`-wrapped (`soc`/`incidents`/`assets`/`reports`) |
+| `/soc`, `/soc/alerts`, `/soc/incidents(/:id)`, `/soc/events`, `/soc/assets`, `/soc/reports` | soc_analyst | `/soc/assets` is the real, read-only asset inventory; alerts and **incidents are real end to end (P10/P14)**; events/reports remain mock-data dashboards; every route but `/soc` itself is `ModuleGuard`-wrapped (`soc`/`incidents`/`assets`/`reports`) |
 | `/it`, `/it/tickets(/:id)`, `/it/assets`, `/it/runbooks` | it_developer | `/it/assets` is the real asset inventory (write; the backend scopes the IT developer's writes to assets they own or that belong to their team); every other route is a mock-data dashboard; every route but `/it` itself is `ModuleGuard`-wrapped (`it_tickets`/`assets`) |
-| `/manager/*` | security_manager | `/manager/assets` is the real asset inventory (write); every other route is a mock-data dashboard; every route but `/manager` itself is `ModuleGuard`-wrapped (`incidents`/`approvals`/`reports`/`assets`/`audit_logs`) |
+| `/manager/*` | security_manager | `/manager/assets` is the real asset inventory (write); `/manager/incidents(/:id)` is the real read-only incident oversight (P14); every other route is a mock-data dashboard; every route but `/manager` itself is `ModuleGuard`-wrapped (`incidents`/`approvals`/`reports`/`assets`/`audit_logs`) |
+| `/organization/incidents(/:id)` | organization_admin | real read-only incident oversight (P14) — same shared components as the manager view; for managed orgs the timeline arrives shared-only from the API |
 | `/auditor/*` | auditor | `/auditor/assets` is the real, read-only asset inventory; every other route is a mock-data dashboard; every route but `/auditor` itself is `ModuleGuard`-wrapped (`audit_logs`/`incidents`/`assets`/`reports`) |
 | `/soc-dashboard`, `/it-dashboard` | -- | legacy paths, redirect to `/soc`/`/it` |
 
@@ -317,8 +318,15 @@ lib/data.ts      getSocKpis(state, scope), getTriageQueue(...), etc. --
   auditor dashboards themselves (KPIs, queues, tables) -- with one
   exception: **assets are real end to end** (see the section above);
   every role's Assets page talks to the actual `/assets` API. The
-  remaining mock-backed content is alerts/incidents/events/tickets
-  queues and KPIs. See the pipeline-tables bullet below.
+  remaining mock-backed content is events/tickets queues and KPIs.
+  **Incidents are real end to end (P14)**: `/soc/incidents` works the
+  lifecycle, `/admin/soc-queue`'s Incidents tab is the platform SOC's
+  multi-org queue, and the manager/owner views are read-only oversight
+  (buttons come from the API's `allowed_next_states`; managed-org
+  oversight sees shared timeline entries only). See
+  docs/DECISIONS.md "P14" entries and
+  docs/reports/incident-handling-checklist.md. See the
+  pipeline-tables bullet below.
 - The register page was removed entirely along with self-signup
   (invite-only, docs/DECISIONS.md) -- accounts exist only through
   invitation acceptance or the create_super_admin bootstrap.

@@ -761,8 +761,8 @@ is 404 `incident_not_found`.
 
 | Method & path | Notes |
 |---|---|
-| `GET /` | Filters: `status`, `severity`, `assignee` ("me" or an account id), `asset_id`, `time_from`/`time_to` (on `opened_at`), `organization_id` (platform roles; invisible id 404). Keyset cursor on `(opened_at DESC, id DESC)`; rows carry `alert_count`. |
-| `GET /{id}` | The incident plus `alerts`, `events`, `assets`, `duplicate_of` and the full `timeline`. |
+| `GET /` | Filters: `status`, `severity`, `assignee` ("me" or an account id), `asset_id`, `time_from`/`time_to` (on `opened_at`), `organization_id` (platform roles; invisible id 404). Keyset cursor on `(opened_at DESC, id DESC)`; rows carry `alert_count` and `open_ticket` (the incident's OPEN remediation ticket as `{id, ticket_number, status, priority}`, absent when none is open; resolved/closed tickets do not count). |
+| `GET /{id}` | The incident plus `alerts`, `events`, `assets`, `duplicate_of`, the full `timeline`, and `allowed_next_states` -- the transition map's row for the incident's status, filtered to what THIS caller may do: a writer sees the full list, the security_manager sees `["ESCALATED"]` (their one write, both soc modes), and read-only callers (owner oversight, the IT developer's shared window) see `[]` so a UI can render its action buttons straight from this field. |
 | `PATCH /{id}` | `title`, `description`, `severity`, `assigned_account_type`+`assigned_account_id` (assignee validated by soc mode: a managed org's incidents assign to assigned platform SOC analysts, an in-house org's to its own soc_analyst users; unknown id 404 `assignee_not_found`, wrong role 422 `assignee_not_in_scope`). No-op changes write nothing. |
 | `POST /{id}/transition` | The one state-change door (table above). |
 | `POST /{id}/links` | `{action: add\|remove, alert_id | event_id | asset_id}` -- exactly one target (400 `link_target_required`); every row must belong to the incident's organization (404). Adding an asset with no primary asset set makes it primary. |
@@ -779,7 +779,12 @@ transaction. `entry_metadata.visibility` on a comment is `internal`
 read-only window: their own organization's incidents via list/detail,
 with internal timeline entries filtered out server-side -- they see
 shared comments only, and every write endpoint is refused (403
-`module_not_available`/`incident_write_not_allowed`).
+`module_not_available`/`incident_write_not_allowed`). A **managed**
+organization's owner and security_manager read the same filtered
+(shared-only) timeline: their oversight covers the story shared with
+the organization, while the platform SOC's internal notes stay
+SOC-only. An in-house organization's owner/manager keep the full
+timeline -- their own SOC team wrote it.
 
 ### Incidents error code reference
 
@@ -878,7 +883,7 @@ invalid move is 409 `invalid_ticket_transition` with
 | `POST /{id}/close-request` | SOC-side writer only | CRITICAL tickets only (422 `close_approval_not_required` otherwise): creates the PENDING `ticket_close` approval row the close gate needs; one pending request per ticket (409 `close_request_already_pending`). Decided by the org's security_manager/owner via `POST /api/v1/approvals/{id}/decision` (the full approvals UI is P19). |
 | `POST /{id}/assign` | SOC-side writer (IT cannot reassign) | `{team_id?, user_id?, reason?}`; targets must be the ticket's organization's team / an it_developer user of that organization (422 `assignee_not_in_scope` otherwise) -- IT developers can only ever be assigned within their own organization. Writes one `ticket_assignments` row per hand-off; moves an OPEN ticket to ASSIGNED. |
 | `POST /{id}/auto-assign` | SOC-side writer | Runs the assignment rules (below), then picks the least-loaded member of the matched team. |
-| `POST /{id}/comments` | IT (shared only) / SOC (internal or shared) | `{body, visibility: internal|shared}` (default internal). IT callers writing internal get 403. Internal comments are absent from IT's list/detail responses. |
+| `POST /{id}/comments` | IT (shared only) / SOC (internal or shared) | `{body, is_internal: bool}` (default true = internal SOC-only). IT callers writing internal get 403 `internal_comment_not_allowed`. Internal comments are absent from IT's detail response entirely, and surface on the linked incident's timeline with the same visibility. |
 | `GET/POST/PATCH /{id}/tasks[...]` | IT + SOC writers | CRUD for remediation tasks under a ticket: `title` (required), `description`, `done`, `assignee_user_id` (same organization). |
 | `POST /{id}/escalate` | SOC-side writer | `{reason (required), escalated_to_user_id?}`; writes an `escalations` row (the same table the SLA worker writes on breach). |
 
