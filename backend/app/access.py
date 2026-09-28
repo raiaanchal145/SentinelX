@@ -92,6 +92,11 @@ ROLE_DEFAULT_MODULES: dict[UserRole, dict[str, str]] = {
         ModuleKey.assets.value: ACCESS_READ,
         ModuleKey.soc.value: ACCESS_WRITE,
         ModuleKey.incidents.value: ACCESS_WRITE,
+        # P13: the in-house SOC drives the remediation workflow (create,
+        # assign, verify, close tickets) -- gated to in_house below, the
+        # same way soc/incidents are: in managed mode platform SOC staff
+        # work tickets, the org's own analyst keeps none of it.
+        ModuleKey.it_tickets.value: ACCESS_WRITE,
         ModuleKey.ai_agents.value: ACCESS_WRITE,
         ModuleKey.reports.value: ACCESS_WRITE,
     },
@@ -116,7 +121,12 @@ ROLE_DEFAULT_MODULES: dict[UserRole, dict[str, str]] = {
 # user_access_overrides, and independent of the owner's oversight rule
 # above (which is its own, separate branch in get_effective_access()).
 SOC_MODE_GATED_MODULES: dict[UserRole, set[str]] = {
-    UserRole.soc_analyst: {ModuleKey.soc.value, ModuleKey.incidents.value},
+    UserRole.soc_analyst: {
+        ModuleKey.soc.value,
+        ModuleKey.incidents.value,
+        # P13: tickets follow the soc mode -- see ROLE_DEFAULT_MODULES.
+        ModuleKey.it_tickets.value,
+    },
 }
 
 

@@ -639,6 +639,11 @@ class OrganizationSettings(Base):
         Enum(EventSeverity, name="event_severity")
     )
     ai_enabled: Mapped[bool] = mapped_column(default=True)
+    # Auto-ticket creation (P13): an incident auto-creates a remediation
+    # ticket when severity >= auto_ticket_threshold AND confidence >=
+    # auto_ticket_min_confidence. Either column NULL = "that half of the
+    # gate is off" -- both NULL disables the feature for the organization.
+    auto_ticket_min_confidence: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
@@ -1321,6 +1326,13 @@ class Ticket(Base):
     incident_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("incidents.id", ondelete="SET NULL")
     )
+    # The asset this ticket remediates -- incident.primary_asset_id on the
+    # auto-created path, the caller's asset_id on the manual one. Kept as
+    # its own column so auto-creation can dedup on (incident, asset) and
+    # the priority formula can read the asset's criticality directly.
+    asset_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("assets.id", ondelete="SET NULL"), index=True
+    )
     title: Mapped[str] = mapped_column(String(250), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     category: Mapped[str | None] = mapped_column(String(80))
@@ -1346,6 +1358,9 @@ class Ticket(Base):
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Worker-stamped SLA states: at_risk flips at >=80% of the window
+    # elapsed, breached when the deadline passes (app/worker/ticket_jobs.py).
+    sla_at_risk: Mapped[bool] = mapped_column(default=False)
     sla_breached: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
