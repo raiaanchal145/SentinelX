@@ -1,18 +1,16 @@
-import EmptyState from "../../../components/EmptyState"
-import DemoDataChip from "../../../components/shared/DemoDataChip"
+import IncidentOversightView from "../../soc/components/IncidentOversightView"
 
+/** The security manager's incident oversight (module `incidents` read,
+ * both soc modes). Read-only: the backend refuses every write except the
+ * manager's own ESCALATED request, which the incident detail offers
+ * straight from allowed_next_states. A managed org's timeline arrives
+ * shared-only (server-side filter). */
 function ManagerIncidents() {
   return (
-    <div className="space-y-4">
-      <div className="flex justify-end">
-        <DemoDataChip />
-      </div>
-
-      <EmptyState
-        title="Incidents"
-        description="A read-only view of open incidents will appear here."
-      />
-    </div>
+    <IncidentOversightView
+      basePath="/manager/incidents"
+      intro="Read-only oversight of your organization's incident lifecycle."
+    />
   )
 }
 

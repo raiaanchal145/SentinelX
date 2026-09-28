@@ -24,6 +24,7 @@ import OwnerAccess from "./features/owner/pages/OwnerAccess"
 import OwnerAssets from "./features/owner/pages/OwnerAssets"
 import OwnerEventSources from "./features/owner/pages/OwnerEventSources"
 import OwnerSettings from "./features/owner/pages/OwnerSettings"
+import OwnerIncidents from "./features/owner/pages/OwnerIncidents"
 
 import UserLayout from "./layouts/UserLayout"
 import ModuleGuard from "./components/ModuleGuard"
@@ -296,6 +297,17 @@ function App() {
         }
       />
 
+      {/* READ-ONLY INCIDENT OVERSIGHT (owner): same shared component set,
+          no write controls -- the backend refuses owner writes. */}
+      <Route
+        path="/organization/incidents"
+        element={
+          <ProtectedRoute allowedRoles={["organization_admin"]}>
+            <OwnerIncidents />
+          </ProtectedRoute>
+        }
+      />
+
       {/* SUPER ADMIN DASHBOARD (admin side -- unchanged) */}
 
       <Route
@@ -365,6 +377,10 @@ function App() {
         <Route path="/soc/alerts" element={<ModuleGuard module="soc"><SocAlerts /></ModuleGuard>} />
         <Route path="/soc/incidents" element={<ModuleGuard module="incidents"><SocIncidents /></ModuleGuard>} />
         <Route path="/soc/incidents/:id" element={<ModuleGuard module="incidents"><IncidentDetail /></ModuleGuard>} />
+        {/* Manager/owner read-only detail reuses the same page: the API's
+            allowed_next_states renders no write buttons for them. */}
+        <Route path="/manager/incidents/:id" element={<ModuleGuard module="incidents"><IncidentDetail /></ModuleGuard>} />
+        <Route path="/organization/incidents/:id" element={<IncidentDetail />} />
         <Route path="/soc/events" element={<ModuleGuard module="soc"><SocEvents /></ModuleGuard>} />
         <Route path="/soc/assets" element={<ModuleGuard module="assets"><SocAssets /></ModuleGuard>} />
         <Route path="/soc/reports" element={<ModuleGuard module="reports"><SocReports /></ModuleGuard>} />
