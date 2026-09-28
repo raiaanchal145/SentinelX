@@ -803,6 +803,155 @@ shared comments only, and every write endpoint is refused (403
 | `invalid_status` / `invalid_severity` | 400 | unknown status/severity values |
 | `invalid_time_range` / `invalid_cursor` / `invalid_assignee` | 400 | malformed query values |
 
+## Tickets: `/api/v1/tickets` (the remediation workflow)
+
+P13: the workflow between the SOC and IT. Router
+`app/routers/tickets.py`; domain logic (priority formula, SLA
+seeding/stamping/evaluation, assignment rules, auto-creation
+eligibility, the transition map) lives in `app/tickets.py` so the HTTP
+and worker layers test without a database. Tables: `tickets`,
+`ticket_assignments`, `ticket_comments`, `ticket_status_history`,
+`tasks`, `assignment_rules`, `sla_policies`, `escalations`,
+`verifications` (migration `a8c1e5f7b9d0`). The `TicketStatus` enum
+stores UPPERCASE values (`OPEN`..`CLOSED`), like `IncidentStatus`.
+
+Ownership by SOC mode (the incidents matrix, adapted): a ticket
+ALWAYS belongs to the organization whose IT will fix it. In **managed**
+mode the platform SOC staff assigned to the org create, assign, verify
+and close its tickets, and that org's own **it_developer** users still
+see and work them (shared comments only); in **in_house** mode the
+org's own soc_analyst works the SOC side. IT developers never see the
+SOC's internal comments -- they are filtered out server-side, never
+merely hidden client-side.
+
+### Creation and priority
+
+| Method & path | Who | Notes |
+|---|---|---|
+| `POST /` | SOC-side writer | `title` (required), `description`, `category`, `severity` (default medium), `asset_id`, `incident_id`, `priority` (SOC override, audited as `ticket.priority_override`), `organization_id` (required for platform roles/super_admin -- 400 `organization_id_required` without it, invisible id 404). Status starts `OPEN`; SLA deadlines stamped from the org's policy for the computed priority. |
+| `GET /` | any ticket-visible caller | Filters: `status`, `priority`, `assignee` (`me` or an id), `team_id`, `incident_id`, `asset_id`, `sla_state` (`on_track|at_risk|breached|none`), `organization_id` (platform roles; invisible id 404). |
+| `GET /{id}` | any ticket-visible caller | Ticket + `assignments`, `comments` (internal filtered for IT), `tasks`, `evidence`, `status_history`, `verifications`, `close_approvals`. |
+| `PATCH /{id}` | SOC-side writer | `title`, `description`, `category`, `severity`, `priority` (override; IT callers get 403 `priority_override_not_allowed`). |
+
+The documented priority formula (unit-tested, boundaries pinned in
+tests/test_tickets.py; change `app/tickets.py` and this doc together):
+
+```
+score = severity_points + asset_criticality_points + confidence_points
+severity:      critical 40 | high 30 | medium 20 | low 10 | info 5
+asset critic.: critical 30 | high 22 | medium 12 | low 5 | (no asset) 0
+confidence:    >= 0.9 +10 | >= 0.7 +5 | else 0 (None = 0)
+P1 >= 80 | P2 >= 60 | P3 >= 35 | else P4
+```
+
+### The transition table (one map, tested; `TICKET_TRANSITIONS` in app/tickets.py)
+
+```
+OPEN          -> TRIAGED | ASSIGNED | ACKNOWLEDGED | INVESTIGATING
+TRIAGED       -> ASSIGNED | ACKNOWLEDGED | INVESTIGATING
+ASSIGNED      -> TRIAGED | ACKNOWLEDGED | INVESTIGATING
+ACKNOWLEDGED  -> ASSIGNED | INVESTIGATING
+INVESTIGATING -> TRIAGED | REMEDIATION | VERIFICATION
+REMEDIATION   -> INVESTIGATING | VERIFICATION
+VERIFICATION  -> RESOLVED | INVESTIGATING | OPEN        (SOC-only)
+RESOLVED      -> CLOSED | OPEN                          (SOC-only)
+CLOSED        -> OPEN                                   (SOC-only)
+```
+
+Role rules (enforced in the router, not the map): IT developers may
+move working states only -- anything out of VERIFICATION (resolve,
+close, reopen) is the SOC's; an IT attempt is **403
+`it_cannot_close`** (a permission failure, not a 409 workflow mistake).
+The SOC verifies via `POST /{id}/verify` and closes via `/transition`.
+A **CRITICAL (P1)** ticket additionally requires an APPROVED
+`ticket_close` approval from the organization's security_manager or
+owner before CLOSED (403 `close_approval_required` otherwise). An
+invalid move is 409 `invalid_ticket_transition` with
+`allowed_next_states` in the detail.
+
+### Actions
+
+| Method & path | Who | Notes |
+|---|---|---|
+| `POST /{id}/transition` | IT (working states) / SOC (all) | The one state-change door (table above); body `{status, note?}`. Reopening from RESOLVED/CLOSED clears the closure stamps; VERIFICATION stamps nothing, RESOLVED stamps `resolved_at`, CLOSED `closed_at`. |
+| `POST /{id}/verify` | SOC-side writer only (IT gets 403) | Body `{result: verified|failed|reopened, notes?, method?}`. verified -> RESOLVED, failed -> INVESTIGATING, reopened -> OPEN; writes a `verifications` row. Only a ticket in VERIFICATION can be verified (409 otherwise). |
+| `POST /{id}/close-request` | SOC-side writer only | CRITICAL tickets only (422 `close_approval_not_required` otherwise): creates the PENDING `ticket_close` approval row the close gate needs; one pending request per ticket (409 `close_request_already_pending`). Decided by the org's security_manager/owner via `POST /api/v1/approvals/{id}/decision` (the full approvals UI is P19). |
+| `POST /{id}/assign` | SOC-side writer (IT cannot reassign) | `{team_id?, user_id?, reason?}`; targets must be the ticket's organization's team / an it_developer user of that organization (422 `assignee_not_in_scope` otherwise) -- IT developers can only ever be assigned within their own organization. Writes one `ticket_assignments` row per hand-off; moves an OPEN ticket to ASSIGNED. |
+| `POST /{id}/auto-assign` | SOC-side writer | Runs the assignment rules (below), then picks the least-loaded member of the matched team. |
+| `POST /{id}/comments` | IT (shared only) / SOC (internal or shared) | `{body, visibility: internal|shared}` (default internal). IT callers writing internal get 403. Internal comments are absent from IT's list/detail responses. |
+| `GET/POST/PATCH /{id}/tasks[...]` | IT + SOC writers | CRUD for remediation tasks under a ticket: `title` (required), `description`, `done`, `assignee_user_id` (same organization). |
+| `POST /{id}/escalate` | SOC-side writer | `{reason (required), escalated_to_user_id?}`; writes an `escalations` row (the same table the SLA worker writes on breach). |
+
+### Assignment rules and SLA
+
+`assignment_rules` (CRUD via `/api/v1/assignment-rules`, owner or
+security_manager only) are evaluated in `priority_order` (lower first,
+then creation order) on `/auto-assign`: the first rule whose
+`match_conditions` (`[{field, op, value}]`; fields `severity`,
+`priority`, `category`, `asset_criticality`; ops `eq|in|ne`) match the
+ticket wins, its `assign_to_team_id` picks the team, and the person is
+the team's active it_developer with the FEWEST OPEN tickets (ties
+deterministic by name).
+
+`sla_policies` are per (organization, priority) with default ack/resolve
+minutes P1 (15/240), P2 (30/480), P3 (60/1440), P4 (240/4320) --
+seeded when an organization is created and backfilled for existing
+organizations by migration `a8c1e5f7b9d0`. The API stamps
+`ack_due_at`/`resolve_due_at` at creation from the policy for the
+ticket's priority (no policy row -> the ticket runs without an SLA
+rather than inheriting a wrong one). The worker's `ticket_sla_check`
+cron (every minute) marks `sla_at_risk` at >=80% of the running window
+elapsed and `sla_breached` when the deadline passes, and writes ONE
+`escalations` row per fresh breach (at_risk is a flag, breach is an
+event -- docs/DECISIONS.md). The resolve clock KEEPS RUNNING during
+VERIFICATION: the SOC is accountable for verification time too (docs/
+DECISIONS.md "No SLA pause in VERIFICATION").
+
+### Auto-creation
+
+An incident auto-creates one remediation ticket when ALL gates pass
+(`app/tickets.py::auto_ticket_eligible`, called from the incidents
+router when an incident is created/linked to its primary asset):
+
+- `organization_settings.auto_ticket_threshold` (severity) and
+  `auto_ticket_min_confidence` (confidence) are BOTH configured --
+  either being NULL means the feature is off for that organization;
+- `incident.severity >= auto_ticket_threshold` (ranked info=0 ..
+  critical=4) and `incident.confidence >= auto_ticket_min_confidence`;
+- no OPEN ticket already exists for the same (incident, asset) -- the
+  duplicate guard groups NULL assets together.
+
+The auto ticket inherits the incident's severity, asset and confidence,
+gets the computed priority, stamps SLA deadlines, and writes a
+`ticket_created` incident-timeline entry + a `ticket.auto_create`
+audit entry (actor system).
+
+### Tickets error code reference
+
+| Code | Status | Where |
+|---|---|---|
+| `soc_not_visible` | 403 | list/create for callers with no ticket visibility at all |
+| `ticket_not_found` | 404 | invisible or cross-organization ids (existence never leaks) |
+| `ticket_write_not_allowed` | 403 | IT developers attempting SOC actions (assign, verify, escalate, close-request); managed-org accounts without SOC write |
+| `it_cannot_close` | 403 | IT attempting a transition out of VERIFICATION, or verify -- the role wall, deliberately 403 not 409 |
+| `priority_override_not_allowed` | 403 | IT patching priority |
+| `invalid_ticket_transition` | 409 | moves outside the table (detail carries `allowed_next_states`); verify on a non-VERIFICATION ticket |
+| `close_approval_required` | 403 | closing a P1 ticket without an approved ticket_close approval |
+| `close_approval_not_required` | 422 | close-request on a non-P1 ticket |
+| `close_request_already_pending` | 409 | second close-request while one is pending |
+| `assign_target_required` | 400 | assign with neither team_id nor user_id |
+| `team_not_found` / `asset_not_found` / `incident_not_found` | 404 | assignment/creation naming a foreign or unknown row |
+| `assignee_not_in_scope` | 422 | assign outside the ticket's organization / to a non-it_developer |
+| `organization_id_required` / `organization_not_found` | 400 / 404 | platform-role create without organization_id / invisible id |
+| `invalid_status` / `invalid_priority` / `invalid_severity` | 400 | unknown values |
+| `approvals_decide_not_allowed` | 403 | deciding an approval without owner/security_manager role |
+| `approval_not_found` / `approval_already_decided` | 404 / 409 | decision on an unknown / already-decided approval |Every mutating action writes ONE `ticket_status_history` row (status
+moves), ONE `audit_logs` row (`ticket.create|update|transition|verify|
+assign|auto_assign|escalate|close_request|priority_override|comment|
+evidence_add|task_create|task_update|task_delete`), and, when the
+ticket is linked to an incident, one `incident_timeline` entry -- all
+in the same transaction.
+
 ## Background worker
 
 `app/worker/` (Arq -- docs/DECISIONS.md) consumes the Redis queue
@@ -814,11 +963,13 @@ Postgres alone; worker startup fails fast with a clear error when Redis
 is unreachable. The dev launcher starts Redis and a worker terminal
 with the rest of the stack and checks both in `dev:doctor`.
 
-The worker's jobs: `heartbeat` and `process_events` (event
+The worker's jobs: `heartbeat`, `process_events` (event
 normalization, then inline detection evaluation AND the P10 alerting
 halves -- see "Event ingestion and read API", "Detection rules" and
-"Alerts" above). Worker startup also seeds the 8 built-in detection
-rules and the built-in correlation rule idempotently.
+"Alerts" above), and `ticket_sla_check` (every minute: SLA at-risk and
+breach marking + breach escalations -- see "Tickets" above). Worker
+startup also seeds the 8 built-in detection rules and the built-in
+correlation rule idempotently.
 
 ## Error code reference (structured-detail endpoints only)
 

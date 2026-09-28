@@ -616,3 +616,81 @@ in this report's history) is the check that actually catches it, and
 it now reports zero missing columns. Existing rows backfill with the
 migration timestamp: the honest value for a column that never
 existed.
+
+## P13: the priority formula's weights are a table, not an algorithm
+
+`app/tickets.py` scores severity (critical 40 / high 30 / medium 20 /
+low 10 / info 5), asset criticality (critical 30 / high 22 / medium 12
+/ low 5 / no asset 0) and incident confidence (>=0.9 +10 / >=0.7 +5 /
+else 0) and maps score -> P1..P4 with fixed thresholds (>=80, >=60,
+>=35). The constants are deliberately boring -- a weight table the docs
+reproduce verbatim -- so a SOC can be told exactly why a ticket is P2,
+and `test_tickets.py` pins every boundary (exact-threshold scores land
+in the higher bucket). Change the weights and the API_CONTRACT section
+in the same commit or the docs lie. The SOC can override the computed
+priority at create/PATCH time; the override is what's audited
+(`ticket.priority_override`), the computation is never re-run over it.
+
+## P13: IT's "cannot close" is a 403 before the map, not a 409
+
+The transition map itself is role-agnostic (one table, all roles); the
+role rules live in the router. An IT developer attempting a transition
+out of VERIFICATION (resolve/close/reopen) is rejected with 403
+`it_cannot_close` BEFORE the transition map is consulted -- the role
+wall is the point being enforced, and a 409 "invalid transition" would
+muddle a permission failure with a workflow mistake. VERIFICATION is
+IT's final act ("work done, please verify"); everything after it
+belongs to the SOC, in both SOC modes.
+
+## P13: CRITICAL close needs an approval; close-request creates it
+
+Closing a P1 ticket requires an APPROVED `approvals` row
+(`action_type="ticket_close"`, high risk) decided by the
+organization's security_manager or owner -- not the SOC, not IT. The
+SOC asks via `POST /tickets/{id}/close-request` (P1-only, one pending
+request per ticket), the deciders answer via
+`POST /approvals/{id}/decision`, and the close gate reads only APPROVED
+rows for that ticket. Chosen over auto-creating the approval on the
+first blocked close attempt (which would blur "requesting" with
+"failing") and over a generic POST /approvals (which would let callers
+mint arbitrary approval types before P19 defines their semantics).
+Lower-priority tickets close freely -- a P4 typo-fix needing sign-off
+is noise, and 422ing the request makes the rule discoverable.
+
+## P13: SLA at_risk is a flag, breach is an event (and no pause in VERIFICATION)
+
+The worker marks `sla_at_risk` at >=80% of the running window elapsed
+(a state the UI shows, idempotent to re-mark) but writes an
+`escalations` row exactly once per ticket on breach (guarded by the
+flag transition), because a breach demands a human reaction while
+at-risk does not. The resolve clock keeps RUNNING while a ticket sits
+in VERIFICATION: pausing there would reward slow verification, the SOC
+is accountable for its own half of the workflow, and the no-pause rule
+needs no extra state (a pause stamp + deadline shift on resume would).
+Default policies (P1 15/240, P2 30/480, P3 60/1440, P4 240/4320
+minutes) are seeded at organization creation and backfilled by
+migration a8c1e5f7b9d0; a ticket with no matching policy runs WITHOUT
+an SLA rather than inheriting a wrong one.
+
+## P13: auto-creation thresholds live in organization_settings, feature off when NULL
+
+An incident auto-creates a remediation ticket only when the
+organization configured BOTH `auto_ticket_threshold` (minimum
+severity) and `auto_ticket_min_confidence` -- either being NULL means
+the feature is off, so no organization gets surprise tickets from a
+default-on. Severity ranks explicitly (info=0 .. critical=4) because
+the enum's declaration order is not severity order. The duplicate
+guard keys on (incident, asset) with the ticket still OPEN -- a closed
+ticket for the same incident can legitimately be superseded by a new
+one if the incident re-opens work, and NULL assets group with NULL
+assets so asset-less incidents still dedup.
+
+## P13: least-loaded assignment counts OPEN tickets, ties broken by name
+
+Assignment rules pick the TEAM (first matching rule in
+priority_order); the person is the team's active it_developer with the
+fewest tickets not in RESOLVED/CLOSED, ties broken deterministically
+by name (same person every time given the same load -- no
+nondeterminism for tests or UIs to trip over). Only it_developer users
+of the ticket's organization are eligible at all: the organization's
+IT fixes its own tickets, in both SOC modes, structurally.
