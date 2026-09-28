@@ -30,8 +30,8 @@ from alembic.config import Config
 
 from app.config import settings
 
-MIGRATION_HEAD = "d3e4f5a6b7c8"  # alerts.created_at drift repair (bumped each new migration)
-PREVIOUS_REVISION = "c2d3e4f5a6b7"  # -1 from HEAD lands on the incidents lifecycle migration
+MIGRATION_HEAD = "a8c1e5f7b9d0"  # tickets remediation workflow (bumped each new migration)
+PREVIOUS_REVISION = "d3e4f5a6b7c8"  # -1 from HEAD lands on the alerts.created_at repair
 SCRATCH_DB = "sentinelx_migration_scratch"
 
 
