@@ -761,8 +761,8 @@ is 404 `incident_not_found`.
 
 | Method & path | Notes |
 |---|---|
-| `GET /` | Filters: `status`, `severity`, `assignee` ("me" or an account id), `asset_id`, `time_from`/`time_to` (on `opened_at`), `organization_id` (platform roles; invisible id 404). Keyset cursor on `(opened_at DESC, id DESC)`; rows carry `alert_count`. |
-| `GET /{id}` | The incident plus `alerts`, `events`, `assets`, `duplicate_of` and the full `timeline`. |
+| `GET /` | Filters: `status`, `severity`, `assignee` ("me" or an account id), `asset_id`, `time_from`/`time_to` (on `opened_at`), `organization_id` (platform roles; invisible id 404). Keyset cursor on `(opened_at DESC, id DESC)`; rows carry `alert_count` and `open_ticket` (the incident's OPEN remediation ticket as `{id, ticket_number, status, priority}`, absent when none is open; resolved/closed tickets do not count). |
+| `GET /{id}` | The incident plus `alerts`, `events`, `assets`, `duplicate_of`, the full `timeline`, and `allowed_next_states` -- the transition map's row for the incident's status, filtered to what THIS caller may do: a writer sees the full list, the security_manager sees `["ESCALATED"]` (their one write, both soc modes), and read-only callers (owner oversight, the IT developer's shared window) see `[]` so a UI can render its action buttons straight from this field. |
 | `PATCH /{id}` | `title`, `description`, `severity`, `assigned_account_type`+`assigned_account_id` (assignee validated by soc mode: a managed org's incidents assign to assigned platform SOC analysts, an in-house org's to its own soc_analyst users; unknown id 404 `assignee_not_found`, wrong role 422 `assignee_not_in_scope`). No-op changes write nothing. |
 | `POST /{id}/transition` | The one state-change door (table above). |
 | `POST /{id}/links` | `{action: add\|remove, alert_id | event_id | asset_id}` -- exactly one target (400 `link_target_required`); every row must belong to the incident's organization (404). Adding an asset with no primary asset set makes it primary. |
@@ -779,7 +779,12 @@ transaction. `entry_metadata.visibility` on a comment is `internal`
 read-only window: their own organization's incidents via list/detail,
 with internal timeline entries filtered out server-side -- they see
 shared comments only, and every write endpoint is refused (403
-`module_not_available`/`incident_write_not_allowed`).
+`module_not_available`/`incident_write_not_allowed`). A **managed**
+organization's owner and security_manager read the same filtered
+(shared-only) timeline: their oversight covers the story shared with
+the organization, while the platform SOC's internal notes stay
+SOC-only. An in-house organization's owner/manager keep the full
+timeline -- their own SOC team wrote it.
 
 ### Incidents error code reference
 
