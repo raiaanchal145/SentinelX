@@ -1,20 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { useSearchParams } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 
 import AlertFilters from "../components/AlertFilters"
 import { alertRangeHours, INITIAL_ALERT_FILTERS, type AlertFilterState } from "../components/alertFilterShared"
 import AlertTable from "../components/AlertTable"
 import AlertDrawer from "../components/AlertDrawer"
+import CreateIncidentDialog from "../components/CreateIncidentDialog"
 import ConfirmDialog from "../../../components/ui/ConfirmDialog"
 import IconButton from "../../../components/ui/IconButton"
+import Button from "../../../components/ui/Button"
 import { useToast } from "../../../components/ui/Toast"
-import { RefreshCw } from "lucide-react"
+import { RefreshCw, Siren } from "lucide-react"
 import {
   ApiError,
   apiDismissAlert,
   apiListAlerts,
   apiAcknowledgeAlert,
   type AlertRow,
+  type IncidentRow,
 } from "../../../lib/api"
 import { useMe } from "../../../lib/me"
 import { minutesSince } from "../components/alertShared"
@@ -32,6 +35,7 @@ function isoAgo(hours: number): string {
 function SocAlerts() {
   const { me } = useMe()
   const toast = useToast()
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [filters, setFilters] = useState<AlertFilterState>(() => ({
@@ -46,6 +50,9 @@ function SocAlerts() {
   const [selected, setSelected] = useState<AlertRow | null>(null)
   const [ackTarget, setAckTarget] = useState<AlertRow | null>(null)
   const [dismissTarget, setDismissTarget] = useState<AlertRow | null>(null)
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
+  const [createFromSelection, setCreateFromSelection] = useState(false)
+  const [drawerCreateTarget, setDrawerCreateTarget] = useState<AlertRow | null>(null)
 
   // Read-only when the org is managed: the backend returns
   // alert_write_not_allowed for its own accounts, so the UI hides the
@@ -150,6 +157,21 @@ function SocAlerts() {
         onRetry={load}
         onOpen={setSelected}
         onRowKeyDown={handleKeyDown}
+        selectedIds={readOnly ? undefined : checkedIds}
+        onToggleSelected={(alert) =>
+          setCheckedIds((prev) => {
+            const next = new Set(prev)
+            if (next.has(alert.id)) next.delete(alert.id)
+            else next.add(alert.id)
+            return next
+          })
+        }
+        onToggleAll={(rows) =>
+          setCheckedIds((prev) => {
+            const allSelected = rows.every((r) => prev.has(r.id))
+            return allSelected ? new Set() : new Set(rows.map((r) => r.id))
+          })
+        }
         emptyTitle="No alerts"
         emptyDescription={
           hasAnyFilter(filters)
@@ -187,12 +209,46 @@ function SocAlerts() {
         </div>
       )}
 
+      {!readOnly && checkedIds.size > 0 && (
+        <div className="flex items-center justify-between rounded-card border border-brand-500/30 bg-brand-500/5 p-3">
+          <p className="text-xs text-fg-secondary">
+            {checkedIds.size} alert{checkedIds.size === 1 ? "" : "s"} selected
+          </p>
+          <div className="flex gap-2">
+            <Button variant="primary" icon={<Siren size={14} />} onClick={() => setCreateFromSelection(true)}>
+              Create incident ({checkedIds.size})
+            </Button>
+            <Button variant="ghost" onClick={() => setCheckedIds(new Set())}>
+              Clear selection
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <CreateIncidentDialog
+        open={createFromSelection}
+        onClose={() => setCreateFromSelection(false)}
+        alerts={alerts.filter((a) => checkedIds.has(a.id))}
+        onCreated={(incident: IncidentRow) => {
+          setCheckedIds(new Set())
+          navigate(`/soc/incidents/${incident.id}`)
+        }}
+      />
+
+      <CreateIncidentDialog
+        open={drawerCreateTarget !== null}
+        onClose={() => setDrawerCreateTarget(null)}
+        alerts={drawerCreateTarget ? [drawerCreateTarget] : []}
+        onCreated={(incident: IncidentRow) => navigate(`/soc/incidents/${incident.id}`)}
+      />
+
       <AlertDrawer
         alert={selected}
         onClose={() => setSelected(null)}
         canWrite={!readOnly}
         assignees={[]}
         onChanged={load}
+        onCreateIncident={(alert) => setDrawerCreateTarget(alert)}
       />
 
       <ConfirmDialog

@@ -33,13 +33,16 @@ type AlertDrawerProps = {
   assignees: { account_type: "admin" | "user"; account_id: string; label: string }[]
   /** Called after any successful mutation so the page can refetch its list. */
   onChanged: () => void
+  /** When set, the drawer offers "Create incident" from this alert (the
+   * dialog itself lives with the page so it can navigate on success). */
+  onCreateIncident?: (alert: AlertRow) => void
 }
 
 /** Detail drawer for one alert: summary, why it fired (rule + correlation
  * reasoning), supporting events (each opens the shared event drawer in
  * place), and the alert's history -- with inline acknowledge/assign/
  * dismiss (reason required)/reopen for queues the caller may write. */
-function AlertDrawer({ alert, onClose, canWrite, assignees, onChanged }: AlertDrawerProps) {
+function AlertDrawer({ alert, onClose, canWrite, assignees, onChanged, onCreateIncident }: AlertDrawerProps) {
   const [detail, setDetail] = useState<AlertDetail | null>(null)
   const [error, setError] = useState("")
   const [actionError, setActionError] = useState("")
@@ -246,11 +249,21 @@ function AlertDrawer({ alert, onClose, canWrite, assignees, onChanged }: AlertDr
                     </select>
                   </label>
                 )}
-                {!isDismissed && row.status !== "converted" && (
-                  <Button variant="secondary" icon={<XCircle size={14} />} loading={busy} onClick={() => setDismissOpen(true)}>
-                    Dismiss
-                  </Button>
-                )}
+            {canWrite && onCreateIncident && row.status !== "converted" && (
+              <Button
+                variant="secondary"
+                icon={<Siren size={14} />}
+                loading={busy}
+                onClick={() => onCreateIncident(row)}
+              >
+                Create incident
+              </Button>
+            )}
+            {!isDismissed && row.status !== "converted" && (
+              <Button variant="secondary" icon={<XCircle size={14} />} loading={busy} onClick={() => setDismissOpen(true)}>
+                Dismiss
+              </Button>
+            )}
                 {isDismissed && (
                   <Button variant="secondary" icon={<Siren size={14} />} loading={busy} onClick={() => void runAction(() => apiReopenAlert(row.id), "Alert reopened.")}>
                     Reopen

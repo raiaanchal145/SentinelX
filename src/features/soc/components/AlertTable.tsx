@@ -21,6 +21,11 @@ type AlertTableProps = {
   assigneeName?: (alert: AlertRow) => string | null
   /** Row-level hotkeys forwarded from DataTable (j/k/a handled by the page). */
   onRowKeyDown?: (alert: AlertRow, event: React.KeyboardEvent<HTMLTableRowElement>) => void
+  /** Opt-in row selection (checkboxes + select-all) for bulk actions like
+   * "create incident". Unset = no selection column, existing pages unchanged. */
+  selectedIds?: Set<string>
+  onToggleSelected?: (alert: AlertRow) => void
+  onToggleAll?: (alerts: AlertRow[]) => void
   emptyTitle?: string
   emptyDescription?: string
   ariaLabel?: string
@@ -35,11 +40,35 @@ function AlertTable({
   orgName,
   assigneeName,
   onRowKeyDown,
+  selectedIds,
+  onToggleSelected,
+  onToggleAll,
   emptyTitle = "No alerts",
   emptyDescription = "No alerts match the current filters.",
   ariaLabel = "Alerts",
 }: AlertTableProps) {
+  const selectable = selectedIds !== undefined && onToggleSelected !== undefined
+
   const columns: DataTableColumn<AlertRow>[] = [
+    ...(selectable
+      ? [
+          {
+            key: "select",
+            header: "",
+            width: "36px",
+            render: (a: AlertRow) => (
+              <input
+                type="checkbox"
+                aria-label={`Select alert ${a.title}`}
+                checked={selectedIds?.has(a.id) ?? false}
+                onClick={(e) => e.stopPropagation()}
+                onChange={() => onToggleSelected?.(a)}
+                className="accent-brand-500"
+              />
+            ),
+          },
+        ]
+      : []),
     {
       key: "severity",
       header: "Severity",
@@ -136,6 +165,8 @@ function AlertTable({
     )
   }
 
+  const allSelected = selectable && alerts.length > 0 && alerts.every((a) => selectedIds?.has(a.id))
+
   if (loading) {
     return (
       <div className="space-y-2" role="status" aria-label="Loading alerts">
@@ -146,9 +177,29 @@ function AlertTable({
     )
   }
 
+  const selectHeader = selectable
+    ? [
+        {
+          key: "select-header",
+          header: alerts.length > 0 ? "" : "",
+          width: "36px",
+          render: () => (
+            <input
+              type="checkbox"
+              aria-label={allSelected ? "Deselect all alerts on this page" : "Select all alerts on this page"}
+              checked={allSelected}
+              onChange={() => onToggleAll?.(alerts)}
+              onClick={(e) => e.stopPropagation()}
+              className="accent-brand-500"
+            />
+          ),
+        },
+      ]
+    : []
+
   return (
     <DataTable
-      columns={columns}
+      columns={[...selectHeader, ...columns]}
       rows={alerts}
       getRowId={(a) => a.id}
       ariaLabel={ariaLabel}
