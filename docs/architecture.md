@@ -113,6 +113,13 @@ Postgres can't put a single UNIQUE constraint across two tables.
 - `invitations.py` — public (no auth) invitation validate/accept; the
   only way to create a member account, a platform-created owner
   account, or a platform SOC analyst account.
+- `tickets.py` — the remediation workflow (`/api/v1/tickets`): SOC vs
+  IT role walls, the transition map, assignment rules, verify/close,
+  close-request for critical tickets. Domain logic in `app/tickets.py`.
+- `approvals.py` — the minimal approvals API (list + decide) the
+  critical-ticket close gate reads; the full approvals UI is P19.
+- `assignment_rules.py` — CRUD for the ticket assignment rules
+  (owner or security_manager).
 
 `backend/app/scope.py` is the one place "who is calling, what role,
 which organization" is resolved and enforced: `Scope` (account, role,
@@ -425,3 +432,23 @@ lib/data.ts      getSocKpis(state, scope), getTriageQueue(...), etc. --
   Migration `c2d3e4f5a6b7` widens `incidents` (assignee, resolution
   summary, closure reason, duplicate parent). What is still mock
   elsewhere (tickets UI) is untouched.
+- **Tickets are real end to end (the remediation milestone)** --
+  `app/routers/tickets.py` with the domain logic in `app/tickets.py`
+  (priority formula, SLA seeding/stamping/evaluation, assignment
+  rules, auto-creation eligibility, the `TICKET_TRANSITIONS` map --
+  unit-testable without a database). Manual creation from the SOC
+  side (platform SOC in managed mode, in-house soc_analyst
+  otherwise) plus auto-creation from incidents behind per-
+  organization severity/confidence thresholds; IT developers work
+  the ticket OPEN -> INVESTIGATING -> REMEDIATION -> VERIFICATION
+  (comments shared-only, tasks, evidence) but can never close
+  (`it_cannot_close`); the SOC verifies and closes or reopens, and a
+  CRITICAL (P1) ticket additionally needs an approved `ticket_close`
+  approval from the organization's security_manager/owner before
+  closing (the minimal approvals API is in place, full UI in P19).
+  SLA policies seed per organization; the worker's
+  `ticket_sla_check` cron marks at-risk (>=80%) and breached and
+  writes one escalation per fresh breach. Migration
+  `a8c1e5f7b9d0` adds `tickets.asset_id`, `sla_at_risk`,
+  `auto_ticket_min_confidence` and backfills default SLA policies.
+  docs/API_CONTRACT.md "Tickets" is the full contract.

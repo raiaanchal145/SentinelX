@@ -45,6 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.access import require_module, soc_visible_organization_ids
 from app.audit import audit_from_scope
 from app.database import get_db
+from app.models import TicketStatus as TicketStatusOpen
 from app.models import (
     ActorType,
     Admin,
@@ -491,6 +492,11 @@ class CreatePayload(BaseModel):
     description: str | None = None
     severity: str = "medium"
     priority: str | None = None  # suggested only; P13 derives the real one
+    # P13: the analyst's confidence in the detection (0..1) -- feeds the
+    # ticket priority formula and the auto-ticket confidence gate. Left
+    # unset on alerts-derived incidents (the alerts' own confidence is
+    # the source there).
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     category: str | None = Field(default=None, max_length=60)
     # Platform roles (and super_admin) name the organization; org-scoped
     # callers may omit it (their own organization is used).
@@ -590,6 +596,7 @@ async def _create_incident(
         summary=description,
         severity=severity,
         priority=priority.upper() if priority else None,
+        confidence=getattr(payload, "confidence", None),
         status=IncidentStatus.new,
         primary_asset_id=primary_asset.id if primary_asset else None,
         created_by_type=ActorType.admin if scope.account_type == "admin" else ActorType.user,
@@ -615,7 +622,72 @@ async def _create_incident(
         metadata={"alert_ids": [str(a.id) for a in linked_alerts], "event_ids": [str(e.id) for e in event_rows]},
     )
     await _audit(db, scope, incident, action="incident.create", after={"status": "NEW", "title": incident.title})
+
+    # P13: auto-create a remediation ticket when the organization's
+    # thresholds pass (severity + confidence) and no open ticket exists
+    # for the same incident+asset. Created by the acting SOC side; the
+    # ticket always belongs to the incident's organization.
+    from app import tickets as ticket_domain
+    from app.models import Organization as _Org, Ticket as _Ticket
+
+    org = await db.get(_Org, organization_id)
+    if org is not None and await ticket_domain.auto_ticket_eligible(db, org, incident):
+        asset = (
+            await db.get(Asset, incident.primary_asset_id)
+            if incident.primary_asset_id is not None
+            else None
+        )
+        auto_priority = ticket_domain.compute_priority(
+            incident.severity, asset.criticality if asset else None, incident.confidence
+        )
+        auto_ticket = _Ticket(
+            organization_id=organization_id,
+            ticket_number=await _next_ticket_number(db, organization_id),
+            incident_id=incident.id,
+            asset_id=asset.id if asset else None,
+            title=f"[Auto] {incident.title}",
+            description=incident.summary,
+            severity=incident.severity,
+            priority=auto_priority,
+            status=TicketStatusOpen.open,
+        )
+        db.add(auto_ticket)
+        await db.flush()
+        await ticket_domain.stamp_sla_deadlines(db, auto_ticket)
+        db.add(
+            IncidentTimeline(
+                incident_id=incident.id,
+                entry_type="ticket_created",
+                description=f"Remediation ticket {auto_ticket.ticket_number} auto-created (priority {auto_priority}).",
+                actor_type=ActorType.system,
+                entry_metadata={"ticket_id": str(auto_ticket.id), "auto": True},
+            )
+        )
+        from app.audit import write_audit_log
+
+        await write_audit_log(
+            db,
+            actor_type=ActorType.system,
+            actor_id=None,
+            action="ticket.auto_create",
+            organization_id=organization_id,
+            target_type="ticket",
+            target_id=auto_ticket.id,
+            after={"incident_id": str(incident.id), "priority": auto_priority},
+        )
     return incident
+
+
+async def _next_ticket_number(db: AsyncSession, organization_id: uuid.UUID) -> str:
+    from sqlalchemy import func as _func
+    from app.models import Ticket as _Ticket
+
+    count = (
+        await db.execute(
+            select(_func.count(_Ticket.id)).where(_Ticket.organization_id == organization_id)
+        )
+    ).scalar_one()
+    return f"TICK-{count + 1}"
 
 
 @router.post("", status_code=201)

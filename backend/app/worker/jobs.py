@@ -24,6 +24,9 @@ logger = logging.getLogger("sentinelx.worker")
 # light; the job is re-exported here under its enqueue name.
 from app.worker.event_jobs import process_events  # noqa: E402,F401
 
+# Ticket SLA sweep (P13) -- same pattern, its own module.
+from app.worker.ticket_jobs import ticket_sla_check  # noqa: E402,F401
+
 
 async def heartbeat(ctx: dict[str, Any], session_factory=None) -> dict[str, Any]:
     """
@@ -113,7 +116,7 @@ async def on_shutdown(ctx: dict[str, Any]) -> None:
 
 
 # The registry: both arq's function list and what enqueue_work() accepts.
-JOB_FUNCTIONS = [heartbeat, process_events]
+JOB_FUNCTIONS = [heartbeat, process_events, ticket_sla_check]
 
 
 class WorkerSettings:
@@ -126,6 +129,9 @@ class WorkerSettings:
     # away instead of up to 30s later.
     cron_jobs = [
         cron(heartbeat, second={0, 30}, unique=True, run_at_startup=True),
+        # P13 SLA sweep: every minute, flags at-risk/breached tickets and
+        # writes breach escalations (idempotent -- see the job docstring).
+        cron(ticket_sla_check, second={0}, unique=True, run_at_startup=True),
     ]
     # Direct function references -- arq calls these objects itself.
     on_startup = on_startup

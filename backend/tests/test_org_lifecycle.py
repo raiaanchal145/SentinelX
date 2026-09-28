@@ -168,8 +168,11 @@ async def test_full_invite_only_lifecycle(client, db_session):
     soc_analyst_token = soc_accept_resp.json()["access_token"]
 
     soc_me_resp = await client.get("/api/v1/auth/me", headers=auth(soc_analyst_token))
+    # P13: the soc_analyst gains it_tickets in in_house mode (SOC-mode
+    # gated -- in managed mode the platform SOC works the tickets).
     assert soc_me_resp.json()["effective_modules"] == {
-        "assets": "read", "soc": "write", "incidents": "write", "ai_agents": "write", "reports": "write",
+        "assets": "read", "soc": "write", "incidents": "write", "it_tickets": "write",
+        "ai_agents": "write", "reports": "write",
     }
 
     # 9. The platform admin's view of "has the owner accepted yet?":
