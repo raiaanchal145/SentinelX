@@ -68,6 +68,7 @@ from app.models import (
     UserRole,
 )
 from app.scope import Scope, org_scope
+from app.timeutils import parse_query_time, require_ordered_range, utcnow
 
 router = APIRouter(prefix="/api/v1/incidents", tags=["incidents"])
 
@@ -401,13 +402,10 @@ def _row(incident: Incident, *, alert_count: int | None = None, open_ticket: Tic
 
 
 def _parse_time(value: str, field: str) -> datetime:
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed
-    except ValueError:
-        raise _err("invalid_time_range", f"Invalid ISO-8601 timestamp for {field}.", 400)
+    """Thin alias over the shared parser (app/timeutils.py): Z / offset /
+    naive-as-UTC in, aware UTC out, 400 invalid_time_range on garbage.
+    Kept so this router's call sites stay short."""
+    return parse_query_time(value, field)
 
 
 def _encode_cursor(opened_at: datetime, incident_id: uuid.UUID) -> str:
@@ -880,6 +878,10 @@ async def list_incidents(
                 raise _err("invalid_assignee", "assignee must be 'me' or an account id.", 400)
     if asset_id:
         stmt = stmt.where(Incident.primary_asset_id == asset_id)
+    if time_from and time_to:
+        # Reject an inverted range before filtering (422, shared rule --
+        # see app/timeutils.require_ordered_range).
+        require_ordered_range(_parse_time(time_from, "time_from"), _parse_time(time_to, "time_to"))
     if time_from:
         stmt = stmt.where(Incident.opened_at >= _parse_time(time_from, "time_from"))
     if time_to:
@@ -1260,7 +1262,7 @@ async def transition_incident(
 
     # --- apply ----------------------------------------------------------
     incident.status = target
-    now = datetime.now(timezone.utc)
+    now = utcnow()
     if target in (IncidentStatus.resolved, IncidentStatus.false_positive, IncidentStatus.duplicate):
         incident.resolved_at = now
     if target == IncidentStatus.resolved:
@@ -1525,7 +1527,7 @@ async def merge_incident(
     duplicate.status = IncidentStatus.duplicate
     duplicate.closure_reason = f"Merged into {incident.id}"
     duplicate.duplicate_of_id = incident.id
-    duplicate.resolved_at = datetime.now(timezone.utc)
+    duplicate.resolved_at = utcnow()
 
     await _append_timeline(
         db,

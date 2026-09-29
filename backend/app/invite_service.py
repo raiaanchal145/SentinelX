@@ -10,7 +10,7 @@ app/routers/invitations.py, not here -- this module is only the
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import Invitation
 from app.security import generate_invitation_token
+from app.timeutils import utcnow
 
 INVITATION_TTL_DAYS = 7
 MAX_INVITATIONS_PER_ORG_PER_HOUR = 20
@@ -46,14 +47,10 @@ async def check_invitation_rate_limit(db: AsyncSession, organization_id: uuid.UU
     using the same threshold, so a runaway loop can't spam that path
     either.
     """
-    # Invitation.created_at, like every created_at column in this schema
-    # (see app/models.py), is a naive TIMESTAMP WITHOUT TIME ZONE
-    # populated by Postgres's own now() -- there's no DateTime(timezone=
-    # True) on it. asyncpg refuses to bind a tz-aware Python datetime
-    # against that column type ("can't subtract offset-naive and
-    # offset-aware datetimes"), so `since` has to be stripped to naive
-    # UTC to match, not left as datetime.now(timezone.utc).
-    since = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(tzinfo=None)
+    # P15: every timestamp column is TIMESTAMPTZ now, so the aware UTC
+    # cutoff binds directly -- no more naive-stripping workaround (the
+    # comment this replaces explained exactly that old hack).
+    since = utcnow() - timedelta(hours=1)
     stmt = select(func.count(Invitation.id)).where(Invitation.created_at >= since)
     stmt = stmt.where(Invitation.organization_id == organization_id) if organization_id is not None else stmt.where(
         Invitation.organization_id.is_(None)
@@ -93,7 +90,7 @@ async def create_invitation(
         token_hash=token_hash,
         status="pending",
         invited_by_admin_id=invited_by_admin_id,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=INVITATION_TTL_DAYS),
+        expires_at=utcnow() + timedelta(days=INVITATION_TTL_DAYS),
     )
     db.add(invitation)
     return invitation, raw_token
@@ -108,5 +105,5 @@ def rotate_invitation_token(invitation: Invitation) -> str:
     """
     raw_token, token_hash = generate_invitation_token()
     invitation.token_hash = token_hash
-    invitation.expires_at = datetime.now(timezone.utc) + timedelta(days=INVITATION_TTL_DAYS)
+    invitation.expires_at = utcnow() + timedelta(days=INVITATION_TTL_DAYS)
     return raw_token

@@ -13,7 +13,7 @@ change them here and in both docs in the same commit.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +32,7 @@ from app.models import (
     User,
     UserRole,
 )
+from app.timeutils import ensure_utc, utcnow
 
 # ---------------------------------------------------------------------------
 # Priority (documented formula, unit-tested)
@@ -155,7 +156,7 @@ async def stamp_sla_deadlines(db: AsyncSession, ticket: Ticket) -> None:
     ).scalar_one_or_none()
     if policy is None:
         return
-    now = datetime.now(timezone.utc)
+    now = utcnow()
     ticket.sla_policy_id = policy.id
     ticket.ack_due_at = now + timedelta(minutes=policy.acknowledge_minutes)
     ticket.resolve_due_at = now + timedelta(minutes=policy.resolve_minutes)
@@ -166,12 +167,11 @@ AT_RISK_FRACTION = 0.8
 
 
 def _aware(value: datetime) -> datetime:
-    """Treat naive DB timestamps as UTC (created_at is a plain
-    `timestamp` via server_default=func.now(); the deadline columns are
-    TIMESTAMP(timezone=True)) so comparisons never mix the two."""
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value
+    """Legacy alias over the shared normalizer (app/timeutils.py).
+    P15 made every column TIMESTAMPTZ, so values arriving from the DB
+    are always aware now; this stays for the unit tests that pass naive
+    fixtures. New code should call ensure_utc() directly."""
+    return ensure_utc(value)
 
 
 def evaluate_sla_state(
@@ -431,4 +431,7 @@ TICKET_TRANSITIONS: dict[TicketStatus, set[TicketStatus]] = {
 
 
 def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    """The module's clock (used by the SLA worker and callers that import
+    it for monkeypatching). P15: backed by the shared app.timeutils.utcnow
+    so there is exactly one definition of "now" in the codebase."""
+    return utcnow()

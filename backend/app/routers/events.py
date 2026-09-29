@@ -57,6 +57,7 @@ from app.event_ingestion import (
 )
 from app.models import EventSeverity, SecurityEvent
 from app.scope import Scope
+from app.timeutils import require_ordered_range
 from app.worker.queue import enqueue_work
 
 logger = logging.getLogger(__name__)
@@ -490,6 +491,14 @@ def _apply_event_filters(
         if ts is None:
             raise _err("invalid_time_range", "time_to is not a valid ISO-8601 timestamp.")
         query = query.where(SecurityEvent.occurred_at <= ts)
+    if time_from and time_to:
+        # Inverted range is a client mistake -- 422 (shared rule,
+        # app/timeutils.require_ordered_range; parse_timestamp already
+        # returns aware UTC for both, so the comparison is safe).
+        try:
+            require_ordered_range(parse_timestamp(time_from), parse_timestamp(time_to))
+        except HTTPException as exc:
+            raise _err("invalid_time_range", exc.detail["message"], 422)
     if source_id is not None:
         query = query.where(SecurityEvent.event_source_id == source_id)
     if event_type:

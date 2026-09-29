@@ -281,7 +281,7 @@ class Organization(Base):
     created_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("admins.id", ondelete="SET NULL", name="fk_organizations_created_by_admin", use_alter=True)
     )
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     admins: Mapped[list["Admin"]] = relationship(
         back_populates="organization", foreign_keys="Admin.organization_id"
@@ -325,7 +325,7 @@ class Admin(Base):
         DateTime(timezone=True)
     )
 
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     organization: Mapped["Organization | None"] = relationship(
@@ -402,7 +402,7 @@ class User(Base):
         DateTime(timezone=True)
     )
 
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     organization: Mapped["Organization"] = relationship(back_populates="users")
@@ -534,7 +534,7 @@ class Invitation(Base):
     invited_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("admins.id", ondelete="SET NULL")
     )
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     accepted_account_type: Mapped[str | None] = mapped_column(String(10))
@@ -583,7 +583,7 @@ class SocOrganizationAssignment(Base):
     assigned_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("admins.id", ondelete="SET NULL")
     )
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         UniqueConstraint("admin_id", "organization_id", name="uq_soc_org_assignments_admin_org"),
@@ -599,7 +599,7 @@ class Team(Base):
     )
     name: Mapped[str] = mapped_column(String(150), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     members: Mapped[list["User"]] = relationship(back_populates="team")
 
@@ -621,7 +621,7 @@ class TeamMember(Base):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     role_in_team: Mapped[str | None] = mapped_column(String(60))
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (UniqueConstraint("team_id", "user_id", name="uq_team_members_team_user"),)
 
@@ -644,7 +644,7 @@ class OrganizationSettings(Base):
     # auto_ticket_min_confidence. Either column NULL = "that half of the
     # gate is off" -- both NULL disables the feature for the organization.
     auto_ticket_min_confidence: Mapped[float | None] = mapped_column(Float)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ApiKey(Base):
@@ -671,7 +671,7 @@ class ApiKey(Base):
     created_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("admins.id", ondelete="SET NULL")
     )
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Session(Base):
@@ -695,7 +695,7 @@ class Session(Base):
     ip: Mapped[str | None] = mapped_column(String(64))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # ---------------------------------------------------------------------------
@@ -744,7 +744,7 @@ class Asset(Base):
     # app/routers/assets.py's ASSET_STATUSES. "retired" is the DELETE
     # endpoint's soft-delete terminal state.
     status: Mapped[str] = mapped_column(String(30), default="active")
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     organization: Mapped["Organization"] = relationship(back_populates="assets")
 
@@ -793,7 +793,7 @@ class EventSource(Base):
     config: Mapped[dict | None] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(String(30), default="active")
     last_event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # ---------------------------------------------------------------------------
@@ -815,7 +815,7 @@ class SecurityEvent(Base):
         ForeignKey("assets.id", ondelete="SET NULL")
     )
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    ingested_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     event_type: Mapped[str] = mapped_column(String(120), nullable=False)
     severity: Mapped[EventSeverity] = mapped_column(
         Enum(EventSeverity, name="event_severity"), default=EventSeverity.info
@@ -886,7 +886,7 @@ class DetectionRule(Base):
     created_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("admins.id", ondelete="SET NULL")
     )
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         # Built-in rules are seeded idempotently by name at worker
@@ -964,7 +964,7 @@ class Alert(Base):
     # assigned_account_type, same pattern as AuditLog.actor_id.
     assigned_account_type: Mapped[str | None] = mapped_column(String(10))  # "admin" | "user"
     assigned_account_id: Mapped[uuid.UUID | None] = mapped_column()
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         Index("ix_alerts_org_status", "organization_id", "status"),
@@ -1033,7 +1033,7 @@ class AlertHistory(Base):
         Enum(AlertStatus, name="alert_status")
     )
     detail: Mapped[dict | None] = mapped_column(JSONB)  # e.g. {"reason": ..., "assigned_to": ...}
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class OrganizationRuleSetting(Base):
@@ -1096,7 +1096,7 @@ class RuleHit(Base):
     event_count: Mapped[int] = mapped_column(Integer, nullable=False)
     window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         Index("ix_rule_hits_org_created", "organization_id", text("created_at DESC")),
@@ -1114,7 +1114,7 @@ class CorrelationRule(Base):
     time_window_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     conditions: Mapped[dict] = mapped_column(JSONB, nullable=False)
     enabled: Mapped[bool] = mapped_column(default=True)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         # Built-in rules are seeded idempotently by name at worker
@@ -1160,7 +1160,7 @@ class Correlation(Base):
     event_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     dedup_key: Mapped[str | None] = mapped_column(String(255), index=True)
     summary: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         Index(
@@ -1230,7 +1230,7 @@ class Incident(Base):
     correlation_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("correlations.id", ondelete="SET NULL")
     )
-    opened_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Polymorphic -- an incident can be opened by an admin, a user, or
@@ -1283,7 +1283,7 @@ class IncidentTimeline(Base):
     incident_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    occurred_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     entry_type: Mapped[str] = mapped_column(String(60), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     actor_type: Mapped[ActorType] = mapped_column(Enum(ActorType, name="actor_type"))
@@ -1304,7 +1304,7 @@ class SlaPolicy(Base):
     acknowledge_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     resolve_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     business_hours_only: Mapped[bool] = mapped_column(default=False)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         UniqueConstraint("organization_id", "priority", name="uq_sla_policies_org_priority"),
@@ -1362,7 +1362,7 @@ class Ticket(Base):
     # elapsed, breached when the deadline passes (app/worker/ticket_jobs.py).
     sla_at_risk: Mapped[bool] = mapped_column(default=False)
     sla_breached: Mapped[bool] = mapped_column(default=False)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         UniqueConstraint("organization_id", "ticket_number", name="uq_tickets_org_number"),
@@ -1391,7 +1391,7 @@ class TicketAssignment(Base):
     assigned_by_type: Mapped[ActorType] = mapped_column(Enum(ActorType, name="actor_type"))
     assigned_by_id: Mapped[uuid.UUID | None] = mapped_column()
     reason: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class TicketComment(Base):
@@ -1407,7 +1407,7 @@ class TicketComment(Base):
     author_id: Mapped[uuid.UUID | None] = mapped_column()
     body: Mapped[str] = mapped_column(Text, nullable=False)
     is_internal: Mapped[bool] = mapped_column(default=False)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class TicketStatusHistory(Base):
@@ -1425,7 +1425,7 @@ class TicketStatusHistory(Base):
     )
     changed_by_type: Mapped[ActorType] = mapped_column(Enum(ActorType, name="actor_type"))
     changed_by_id: Mapped[uuid.UUID | None] = mapped_column()
-    changed_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     note: Mapped[str | None] = mapped_column(Text)
 
 
@@ -1449,7 +1449,7 @@ class Task(Base):
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     requires_approval: Mapped[bool] = mapped_column(default=False)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AssignmentRule(Base):
@@ -1466,7 +1466,7 @@ class AssignmentRule(Base):
     )
     priority_order: Mapped[int] = mapped_column(Integer, default=0)
     enabled: Mapped[bool] = mapped_column(default=True)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Escalation(Base):
@@ -1486,7 +1486,7 @@ class Escalation(Base):
     escalated_to_user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")
     )
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
@@ -1526,7 +1526,7 @@ class Approval(Base):
         ForeignKey("users.id", ondelete="SET NULL")
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Evidence(Base):
@@ -1559,7 +1559,7 @@ class Evidence(Base):
         Enum(ActorType, name="actor_type"), nullable=False
     )
     added_by_id: Mapped[uuid.UUID | None] = mapped_column()
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Verification(Base):
@@ -1581,7 +1581,7 @@ class Verification(Base):
     evidence_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("evidence.id", ondelete="SET NULL")
     )
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # ---------------------------------------------------------------------------
@@ -1601,7 +1601,7 @@ class Agent(Base):
     system_prompt_version: Mapped[str | None] = mapped_column(String(30))
     allowed_tools: Mapped[dict | None] = mapped_column(JSONB)
     enabled: Mapped[bool] = mapped_column(default=True)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AgentRun(Base):
@@ -1625,7 +1625,7 @@ class AgentRun(Base):
     output: Mapped[dict | None] = mapped_column(JSONB)
     tokens_used: Mapped[int | None] = mapped_column(Integer)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
-    started_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
 
@@ -1656,7 +1656,7 @@ class AiAnalysis(Base):
         ForeignKey("users.id", ondelete="SET NULL")
     )
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ToolCallLog(Base):
@@ -1682,7 +1682,7 @@ class ToolCallLog(Base):
         ForeignKey("approvals.id", ondelete="SET NULL")
     )
     result: Mapped[dict | None] = mapped_column(JSONB)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # ---------------------------------------------------------------------------
@@ -1712,7 +1712,7 @@ class Notification(Base):
     related_id: Mapped[uuid.UUID | None] = mapped_column()
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AuditLog(Base):
@@ -1738,7 +1738,7 @@ class AuditLog(Base):
     ip: Mapped[str | None] = mapped_column(String(64))
     user_agent: Mapped[str | None] = mapped_column(String(300))
     details: Mapped[dict | None] = mapped_column(JSONB)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (Index("ix_audit_logs_org_created_at", "organization_id", "created_at"),)
 
@@ -1762,7 +1762,7 @@ class Report(Base):
     generated_by_id: Mapped[uuid.UUID | None] = mapped_column()
     content: Mapped[dict | None] = mapped_column(JSONB)
     file_ref: Mapped[str | None] = mapped_column(String(500))
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class SystemMetricsDaily(Base):

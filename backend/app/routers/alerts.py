@@ -57,6 +57,7 @@ from app.models import (
     UserRole,
 )
 from app.scope import Scope
+from app.timeutils import parse_query_time, require_ordered_range
 
 router = APIRouter(prefix="/api/v1/alerts", tags=["alerts"])
 
@@ -291,6 +292,9 @@ async def list_alerts(
             Alert.assigned_account_id == scope.user_id,
             Alert.assigned_account_type == scope.account_type,
         )
+    if time_from and time_to:
+        # Inverted range is a client mistake -- 422 (shared rule).
+        require_ordered_range(_parse_time(time_from, "time_from"), _parse_time(time_to, "time_to"))
     if time_from:
         parsed = _parse_time(time_from, "time_from")
         stmt = stmt.where(Alert.last_seen_at >= parsed)
@@ -336,13 +340,9 @@ async def list_alerts(
 
 
 def _parse_time(value: str, field: str) -> datetime:
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed
-    except ValueError:
-        raise _err("invalid_time_range", f"Invalid ISO-8601 timestamp for {field}.", 400)
+    """Thin alias over the shared parser (app/timeutils.py): Z / offset /
+    naive-as-UTC in, aware UTC out, 400 invalid_time_range on garbage."""
+    return parse_query_time(value, field)
 
 
 def _encode_cursor(last_seen: datetime, alert_id: uuid.UUID) -> str:

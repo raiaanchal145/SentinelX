@@ -739,3 +739,34 @@ override); the preview exists so the analyst understands the price of
 the override before choosing it. Mirroring the weight table client-side
 is a documented drift risk: change `app/tickets.py` and the preview in
 the same commit or they diverge silently.
+
+## Supported Python range is 3.10-3.13 (install 3.12); 3.14+ is not supported
+
+The README used to say "Python 3.10+", which read as "newest is fine" and was
+wrong in practice. The launcher (`scripts/lib/checks.mjs`) only checks the
+3.10 floor, so a teammate with Python 3.14 sailed through every check and
+then hit a multi-hundred-line C-compiler failure with no hint that the
+Python version was the cause. The real constraint is prebuilt-wheel
+availability of the pinned backend dependencies (checked against PyPI
+JSON on 2026-09-29):
+
+- `asyncpg==0.30.0`: wheels for cp38-cp313 (Windows x64/win32, macOS
+  x64/arm64, manylinux/musllinux x64/arm64). **No cp314 wheel.** This is the
+  binding constraint -- asyncpg has no pure-Python fallback, so on 3.14 pip
+  compiles it from source, which needs Microsoft C++ Build Tools (not
+  present on a normal laptop).
+- `uvicorn[standard]==0.34.0` transitively pins `uvloop 0.21.0`,
+  `httptools 0.6.4` and `watchfiles 1.0.4` -- also **no cp314 wheels**, so
+  3.14 fails on them too, not just asyncpg.
+- Everything else pinned (`bcrypt 4.0.1` abi3, `SQLAlchemy 2.0.36` cp313
+  wheels + pure-Python fallback, fastapi/alembic/arq/redis/pytest/httpx/
+  python-jose/passlib/pydantic-settings pure Python) is fine across the
+  band.
+
+Adopted range: **Python 3.10-3.13**, with **3.12 as the version new
+teammates install** (safest mid-band; both directions have headroom).
+3.8/3.9 technically have wheels but are excluded by the launcher's floor.
+When any of the C-extension pins above is bumped, re-check wheel coverage
+for the new version on PyPI and update this entry and the README's
+First-time setup step together -- the README number is derived from this
+decision, not maintained independently.
