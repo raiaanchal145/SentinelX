@@ -10,7 +10,11 @@ AI-Assisted Security Operations & Incident Response Platform — MCA Sem 3 proje
 
 ## 1. First-time setup (once per laptop)
 
-1. Install **Node.js 20.19+ or 22.12+** and **Python 3.10+** (make sure "Add python.exe to PATH" is checked during the Python installer on Windows).
+1. Install **Node.js 20.19+ or 22.12+** (the same range Vite's own `engines` field requires) and **Python 3.12** — the supported Python range for this project is **3.10–3.13; do not use 3.14+** ("Add python.exe to PATH" checked during the Windows installer).
+   Why the exact Python version matters: the pinned `asyncpg` (0.30.0) and the `uvicorn[standard]` extras (`uvloop`, `httptools`, `watchfiles`) publish prebuilt wheels only up to Python 3.13. On 3.14+ pip silently falls back to compiling each one from source, which fails on a normal laptop unless Microsoft C++ Build Tools are installed — a long, confusing build error that never mentions the Python version as the cause.
+   **Before running anything, check what you have:**
+   - **Windows:** run `py -0p` and look at the `*`-marked default — it must read `3.10`–`3.13` (`3.12` recommended). If 3.12 is missing, run `py install 3.12`, or install it from <https://www.python.org/downloads/>. If the `*` still marks `3.14` after installing, set the `PY_PYTHON=3.12` environment variable or uninstall 3.14, then re-check with `py -0p`.
+   - **macOS/Linux:** `python3 --version` must print `3.10`–`3.13`. Install 3.12 with your usual tool — `brew install python@3.12` (not plain `python`, which is now 3.14), pyenv, or your distro's packages — and make sure `python3` resolves to it.
 2. Install **Docker Desktop** — <https://www.docker.com/products/docker-desktop/> — and open it once so it finishes its own setup. (If you'd rather install PostgreSQL directly instead of using Docker, that still works too — see "Using a local PostgreSQL install instead of Docker" below.)
 3. Optionally install **pgAdmin 4** if you want a visual tool for browsing the database (Docker Desktop's Postgres works fine without it).
 4. Clone the repo, open it in VS Code, then in a terminal at the project root run:
@@ -18,7 +22,7 @@ AI-Assisted Security Operations & Incident Response Platform — MCA Sem 3 proje
    npm run dev
    ```
 
-That's it — the rest of this section explains what that command does; you don't need to type anything else by hand.
+That's it — the rest of this section explains what that command does; you don't need to type anything else by hand. One caveat: the launcher uses whatever Python the `py`/`python3` command offers it — `npm run dev:doctor` checks the 3.10 floor but not the 3.14 ceiling, so the version check in step 1 is on you.
 
 ---
 
@@ -206,6 +210,15 @@ To set that up: install PostgreSQL from <https://www.postgresql.org/download/win
 **"psql is not recognized"** — that's fine, you don't need the PostgreSQL command-line tool on your PATH; use pgAdmin instead, or just let `npm run dev`/`npm run dev:doctor` do the checking for you.
 
 **Nothing shows up under "Databases" in pgAdmin** — make sure you registered the server with the values in the pgAdmin section above, and that `npm run dev` reported the database as ready.
+
+**`pip` tries to compile C/C++ (or `asyncpg`/`watchfiles`/`httptools` fail to build) while `npm run dev` sets up `.venv`** — your Python is 3.14+ or older than 3.10. This long error means pip found no prebuilt package for your Python version, not a bug in the project. Fix the Python version first (step 1 of First-time setup), then:
+
+| Step | Windows | macOS/Linux |
+|---|---|---|
+| 1. Confirm the default Python | `py -0p` — the `*` must mark `3.10`–`3.13` | `python3 --version` must print `3.10`–`3.13` |
+| 2. Install/repair it if wrong | `py install 3.12` (see step 1 above for the 3.14-still-default case) | `brew install python@3.12` / pyenv / distro packages |
+| 3. Delete the wrongly-built venv | `rmdir /s /q .venv` (or `rm -rf .venv` in Git Bash) | `rm -rf .venv` |
+| 4. Re-run | `npm run dev` — it recreates `.venv` with the correct Python and installs `backend/requirements.txt` | Same |
 
 If you get stuck, take a screenshot of the exact error and send it — don't guess or skip steps.
 
