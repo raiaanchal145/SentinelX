@@ -574,6 +574,14 @@ async def get_ticket(
     mode, _ = await _ticket_visibility(db, scope)
     it_view = mode == "it"
 
+    # The transition map's row for this ticket's status, filtered to what
+    # THIS caller may do (the incidents detail's caller-shaped pattern):
+    # IT sees only its working-state targets, the SOC the full row -- a UI
+    # renders its action buttons straight from this field.
+    allowed = TICKET_TRANSITIONS.get(ticket.status, set())
+    if it_view:
+        allowed = allowed & IT_ALLOWED_TARGETS
+
     comments = (
         await db.execute(
             select(TicketComment)
@@ -633,6 +641,7 @@ async def get_ticket(
     return {
         "ticket": _row(ticket),
         "incident": incident,
+        "allowed_next_states": sorted(s.value for s in allowed),
         "comments": [
             {
                 "id": str(c.id),
