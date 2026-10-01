@@ -27,6 +27,10 @@ from app.worker.event_jobs import process_events  # noqa: E402,F401
 # Ticket SLA sweep (P13) -- same pattern, its own module.
 from app.worker.ticket_jobs import ticket_sla_check  # noqa: E402,F401
 
+# Notification emails (P16) -- delivery with retries; dev without SMTP
+# logs the message instead (app/worker/notification_jobs.py).
+from app.worker.notification_jobs import send_notification_email  # noqa: E402,F401
+
 
 async def heartbeat(ctx: dict[str, Any], session_factory=None) -> dict[str, Any]:
     """
@@ -116,7 +120,7 @@ async def on_shutdown(ctx: dict[str, Any]) -> None:
 
 
 # The registry: both arq's function list and what enqueue_work() accepts.
-JOB_FUNCTIONS = [heartbeat, process_events, ticket_sla_check]
+JOB_FUNCTIONS = [heartbeat, process_events, ticket_sla_check, send_notification_email]
 
 
 class WorkerSettings:
