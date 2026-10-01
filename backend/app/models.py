@@ -224,6 +224,34 @@ class NotificationChannel(str, enum.Enum):
     email = "email"
 
 
+class NotificationPreference(Base):
+    """Per-account, per-event channel switches (P16). Rows are opt-OUT:
+    a missing row means every channel is ON (the service consults this
+    table only to silence an event; docs/DECISIONS.md). One row per
+    (account_type, account_id, event_key)."""
+
+    __tablename__ = "notification_preferences"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    account_type: Mapped[ActorType] = mapped_column(
+        Enum(ActorType, name="actor_type"), nullable=False
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    event_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    in_app: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    email: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("account_type", "account_id", "event_key", name="uq_notification_preferences_account_event"),
+    )
+
+
 class ReportType(str, enum.Enum):
     incident = "incident"
     management = "management"
@@ -1712,6 +1740,10 @@ class Notification(Base):
     related_id: Mapped[uuid.UUID | None] = mapped_column()
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The event key that produced this row ("ticket.assigned"...); NULL
+    # on rows written before P16. Drives the frontend's icon/label and
+    # which preference silences it.
+    template_key: Mapped[str | None] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
