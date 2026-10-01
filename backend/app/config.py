@@ -61,6 +61,13 @@ class Settings(BaseSettings):
     events_max_batch_size: int = 500
     events_max_request_bytes: int = 1_048_576
 
+    # Evidence uploads (P15, docs/API_CONTRACT.md "Evidence"). Files
+    # live OUTSIDE the web root under a per-organization directory (the
+    # path never derives from the uploaded filename); override both in
+    # backend/.env for a real deployment.
+    evidence_storage_dir: str = "data/evidence"
+    evidence_max_upload_mb: int = 10
+
 
 DEFAULT_SECRET_KEY = "sentinelx-dev-secret-change-me"
 

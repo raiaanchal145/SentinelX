@@ -912,6 +912,38 @@ event -- docs/DECISIONS.md). The resolve clock KEEPS RUNNING during
 VERIFICATION: the SOC is accountable for verification time too (docs/
 DECISIONS.md "No SLA pause in VERIFICATION").
 
+### Evidence: `/api/v1/tickets/{id}/evidence` and `/api/v1/incidents/{id}/evidence` (P15)
+
+Files are stored OUTSIDE the web root under
+`{EVIDENCE_STORAGE_DIR}/{organization_id}/` (default
+`backend/data/evidence/`, configurable in `backend/.env`); the name on
+disk is a random uuid -- the client's filename NEVER reaches the
+filesystem (traversal filenames are inert by construction) and
+survives only as row metadata (`content.filename`). Content type is
+decided by sniffing magic bytes (the client's declared type is never
+trusted); the SHA-256 of the stored bytes is on the row.
+
+| Method & path | Who | Notes |
+|---|---|---|
+| `POST /tickets/{id}/evidence` | IT (own org) / SOC writer | JSON metadata path: typed `note`/`command_output` rows without a file. Needs a linked incident (422 `evidence_requires_incident` otherwise -- the table is incident-scoped: NOT NULL FK + ON DELETE RESTRICT). |
+| `POST /tickets/{id}/evidence/upload` | IT (own org) / SOC writer | Multipart (`file`, optional `title`, `description`). Allowed: text/log (utf-8, no NULs), screenshot (png/jpg magic), pdf, zip (stored INERT -- never extracted); max `EVIDENCE_MAX_UPLOAD_MB` (default 10). The EvidenceType enum keeps log/file/screenshot; the precise kind rides in `content.kind`. |
+| `POST /incidents/{id}/evidence/upload` | SOC-side writer | Same rules; IT uploads through their tickets, not directly to the incident. Writes one `incident_timeline` `evidence` entry. |
+| `GET /tickets/{id}/evidence/{eid}/download` | any ticket-visible caller | Authenticated download; cross-org ids are 404 (never a leak). Response is always `Content-Disposition: attachment` (original filename), `X-Content-Type-Options: nosniff`, the sniffed content type. |
+| `GET /incidents/{id}/evidence/{eid}/download` | any incident-visible caller (incl. IT's shared window) | Same rules. |
+
+Evidence rows are NEVER deleted through the API -- retirement is a
+future, audited flow. Every upload writes one `audit_logs` row
+(`ticket.evidence_add` / `incident.evidence_add`).
+
+Evidence error codes: `evidence_requires_incident` (422),
+`evidence_too_large` (413), `evidence_unsupported_type` (415),
+`evidence_not_found` (404 -- missing file or foreign id).
+
+The ticket detail response also carries `allowed_next_states` -- the
+transition map's row for the ticket's status filtered to the CALLER
+(IT sees its working-state targets; SOC writers see the full row), so
+a UI renders its action buttons straight from this field.
+
 ### Auto-creation
 
 An incident auto-creates one remediation ticket when ALL gates pass

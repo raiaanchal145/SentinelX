@@ -1,365 +1,328 @@
-import { useEffect, useMemo, useState } from "react"
-import { Link } from "react-router-dom"
-import { RefreshCw, ServerOff, Wifi } from "lucide-react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { Link, useNavigate } from "react-router-dom"
+import { RefreshCw } from "lucide-react"
 
-import DemoDataChip from "../../../components/shared/DemoDataChip"
 import EmptyState from "../../../components/EmptyState"
-import DataTable, { type DataTableColumn } from "../../../components/ui/DataTable"
+import SeverityBadge from "../../../components/SeverityBadge"
+import Badge from "../../../components/ui/Badge"
 import IconButton from "../../../components/ui/IconButton"
 import KpiCard from "../../../components/ui/KpiCard"
 import Skeleton from "../../../components/ui/Skeleton"
 import CountdownChip from "../../../components/ui/CountdownChip"
-import { useToast } from "../../../components/ui/Toast"
+import { ApiError, apiGetTicket, apiListTickets, type TicketRow } from "../../../lib/api"
 
-import {
-  delay,
-  getAssetById,
-  getDueSoon,
-  getItKpis,
-  getMyAssets,
-  getMyTickets,
-  getMyWorkByStatus,
-} from "../../../lib/data"
-import { scopeFor } from "../../../lib/scope"
-import { useMockStore } from "../../../mocks/store"
-import type { Asset, Ticket } from "../../../types"
+import { BOARD_COLUMNS, isDoneStatus, slaStateLabel } from "../itShared"
 
-import TaskCard from "../components/TaskCard"
-import TaskDetailDrawer from "../components/TaskDetailDrawer"
+const DUE_SOON_MS = 4 * 60 * 60 * 1000 // 4 hours ahead of the resolve deadline
 
-type Column = { key: string; label: string; statuses: Ticket["status"][] }
-
-const COLUMNS: Column[] = [
-  { key: "assigned", label: "Assigned", statuses: ["OPEN", "TRIAGED", "ASSIGNED"] },
-  { key: "acknowledged", label: "Acknowledged", statuses: ["ACKNOWLEDGED"] },
-  { key: "in-progress", label: "In progress", statuses: ["INVESTIGATING", "REMEDIATION"] },
-  { key: "verification", label: "Ready for verification", statuses: ["VERIFICATION"] },
-  { key: "done", label: "Done", statuses: ["RESOLVED", "CLOSED"] },
-]
-
-function sortByDue(tickets: Ticket[]): Ticket[] {
-  return [...tickets].sort((a, b) => {
-    const aTime = a.resolveDueAt ? new Date(a.resolveDueAt).getTime() - Date.now() : Infinity
-    const bTime = b.resolveDueAt ? new Date(b.resolveDueAt).getTime() - Date.now() : Infinity
-    return aTime - bTime
-  })
-}
-
-function randomMockSize(): number {
-  return Math.round(20_000 + Math.random() * 2_000_000)
-}
-
+/** The IT developer's dashboard on real data: my open tickets, the SLA
+ * clock (due soon / at risk / breached), and the latest shared comments
+ * from the SOC on my tickets. Everything comes from GET /tickets (+ the
+ * opened ticket's detail for comments). */
 function ItMyTasks() {
-  const { state, dispatch } = useMockStore()
-  const toast = useToast()
-  const scope = useMemo(() => scopeFor(), [])
+  const navigate = useNavigate()
 
+  const [tickets, setTickets] = useState<TicketRow[]>([])
   const [loading, setLoading] = useState(true)
-  const [lastUpdated, setLastUpdated] = useState(() => new Date())
-  const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null)
+  const [error, setError] = useState("")
+  const [socComments, setSocComments] = useState<{ ticketNumber: string; ticketId: string; body: string; at: string }[]>([])
+  const [commentsLoading, setCommentsLoading] = useState(true)
 
-  async function reload() {
-    setLoading(true)
-    await delay(null)
-    setLoading(false)
-    setLastUpdated(new Date())
-  }
+  const load = useCallback(
+    async function load() {
+      setLoading(true)
+      setError("")
+      try {
+        const res = await apiListTickets({ assignee: "me", limit: 100 })
+        setTickets(res.tickets)
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message : "Could not load your tickets.")
+      } finally {
+        setLoading(false)
+      }
+    },
+    [],
+  )
 
   useEffect(() => {
+    load()
+  }, [load])
+
+  // Recent SOC comments: the newest status-change note per ticket is in
+  // the ticket list already; the detail round-trip is only worth it for
+  // the three most recently updated tickets.
+  useEffect(() => {
     let cancelled = false
-    delay(null).then(() => {
-      if (!cancelled) setLoading(false)
-    })
+    async function loadComments() {
+      setCommentsLoading(true)
+      const recent = tickets.slice(0, 3)
+      const found: { ticketNumber: string; ticketId: string; body: string; at: string }[] = []
+      for (const ticket of recent) {
+        try {
+          const detail = await apiGetTicket(ticket.id)
+          const last = [...detail.comments]
+            .filter((c) => c.author_type === "admin") // SOC side
+            .pop()
+          if (last) {
+            found.push({ ticketNumber: ticket.ticket_number, ticketId: ticket.id, body: last.body, at: last.created_at ?? "" })
+          }
+        } catch {
+          // a single detail failure shouldn't blank the panel
+        }
+      }
+      if (!cancelled) {
+        setSocComments(found)
+        setCommentsLoading(false)
+      }
+    }
+    void loadComments()
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [tickets])
 
-  const kpis = useMemo(() => getItKpis(state, scope), [state, scope])
-  const myTickets = useMemo(() => getMyTickets(state, scope), [state, scope])
-  const byStatus = useMemo(() => getMyWorkByStatus(state, scope), [state, scope])
-  const dueSoon = useMemo(() => getDueSoon(state, scope, 5), [state, scope])
-  const myAssets = useMemo(() => getMyAssets(state, scope), [state, scope])
+  const open = useMemo(() => tickets.filter((t) => !isDoneStatus(t.status)), [tickets])
+  const breached = useMemo(() => tickets.filter((t) => t.sla?.state === "breached"), [tickets])
+  const atRisk = useMemo(() => tickets.filter((t) => t.sla?.state === "at_risk"), [tickets])
+  const dueSoon = useMemo(
+    () =>
+      tickets
+        .filter(
+          (t) =>
+            !isDoneStatus(t.status) &&
+            t.sla?.resolve_due_at &&
+            new Date(t.sla.resolve_due_at).getTime() - Date.now() < DUE_SOON_MS &&
+            t.sla.state !== "breached",
+        )
+        .sort((a, b) => new Date(a.sla.resolve_due_at ?? 0).getTime() - new Date(b.sla.resolve_due_at ?? 0).getTime()),
+    [tickets],
+  )
+  const verification = useMemo(() => tickets.filter((t) => t.status === "VERIFICATION"), [tickets])
 
   const columns = useMemo(
     () =>
-      COLUMNS.map((column) => ({
+      BOARD_COLUMNS.map((column) => ({
         ...column,
         tickets:
           column.key === "done"
-            ? myTickets.filter((t) => t.status === "RESOLVED" || t.status === "CLOSED")
-            : sortByDue(column.statuses.flatMap((status) => byStatus[status] ?? [])),
+            ? tickets.filter((t) => isDoneStatus(t.status))
+            : column.statuses.flatMap((status) => tickets.filter((t) => t.status === status)),
       })),
-    [byStatus, myTickets],
+    [tickets],
   )
 
-  const recentSocComments = useMemo(() => {
-    return myTickets
-      .flatMap((ticket) => ticket.comments.map((comment) => ({ ticket, comment })))
-      .filter(({ comment }) => comment.authorName !== scope.displayName)
-      .sort((a, b) => new Date(b.comment.createdAt).getTime() - new Date(a.comment.createdAt).getTime())
-      .slice(0, 5)
-  }, [myTickets, scope.displayName])
-
-  const topTask = dueSoon[0]
-
-  const selectedTicket = useMemo(
-    () => state.tickets.find((t) => t.id === selectedTicketId) ?? null,
-    [state.tickets, selectedTicketId],
-  )
-  const selectedAsset = selectedTicket ? getAssetById(state, selectedTicket.assetId) : undefined
-
-  function handleAcknowledge(ticket: Ticket) {
-    dispatch({ type: "IT_ACK_TICKET", ticketId: ticket.id, actorName: scope.displayName })
-    toast.show(`Acknowledged ${ticket.ticketNumber}.`, { tone: "success" })
-  }
-
-  function handleStartWork(ticket: Ticket) {
-    dispatch({ type: "IT_START_TICKET", ticketId: ticket.id, actorName: scope.displayName })
-    toast.show(`Started work on ${ticket.ticketNumber}.`, { tone: "success" })
-  }
-
-  function handleSubmitForVerification(ticket: Ticket) {
-    dispatch({ type: "IT_SUBMIT_FOR_VERIFICATION", ticketId: ticket.id, actorName: scope.displayName })
-    toast.show(`${ticket.ticketNumber} submitted for SOC verification.`, { tone: "info" })
-  }
-
-  function handleToggleChecklistItem(ticket: Ticket, itemId: string) {
-    dispatch({ type: "IT_TOGGLE_CHECKLIST_ITEM", ticketId: ticket.id, itemId, actorName: scope.displayName })
-  }
-
-  function handleAddEvidence(ticket: Ticket, fileName: string) {
-    dispatch({
-      type: "IT_ADD_EVIDENCE",
-      ticketId: ticket.id,
-      evidence: {
-        id: `evidence-live-${Date.now()}`,
-        fileName,
-        sizeBytes: randomMockSize(),
-        addedAt: new Date().toISOString(),
-      },
-      actorName: scope.displayName,
-    })
-  }
-
-  function handleAddComment(ticket: Ticket, body: string) {
-    dispatch({
-      type: "IT_ADD_COMMENT",
-      ticketId: ticket.id,
-      comment: {
-        id: `comment-live-${Date.now()}`,
-        authorName: scope.displayName,
-        authorType: "user",
-        body,
-        createdAt: new Date().toISOString(),
-      },
-    })
-  }
-
-  const assetColumns: DataTableColumn<Asset>[] = [
-    { key: "hostname", header: "Asset", render: (a) => a.hostname },
-    {
-      key: "health",
-      header: "Health",
-      width: "110px",
-      render: (a) =>
-        a.agentStatus === "connected" ? (
-          <span className="flex items-center gap-1.5 text-success-fg">
-            <Wifi size={13} aria-hidden="true" /> Connected
-          </span>
-        ) : (
-          <span className="flex items-center gap-1.5 text-critical-fg">
-            <ServerOff size={13} aria-hidden="true" /> Offline
-          </span>
-        ),
-    },
-    {
-      key: "openTickets",
-      header: "Open tickets",
-      width: "110px",
-      render: (a) => myTickets.filter((t) => t.assetId === a.id && t.status !== "CLOSED" && t.status !== "RESOLVED").length,
-    },
-    {
-      key: "lastSeen",
-      header: "Last seen",
-      render: (a) => (
-        <span title={new Date(a.lastSeenAt).toString()}>{new Date(a.lastSeenAt).toLocaleString()}</span>
-      ),
-    },
-  ]
-
-  const hasWork = myTickets.length > 0
+  const hasWork = tickets.length > 0
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-fg-primary">My Remediation Work</h1>
-          <p className="mt-1 flex items-center gap-2 text-xs text-fg-muted">
-            Last updated{" "}
-            <time dateTime={lastUpdated.toISOString()} title={lastUpdated.toString()}>
-              {lastUpdated.toLocaleTimeString()}
-            </time>
-            <DemoDataChip />
-          </p>
+          <p className="mt-0.5 text-xs text-fg-muted">Tickets assigned to you, on the real SLA clock.</p>
         </div>
-        <IconButton icon={RefreshCw} label="Refresh dashboard" onClick={reload} />
+        <IconButton icon={RefreshCw} label="Refresh dashboard" onClick={load} />
       </div>
 
-      <section aria-label="Key metrics" className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-        {loading
-          ? Array.from({ length: 5 }, (_, i) => <Skeleton key={i} className="h-24 w-full rounded-card" />)
-          : kpis.map((kpi) => <KpiCard key={kpi.label} {...kpi} />)}
-      </section>
-
-      {!loading && !hasWork ? (
-        <EmptyState
-          title="No remediation tasks assigned"
-          description="Tickets appear here once the SOC assigns remediation work to you or your team."
-        />
+      {error ? (
+        <EmptyState title="Could not load your work" description={error} action={{ label: "Try again", onClick: load }} />
       ) : (
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-          <section className="xl:col-span-2" aria-label="My work">
-            <h2 className="mb-2 text-sm font-semibold text-fg-primary">My work</h2>
-            {loading ? (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {Array.from({ length: 6 }, (_, i) => (
-                  <Skeleton key={i} className="h-40 w-full rounded-card" />
-                ))}
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                {columns.map((column) => (
-                  <div key={column.key}>
-                    <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">
-                      {column.label} <span className="text-fg-faint">({column.tickets.length})</span>
-                    </h3>
-                    <div className="space-y-2">
-                      {column.tickets.length === 0 ? (
-                        <p className="rounded-card border border-dashed border-line p-3 text-xs text-fg-faint">
-                          Nothing here.
-                        </p>
-                      ) : (
-                        column.tickets.map((ticket) => (
-                          <TaskCard
-                            key={ticket.id}
-                            ticket={ticket}
-                            asset={getAssetById(state, ticket.assetId)}
-                            onOpenDetail={(t) => setSelectedTicketId(t.id)}
-                            onAcknowledge={handleAcknowledge}
-                            onStartWork={handleStartWork}
-                            onSubmitForVerification={handleSubmitForVerification}
-                          />
-                        ))
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+        <>
+          <section aria-label="Key metrics" className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+            {loading
+              ? Array.from({ length: 5 }, (_, i) => <Skeleton key={i} className="h-24 w-full rounded-card" />)
+              : [
+                  <KpiCard key="open" label="My open tickets" value={open.length} tone="neutral" link="/it/tickets" />,
+                  <KpiCard
+                    key="due-soon"
+                    label="Due within 4h"
+                    value={dueSoon.length}
+                    tone={dueSoon.length > 0 ? "medium" : "info"}
+                    link="/it/tickets"
+                  />,
+                  <KpiCard
+                    key="at-risk"
+                    label="SLA at risk"
+                    value={atRisk.length}
+                    tone={atRisk.length > 0 ? "high" : "info"}
+                    link="/it/tickets"
+                  />,
+                  <KpiCard
+                    key="breached"
+                    label="SLA breached"
+                    value={breached.length}
+                    tone={breached.length > 0 ? "critical" : "info"}
+                    link="/it/tickets"
+                  />,
+                  <KpiCard
+                    key="verification"
+                    label="Awaiting SOC verification"
+                    value={verification.length}
+                    tone="info"
+                    link="/it/tickets"
+                  />,
+                ]}
           </section>
 
-          <div className="space-y-4">
-            <section aria-label="Due soon" className="rounded-card border border-line bg-surface p-4">
-              <h2 className="text-sm font-semibold text-fg-primary">Due soon</h2>
-              {loading ? (
-                <Skeleton count={3} className="h-10 w-full" />
-              ) : dueSoon.length === 0 ? (
-                <p className="mt-2 text-xs text-fg-muted">Nothing on the clock right now.</p>
-              ) : (
-                <ul className="mt-3 space-y-2">
-                  {dueSoon.map((ticket) => (
-                    <li key={ticket.id}>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedTicketId(ticket.id)}
-                        className="flex w-full items-center justify-between gap-2 rounded-control border border-line bg-surface-sunken p-2 text-left text-xs transition hover:border-line-strong hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
-                      >
-                        <span className="truncate text-fg-secondary">{ticket.title}</span>
-                        <CountdownChip dueAt={ticket.resolveDueAt} />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
+          {!loading && !hasWork ? (
+            <EmptyState
+              title="No remediation tasks assigned"
+              description="Tickets appear here once the SOC assigns remediation work to you or your team."
+            />
+          ) : (
+            <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+              <section className="xl:col-span-2" aria-label="My work board">
+                <h2 className="mb-2 text-sm font-semibold text-fg-primary">My work</h2>
+                {loading ? (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    {Array.from({ length: 6 }, (_, i) => (
+                      <Skeleton key={i} className="h-40 w-full rounded-card" />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                    {columns.map((column) => (
+                      <div key={column.key}>
+                        <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">
+                          {column.label} <span className="text-fg-faint">({column.tickets.length})</span>
+                        </h3>
+                        <div className="space-y-2">
+                          {column.tickets.length === 0 ? (
+                            <p className="rounded-card border border-dashed border-line p-3 text-xs text-fg-faint">
+                              Nothing here.
+                            </p>
+                          ) : (
+                            column.tickets.map((ticket) => (
+                              <TaskMiniCard key={ticket.id} ticket={ticket} onOpen={() => navigate(`/it/tickets/${ticket.id}`)} />
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
 
-            <section aria-label="Recommended next step" className="rounded-card border border-line bg-surface p-4">
-              <h2 className="text-sm font-semibold text-fg-primary">Recommended next step</h2>
-              {loading ? (
-                <Skeleton className="mt-3 h-14 w-full" />
-              ) : !topTask || topTask.recommendedSteps.length === 0 ? (
-                <p className="mt-2 text-xs text-fg-muted">No recommended steps right now.</p>
-              ) : (
-                <div className="mt-2 text-xs">
-                  <p className="text-fg-muted">For {topTask.ticketNumber}</p>
-                  <p className="mt-1 text-fg-secondary">{topTask.recommendedSteps[0]}</p>
-                  {topTask.runbookId && (
-                    <Link
-                      to={`/it/runbooks?id=${topTask.runbookId}`}
-                      className="mt-2 inline-block font-medium text-brand-400 hover:text-brand-300"
-                    >
-                      Open runbook
-                    </Link>
+              <div className="space-y-4">
+                <section aria-label="Due soon" className="rounded-card border border-line bg-surface p-4">
+                  <h2 className="text-sm font-semibold text-fg-primary">Due soon</h2>
+                  {loading ? (
+                    <Skeleton count={3} className="h-10 w-full" />
+                  ) : dueSoon.length === 0 ? (
+                    <p className="mt-2 text-xs text-fg-muted">Nothing on the clock right now.</p>
+                  ) : (
+                    <ul className="mt-3 space-y-2">
+                      {dueSoon.slice(0, 5).map((ticket) => (
+                        <li key={ticket.id}>
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/it/tickets/${ticket.id}`)}
+                            className="flex w-full items-center justify-between gap-2 rounded-control border border-line bg-surface-sunken p-2 text-left text-xs transition hover:border-line-strong hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+                          >
+                            <span className="min-w-0">
+                              <span className="block truncate text-fg-secondary">{ticket.title}</span>
+                              <span className="text-fg-faint">{slaStateLabel(ticket.sla?.state ?? "none")}</span>
+                            </span>
+                            <CountdownChip dueAt={ticket.sla?.resolve_due_at ?? null} done={isDoneStatus(ticket.status)} />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
                   )}
-                </div>
-              )}
-            </section>
+                </section>
 
-            <section aria-label="Comments from SOC" className="rounded-card border border-line bg-surface p-4">
-              <h2 className="text-sm font-semibold text-fg-primary">Comments from SOC</h2>
-              {loading ? (
-                <Skeleton count={2} className="h-12 w-full" />
-              ) : recentSocComments.length === 0 ? (
-                <p className="mt-2 text-xs text-fg-muted">No comments on your tickets yet.</p>
-              ) : (
-                <ul className="mt-3 space-y-2">
-                  {recentSocComments.map(({ ticket, comment }) => (
-                    <li key={comment.id}>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedTicketId(ticket.id)}
-                        className="w-full rounded-control border border-line bg-surface-sunken p-2 text-left text-xs transition hover:border-line-strong hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
-                      >
-                        <p className="flex items-center justify-between font-medium text-fg-primary">
-                          {comment.authorName}
-                          <span className="font-normal text-fg-faint">{ticket.ticketNumber}</span>
-                        </p>
-                        <p className="mt-1 line-clamp-2 text-fg-muted">{comment.body}</p>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-          </div>
-        </div>
+                <section aria-label="Comments from SOC" className="rounded-card border border-line bg-surface p-4">
+                  <h2 className="text-sm font-semibold text-fg-primary">Comments from SOC</h2>
+                  {commentsLoading ? (
+                    <Skeleton count={2} className="h-12 w-full" />
+                  ) : socComments.length === 0 ? (
+                    <p className="mt-2 text-xs text-fg-muted">No comments on your tickets yet.</p>
+                  ) : (
+                    <ul className="mt-3 space-y-2">
+                      {socComments.map((comment) => (
+                        <li key={`${comment.ticketId}-${comment.at}`}>
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/it/tickets/${comment.ticketId}`)}
+                            className="w-full rounded-control border border-line bg-surface-sunken p-2 text-left text-xs transition hover:border-line-strong hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+                          >
+                            <p className="flex items-center justify-between font-medium text-fg-primary">
+                              Platform SOC
+                              <span className="font-normal text-fg-faint">{comment.ticketNumber}</span>
+                            </p>
+                            <p className="mt-1 line-clamp-2 text-fg-muted">{comment.body}</p>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+
+                <section aria-label="Runbooks" className="rounded-card border border-line bg-surface p-4">
+                  <h2 className="text-sm font-semibold text-fg-primary">Runbooks</h2>
+                  <p className="mt-1 text-xs text-fg-muted">Reference procedures for common remediations.</p>
+                  <Link to="/it/runbooks" className="mt-2 inline-block text-xs text-brand-400 hover:text-brand-300">
+                    Open the runbook library
+                  </Link>
+                </section>
+              </div>
+            </div>
+          )}
+        </>
       )}
+    </div>
+  )
+}
 
-      <section aria-label="Assets I own">
-        <h2 className="mb-2 text-sm font-semibold text-fg-primary">Assets I own</h2>
-        <DataTable
-          columns={assetColumns}
-          rows={myAssets}
-          getRowId={(a) => a.id}
-          ariaLabel="Assets I own"
-          loading={loading}
-          emptyState={
-            <p className="p-4 text-center text-xs text-fg-muted">No assets are linked to your open tickets.</p>
-          }
-        />
-      </section>
+/** One ticket on the "My work" board -- a lighter TaskCard wired to the
+ * API's TicketRow (the old mock shape had its own checklist/evidence
+ * arrays; the real checklist lives on the detail page). */
+function TaskMiniCard({ ticket, onOpen }: { ticket: TicketRow; onOpen: () => void }) {
+  const isDone = isDoneStatus(ticket.status)
+  const isVerification = ticket.status === "VERIFICATION"
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault()
+          onOpen()
+        }
+      }}
+      className="cursor-pointer rounded-card border border-line bg-surface p-3 text-xs transition hover:border-line-strong hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-mono text-[11px] text-fg-faint">{ticket.ticket_number}</span>
+        <SeverityBadge severity={ticket.severity} showIcon />
+      </div>
 
-      <TaskDetailDrawer
-        open={selectedTicket !== null}
-        onClose={() => setSelectedTicketId(null)}
-        ticket={selectedTicket}
-        asset={selectedAsset}
-        onToggleChecklistItem={handleToggleChecklistItem}
-        onAddEvidence={handleAddEvidence}
-        onAddComment={handleAddComment}
-      />
+      <p className="mt-2 line-clamp-2 font-medium text-fg-primary">{ticket.title}</p>
+
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <Badge tone={ticket.priority === "P1" ? "danger" : "brand"}>{ticket.priority ?? "--"}</Badge>
+        <CountdownChip dueAt={ticket.sla?.resolve_due_at ?? null} done={isDone} />
+      </div>
+
+      <div className="mt-3">
+        {isVerification ? (
+          <p className="rounded-control border border-line bg-surface-sunken px-2 py-1.5 text-center text-fg-muted">
+            Waiting for SOC verification
+          </p>
+        ) : isDone ? (
+          <p className="rounded-control border border-success/20 bg-success/10 px-2 py-1.5 text-center text-success-fg">
+            {ticket.status === "CLOSED" ? "Closed" : "Resolved"}
+          </p>
+        ) : ticket.sla?.state === "breached" ? (
+          <p className="rounded-control border border-critical/20 bg-critical/10 px-2 py-1.5 text-center text-critical-fg">
+            SLA breached -- prioritize
+          </p>
+        ) : (
+          <p className="rounded-control border border-line bg-surface-sunken px-2 py-1.5 text-center text-fg-muted">
+            Open to work the checklist
+          </p>
+        )}
+      </div>
     </div>
   )
 }

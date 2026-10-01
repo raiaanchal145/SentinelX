@@ -43,3 +43,5 @@ postgres-data/
 
 #freebuff
 .freebuff
+# Evidence uploads (P15): per-machine binary blobs, never committed
+data/evidence/

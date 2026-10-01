@@ -1284,12 +1284,22 @@ export type TicketListResponse = {
 export function apiListTickets(params: {
   incident_id?: string
   status?: string
+  priority?: string
+  assignee?: string
+  team_id?: string
+  asset_id?: string
+  sla_state?: string
   organization_id?: string
   limit?: number
 } = {}) {
   const query = new URLSearchParams()
   if (params.incident_id) query.set("incident_id", params.incident_id)
   if (params.status) query.set("status", params.status)
+  if (params.priority) query.set("priority", params.priority)
+  if (params.assignee) query.set("assignee", params.assignee)
+  if (params.team_id) query.set("team_id", params.team_id)
+  if (params.asset_id) query.set("asset_id", params.asset_id)
+  if (params.sla_state) query.set("sla_state", params.sla_state)
   if (params.organization_id) query.set("organization_id", params.organization_id)
   if (params.limit) query.set("limit", String(params.limit))
   const qs = query.toString()
@@ -1331,4 +1341,165 @@ export function apiTransitionTicket(ticketId: string, payload: { status: string;
 
 export function apiAutoAssignTicket(ticketId: string) {
   return request<TicketRow>(`/tickets/${ticketId}/auto-assign`, { method: "POST" })
+}
+
+// ---------------------------------------------------------------------------
+// Ticket detail + IT working surface (P15): the full detail payload,
+// task checklist, comments, and evidence upload/download.
+// ---------------------------------------------------------------------------
+
+export type TicketTaskRow = {
+  id: string
+  title: string
+  description: string | null
+  status: string
+  assignee_user_id: string | null
+  due_at: string | null
+  completed_at: string | null
+}
+
+export type TicketCommentRow = {
+  id: string
+  body: string
+  is_internal: boolean
+  author_type: string
+  author_id: string | null
+  created_at: string | null
+}
+
+export type TicketEvidenceRow = {
+  id: string
+  evidence_type: string
+  title: string
+  description: string | null
+  /** The client's original filename -- metadata only, never the name on
+   * disk (that is a random uuid under the org's evidence directory). */
+  filename: string | null
+  size_bytes: number | null
+  sha256: string | null
+  content_type: string | null
+  added_by_type: string
+  created_at: string | null
+}
+
+export type TicketDetailResponse = {
+  ticket: TicketRow
+  incident: { id: string; title: string; status: string } | null
+  /** The transition map's row for this ticket's status, filtered to what
+   * THIS caller may do -- render action buttons from this, never from a
+   * hard-coded map. */
+  allowed_next_states: string[]
+  comments: TicketCommentRow[]
+  tasks: TicketTaskRow[]
+  evidence: TicketEvidenceRow[]
+  status_history: {
+    from_status: string | null
+    to_status: string | null
+    changed_by_type: string
+    changed_by_id: string | null
+    note: string | null
+    changed_at: string | null
+  }[]
+  assignments: {
+    assigned_team_id: string | null
+    assigned_user_id: string | null
+    assigned_by_type: string
+    reason: string | null
+    created_at: string | null
+  }[]
+  verifications: {
+    result: string
+    notes: string | null
+    verified_by_type: string
+    created_at: string | null
+  }[]
+}
+
+export function apiGetTicket(ticketId: string) {
+  return request<TicketDetailResponse>(`/tickets/${ticketId}`)
+}
+
+export function apiCreateTicketTask(ticketId: string, payload: { title: string; description?: string }) {
+  return request<TicketTaskRow>(`/tickets/${ticketId}/tasks`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function apiUpdateTicketTask(
+  ticketId: string,
+  taskId: string,
+  payload: { status?: "open" | "in_progress" | "completed" | "blocked"; title?: string },
+) {
+  return request<TicketTaskRow>(`/tickets/${ticketId}/tasks/${taskId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function apiDeleteTicketTask(ticketId: string, taskId: string) {
+  return request<void>(`/tickets/${ticketId}/tasks/${taskId}`, { method: "DELETE" })
+}
+
+export function apiAddTicketComment(ticketId: string, body: string) {
+  // IT callers write shared comments only -- the backend 403s internal
+  // from this role, so the UI never offers the choice.
+  return request<{ id: string; is_internal: boolean }>(`/tickets/${ticketId}/comments`, {
+    method: "POST",
+    body: JSON.stringify({ body, is_internal: false }),
+  })
+}
+
+export function apiUploadTicketEvidence(
+  ticketId: string,
+  file: File,
+  meta: { title?: string; description?: string } = {},
+) {
+  const token = localStorage.getItem("sentinelx_token")
+  const form = new FormData()
+  form.append("file", file)
+  if (meta.title) form.append("title", meta.title)
+  if (meta.description) form.append("description", meta.description)
+  return fetch(`${API_BASE}/tickets/${ticketId}/evidence/upload`, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    body: form,
+  }).then(async (response) => {
+    if (!response.ok) {
+      let message = "The upload failed."
+      let code: string | undefined
+      try {
+        const data = await response.json()
+        if (typeof data?.detail === "string") message = data.detail
+        else if (data?.detail?.message) message = data.detail.message
+        code = data?.detail?.code
+      } catch {
+        // no body
+      }
+      throw new ApiError(message, response.status, code)
+    }
+    return (await response.json()) as TicketEvidenceRow & { ticket_id: string }
+  })
+}
+
+export function ticketEvidenceDownloadUrl(ticketId: string, evidenceId: string) {
+  return `${API_BASE}/tickets/${ticketId}/evidence/${evidenceId}/download`
+}
+
+/** Download one evidence file through the authenticated endpoint. */
+export async function apiDownloadTicketEvidence(ticketId: string, evidenceId: string, filename: string) {
+  const token = localStorage.getItem("sentinelx_token")
+  const response = await fetch(ticketEvidenceDownloadUrl(ticketId, evidenceId), {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  })
+  if (!response.ok) throw new ApiError("The download failed.", response.status)
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }
