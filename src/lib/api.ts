@@ -1284,12 +1284,22 @@ export type TicketListResponse = {
 export function apiListTickets(params: {
   incident_id?: string
   status?: string
+  priority?: string
+  assignee?: string
+  team_id?: string
+  asset_id?: string
+  sla_state?: string
   organization_id?: string
   limit?: number
 } = {}) {
   const query = new URLSearchParams()
   if (params.incident_id) query.set("incident_id", params.incident_id)
   if (params.status) query.set("status", params.status)
+  if (params.priority) query.set("priority", params.priority)
+  if (params.assignee) query.set("assignee", params.assignee)
+  if (params.team_id) query.set("team_id", params.team_id)
+  if (params.asset_id) query.set("asset_id", params.asset_id)
+  if (params.sla_state) query.set("sla_state", params.sla_state)
   if (params.organization_id) query.set("organization_id", params.organization_id)
   if (params.limit) query.set("limit", String(params.limit))
   const qs = query.toString()
@@ -1416,7 +1426,11 @@ export function apiCreateTicketTask(ticketId: string, payload: { title: string; 
   })
 }
 
-export function apiUpdateTicketTask(ticketId: string, taskId: string, payload: { done?: boolean; title?: string }) {
+export function apiUpdateTicketTask(
+  ticketId: string,
+  taskId: string,
+  payload: { status?: "open" | "in_progress" | "completed" | "blocked"; title?: string },
+) {
   return request<TicketTaskRow>(`/tickets/${ticketId}/tasks/${taskId}`, {
     method: "PATCH",
     body: JSON.stringify(payload),
