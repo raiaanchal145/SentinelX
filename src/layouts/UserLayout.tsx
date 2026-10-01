@@ -9,7 +9,6 @@ import {
 } from "react"
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
 import {
-  Bell,
   ChevronDown,
   LogOut,
   Menu,
@@ -17,12 +16,12 @@ import {
   ShieldCheck,
 } from "lucide-react"
 
-import IconButton from "../components/ui/IconButton"
 import DropdownMenu, { type DropdownMenuItem } from "../components/ui/DropdownMenu"
 import Drawer from "../components/ui/Drawer"
 import Breadcrumbs, { type Crumb } from "../components/ui/Breadcrumbs"
 import StatusDot from "../components/ui/StatusDot"
 import ConnectivityBanner from "../components/shared/ConnectivityBanner"
+import NotificationBell from "../components/notifications/NotificationBell"
 import { useHealthStatus } from "../hooks/useHealthStatus"
 import { ROLE_NAV } from "../lib/roleNav"
 import { getSession, logout, roleLabel } from "../lib/auth"
@@ -139,10 +138,8 @@ function UserLayout() {
     },
   ]
 
-  const notificationItems: DropdownMenuItem[] = [
-    { key: "empty", label: "No new notifications", onSelect: () => {}, disabled: true },
-  ]
-  const unreadCount = 0
+  // P16: the live notification bell (unread count + dropdown) replaces
+  // the mock notification items block.
 
   return (
     <div className="flex min-h-screen flex-col bg-canvas text-fg-primary">
@@ -213,21 +210,7 @@ function UserLayout() {
             </kbd>
           </button>
 
-          <DropdownMenu
-            label="Notifications"
-            align="right"
-            items={notificationItems}
-            trigger={
-              <span className="relative inline-flex">
-                <IconButton icon={Bell} label="Notifications" />
-                {unreadCount > 0 && (
-                  <span className="absolute -right-1 -top-1 flex h-4 min-w-[16px] items-center justify-center rounded-pill bg-critical px-1 text-[10px] font-bold text-fg-primary">
-                    {unreadCount}
-                  </span>
-                )}
-              </span>
-            }
-          />
+          <NotificationBell />
 
           <StatusDot status={health} showLabel={false} className="hidden md:inline-flex" />
 

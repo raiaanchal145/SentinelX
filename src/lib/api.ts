@@ -62,7 +62,7 @@ type StatsOverview = {
   organizations: number
 }
 
-async function request<T>(
+export async function request<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
