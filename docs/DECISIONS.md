@@ -805,3 +805,30 @@ is inert by construction; the original name lives only in
 `Content-Disposition: attachment` (with `X-Content-Type-Options:
 nosniff`). Rows are never deleted through the API -- retirement will
 be an audited flow.
+
+## Notification preferences are opt-out defaults-on, stored as deviations (P16)
+
+A brand-new account hears about every event on both channels (the
+user's call: "All on"), so a MISSING `notification_preferences` row
+means ON and the service only consults the table to silence an event.
+This inverts the usual "seed defaults" pattern: no backfill for
+existing accounts, no drift between code and seeded rows, and PUT
+/delete become symmetric -- setting an event back to all-ON deletes
+its row, so the table only ever holds deviations. The GET resolves
+missing rows to ON so the UI always shows the full truth.
+
+Routing is also a table (`app/notifications.py::EVENTS`), not scattered
+send calls: adding an event = one row there + one `notify()` call at
+the cause site. The SOC-of-the-org route resolves differently by soc
+mode (managed -> assigned platform analysts, in-house -> own analyst),
+which is the same boundary rule the ticket/incident modules enforce --
+the notification layer just reuses it. The owner rides along on SLA
+and verification events (oversight), and high-severity (critical +
+high) alerts page the SOC from the worker.
+
+Email goes through the worker with 3 attempts and never blocks: Redis
+down -> enqueue_work already logs and returns None; SMTP down in dev ->
+the job logs the message instead of spinning retries; a hard failure
+after 3 attempts is logged and the in-app row still exists. In-app
+rows are written in the CAUSING transaction, so a notification can
+never be visible for an action that was rolled back.

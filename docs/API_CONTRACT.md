@@ -989,6 +989,42 @@ evidence_add|task_create|task_update|task_delete`), and, when the
 ticket is linked to an incident, one `incident_timeline` entry -- all
 in the same transaction.
 
+## Notifications: `/api/v1/notifications` (P16)
+
+In-app + email notifications that cross the platform/organization
+boundary. One service (`app/notifications.py::notify`) is the only
+sender: other code passes an event key + payload and never builds
+messages itself. Routing lives in the service's EVENTS table:
+
+- **SOC of the organization** (base route, by soc mode): managed ->
+  the platform SOC analysts ASSIGNED to the org; in-house -> the org's
+  own soc_analyst users. Ticket needs-verification, verification
+  failed/reopened, SLA events, approvals, high-severity alerts.
+- **+ the organization owner** on SLA at-risk/breach, needs-verification,
+  verification outcomes (oversight; DECISIONS.md "Owner included").
+- **+ the ticket's IT assignee** on assignment, verification failed/reopened.
+- **High-severity alerts** (critical AND high) page the org's SOC from
+  the worker's alert creation.
+
+Every notification row carries `template_key` (the event key) and the
+in-app rows carry `related_type`/`related_id` for deep links. Email
+delivery is a worker job (`send_notification_email`, 3 attempts) that
+logs instead of sending when SMTP is not configured (dev); enqueue
+failures and delivery failures NEVER fail the action that caused the
+notification.
+
+| Method & path | Who | Notes |
+|---|---|---|
+| `GET /` | any authenticated org account | The caller's in-app feed. Unread first, then newest; keyset cursor on (read state, created_at, id); `unread_only`, `limit`; response carries the live `unread_count`. |
+| `POST /{id}/read` | the recipient | Marks one read; a foreign id is 404 (never a leak). |
+| `POST /read-all` | the recipient | Marks every unread row read. |
+| `GET /preferences` | any authenticated org account | Every known event key with the caller's resolved switches -- a missing preference row resolves to all-ON (opt-out defaults; DECISIONS.md). |
+| `PUT /preferences` | any authenticated org account | Upserts `{event_key, in_app, email}` rows; setting an event back to all-ON DELETES its row (the default needs no storage). Unknown event key 422. |
+
+Isolation: every query filters on (recipient_type, recipient_id) ==
+the caller's account -- notifications are readable only by the account
+they were written for, regardless of organization.
+
 ## Background worker
 
 `app/worker/` (Arq -- docs/DECISIONS.md) consumes the Redis queue
@@ -999,6 +1035,10 @@ never fails a request when Redis is down. The worker's heartbeat cron
 Postgres alone; worker startup fails fast with a clear error when Redis
 is unreachable. The dev launcher starts Redis and a worker terminal
 with the rest of the stack and checks both in `dev:doctor`.
+
+P16 adds `send_notification_email` (see "Notifications"): one job per
+notification email, 3 attempts, and in dev without SMTP it logs the
+message instead of sending.
 
 The worker's jobs: `heartbeat`, `process_events` (event
 normalization, then inline detection evaluation AND the P10 alerting

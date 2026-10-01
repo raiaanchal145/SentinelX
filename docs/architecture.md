@@ -73,6 +73,7 @@ Current routes / screens (see `App.tsx` for the authoritative list):
 | `/manager/*` | security_manager | `/manager/assets` is the real asset inventory (write); `/manager/incidents(/:id)` is the real read-only incident oversight (P14); every other route is a mock-data dashboard; every route but `/manager` itself is `ModuleGuard`-wrapped (`incidents`/`approvals`/`reports`/`assets`/`audit_logs`) |
 | `/organization/incidents(/:id)` | organization_admin | real read-only incident oversight (P14) — same shared components as the manager view; for managed orgs the timeline arrives shared-only from the API |
 | `/auditor/*` | auditor | `/auditor/assets` is the real, read-only asset inventory; every other route is a mock-data dashboard; every route but `/auditor` itself is `ModuleGuard`-wrapped (`audit_logs`/`incidents`/`assets`/`reports`) |
+| `/notifications(/preferences)` | every UserLayout role (soc_analyst, it_developer, security_manager, auditor) | real notifications (P16): the top bar's bell (unread count + dropdown) and the full feed/preferences pages; the API isolates every account's rows |
 | `/soc-dashboard`, `/it-dashboard` | -- | legacy paths, redirect to `/soc`/`/it` |
 
 ## Backend
