@@ -18,6 +18,7 @@ from app.routers import (
     events,
     incidents,
     invitations,
+    notifications,
     organization,
     stats,
     tickets,
@@ -94,3 +95,4 @@ app.include_router(incidents.router)
 app.include_router(tickets.router)
 app.include_router(approvals.router)
 app.include_router(assignment_rules.router)
+app.include_router(notifications.router)
