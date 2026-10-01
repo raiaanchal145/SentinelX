@@ -37,7 +37,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,6 +46,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.access import require_module, soc_visible_organization_ids
 from app.audit import audit_from_scope
 from app.database import get_db
+from app.evidence import (
+    EVIDENCE_TYPE_BY_KIND,
+    FileTooLargeError,
+    open_evidence_file,
+    store_evidence_file,
+)
 from app.models import Ticket, TicketStatus as TicketStatusOpen
 from app.models import (
     ActorType,
@@ -54,6 +61,8 @@ from app.models import (
     AlertHistory,
     AlertStatus,
     Asset,
+    Evidence,
+    EvidenceType,
     Incident,
     IncidentAlert,
     IncidentAsset,
@@ -1598,3 +1607,137 @@ async def add_comment(
     )
     await db.commit()
     return {"id": str(incident.id), "visibility": payload.visibility}
+
+
+# ---------------------------------------------------------------------------
+# Evidence uploads (P15): files on the incident itself. The ticket side
+# lives in app/routers/tickets.py -- both share app/evidence.py storage.
+# ---------------------------------------------------------------------------
+
+
+def _incident_evidence_row(evidence: Evidence) -> dict:
+    content = evidence.content or {}
+    return {
+        "id": str(evidence.id),
+        "incident_id": str(evidence.incident_id),
+        "ticket_id": str(evidence.ticket_id) if evidence.ticket_id else None,
+        "evidence_type": evidence.evidence_type.value
+        if hasattr(evidence.evidence_type, "value")
+        else evidence.evidence_type,
+        "title": evidence.title,
+        "description": evidence.description,
+        "filename": content.get("filename"),
+        "size_bytes": content.get("size_bytes"),
+        "sha256": evidence.sha256,
+        "content_type": content.get("content_type"),
+        "added_by_type": evidence.added_by_type.value
+        if hasattr(evidence.added_by_type, "value")
+        else evidence.added_by_type,
+        "created_at": evidence.created_at.isoformat() if evidence.created_at else None,
+    }
+
+
+@router.post("/{incident_id}/evidence/upload", status_code=201)
+async def upload_incident_evidence(
+    incident_id: uuid.UUID,
+    file: UploadFile = File(...),
+    title: str | None = None,
+    description: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    scope: Scope = Depends(_require_incidents_read),
+):
+    """Multipart evidence upload on the incident: SOC-side writers only
+    (the incident write gate -- IT developers attach through their
+    tickets, not directly to the incident). Same storage rules as the
+    ticket side: random name on disk, sniffed type, SHA-256, org dir."""
+    incident = await _visible_incident(db, scope, incident_id)
+    await _require_incident_write(db, scope, incident.organization_id)
+
+    data = await file.read()
+    original_name = file.filename or ""
+    try:
+        storage_ref, sniffed = store_evidence_file(incident.organization_id, original_name, data)
+    except FileTooLargeError as exc:
+        raise _err("evidence_too_large", str(exc), 413) from exc
+    except ValueError as exc:
+        raise _err("evidence_unsupported_type", str(exc), 415) from exc
+
+    actor_type, actor_id = _actor(scope)
+    evidence = Evidence(
+        organization_id=incident.organization_id,
+        incident_id=incident.id,
+        ticket_id=None,
+        evidence_type=EvidenceType(EVIDENCE_TYPE_BY_KIND[sniffed.kind]),
+        title=(title or original_name).strip()[:250] or "Evidence",
+        description=description,
+        storage_ref=storage_ref,
+        sha256=sniffed.sha256,
+        content={
+            "filename": original_name,
+            "size_bytes": sniffed.size,
+            "content_type": sniffed.content_type,
+            "kind": sniffed.kind,  # pdf vs zip vs log -- the enum only has log|file|screenshot
+        },
+        added_by_type=actor_type,
+        added_by_id=actor_id,
+    )
+    db.add(evidence)
+    await _append_timeline(
+        db,
+        incident,
+        entry_type="evidence",
+        description=f"Evidence uploaded: {original_name} ({sniffed.size} bytes).",
+        scope=scope,
+        metadata={"evidence_id": str(evidence.id), "sha256": sniffed.sha256},
+    )
+    await _audit(
+        db,
+        scope,
+        incident,
+        action="incident.evidence_add",
+        after={"filename": original_name, "sha256": sniffed.sha256, "size_bytes": sniffed.size},
+    )
+    await db.commit()
+    await db.refresh(evidence)
+    return _incident_evidence_row(evidence)
+
+
+@router.get("/{incident_id}/evidence/{evidence_id}/download")
+async def download_incident_evidence(
+    incident_id: uuid.UUID,
+    evidence_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    scope: Scope = Depends(_require_incidents_read_or_it),
+):
+    """Authenticated download; cross-org ids are 404 (never a leak).
+    IT developers may download evidence of their own org's incidents
+    through their shared window (this is how ticket evidence reaches
+    them when it was attached to the incident)."""
+    incident = await _visible_incident(db, scope, incident_id)
+    evidence = (
+        await db.execute(
+            select(Evidence).where(
+                Evidence.id == evidence_id,
+                Evidence.incident_id == incident.id,
+                Evidence.organization_id == incident.organization_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if evidence is None or evidence.storage_ref is None:
+        raise _err("evidence_not_found", "Evidence not found.", 404)
+
+    try:
+        _, data = open_evidence_file(evidence.storage_ref)
+    except (ValueError, OSError) as exc:
+        raise _err("evidence_not_found", "The evidence file is missing from storage.", 404) from exc
+
+    filename = (evidence.content or {}).get("filename") or "evidence.bin"
+    safe_name = filename.replace('"', "")
+    return Response(
+        content=data,
+        media_type=(evidence.content or {}).get("content_type") or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )

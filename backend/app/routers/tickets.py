@@ -30,7 +30,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +39,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.access import require_module
 from app.audit import audit_from_scope
 from app.database import get_db
+from app.evidence import (
+    EVIDENCE_MAX_BYTES,
+    EVIDENCE_TYPE_BY_KIND,
+    SUPPORTED_KINDS,
+    FileTooLargeError,
+    open_evidence_file,
+    store_evidence_file,
+)
 from app.models import (
     ActorType,
     Admin,
@@ -652,7 +661,14 @@ async def get_ticket(
                 "id": str(e.id),
                 "evidence_type": e.evidence_type.value if hasattr(e.evidence_type, "value") else e.evidence_type,
                 "title": e.title,
+                "description": e.description,
+                "filename": (e.content or {}).get("filename"),
+                "size_bytes": (e.content or {}).get("size_bytes"),
+                "sha256": e.sha256,
+                "content_type": (e.content or {}).get("content_type"),
                 "storage_ref": e.storage_ref,
+                "added_by_type": e.added_by_type.value if hasattr(e.added_by_type, "value") else e.added_by_type,
+                "added_by_id": str(e.added_by_id) if e.added_by_id else None,
                 "created_at": e.created_at.isoformat() if e.created_at else None,
             }
             for e in evidence
@@ -1307,6 +1323,8 @@ async def delete_task(
 
 
 class EvidencePayload(BaseModel):
+    """The JSON metadata path: note / command_output evidence without a
+    file, or storage_ref metadata for externally-stored content."""
     evidence_type: str = "note"
     title: str = Field(min_length=1, max_length=250)
     description: str | None = None
@@ -1320,6 +1338,15 @@ class EvidencePayload(BaseModel):
         return value
 
 
+async def _evidence_writer_gate(db: AsyncSession, scope: Scope, ticket: Ticket) -> None:
+    """Who may attach evidence to this ticket: IT of its own org, or a
+    SOC-side writer. Read-only callers (owner, security_manager) 403."""
+    if scope.role == UserRole.it_developer.value:
+        await _require_it_write(db, scope, ticket)
+    else:
+        await _require_ticket_soc_write(db, scope, ticket.organization_id)
+
+
 @router.post("/{ticket_id}/evidence", status_code=201)
 async def add_evidence(
     ticket_id: uuid.UUID,
@@ -1327,11 +1354,18 @@ async def add_evidence(
     db: AsyncSession = Depends(get_db),
     scope: Scope = Depends(_read_gate),
 ):
+    """Evidence WITHOUT a file: typed note / command_output metadata.
+    For file uploads use the multipart variant on the same path. Like
+    every evidence row, this needs a linked incident -- the evidence
+    table is incident-scoped by design (NOT NULL + RESTRICT)."""
     ticket = await _visible_ticket(db, scope, ticket_id)
-    if scope.role == UserRole.it_developer.value:
-        await _require_it_write(db, scope, ticket)
-    else:
-        await _require_ticket_soc_write(db, scope, ticket.organization_id)
+    await _evidence_writer_gate(db, scope, ticket)
+    if ticket.incident_id is None:
+        raise _err(
+            "evidence_requires_incident",
+            "Evidence needs a linked incident; standalone tickets cannot carry evidence rows.",
+            422,
+        )
 
     actor_type, actor_id = _actor(scope)
     evidence = Evidence(
@@ -1349,13 +1383,144 @@ async def add_evidence(
     await _audit(db, scope, ticket, action="ticket.evidence_add", after={"title": evidence.title})
     await db.commit()
     await db.refresh(evidence)
-    return {
+    return _evidence_row(evidence, ticket_id=ticket.id)
+
+
+@router.post("/{ticket_id}/evidence/upload", status_code=201)
+async def upload_ticket_evidence(
+    ticket_id: uuid.UUID,
+    file: UploadFile = File(...),
+    title: str | None = None,
+    description: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    scope: Scope = Depends(_read_gate),
+):
+    """Multipart evidence upload: the file is stored under the org's
+    evidence directory with a random name (the client's filename never
+    touches the filesystem), sniffed for its real type, hashed, and
+    recorded on the Evidence row. Requires a linked incident (the
+    evidence table's FK is NOT NULL -- standalone tickets can carry
+    note/command_output evidence only).
+
+    Evidence rows are never deleted through the API: retire only (P19+,
+    audited); the file itself stays on disk for the record."""
+    ticket = await _visible_ticket(db, scope, ticket_id)
+    await _evidence_writer_gate(db, scope, ticket)
+
+    if ticket.incident_id is None:
+        raise _err(
+            "evidence_requires_incident",
+            "Evidence needs a linked incident; standalone tickets cannot carry evidence rows.",
+            422,
+        )
+
+    data = await file.read()
+    original_name = file.filename or ""
+    try:
+        storage_ref, sniffed = store_evidence_file(ticket.organization_id, original_name, data)
+    except FileTooLargeError as exc:
+        raise _err("evidence_too_large", str(exc), 413) from exc
+    except ValueError as exc:
+        raise _err("evidence_unsupported_type", str(exc), 415) from exc
+
+    actor_type, actor_id = _actor(scope)
+    evidence = Evidence(
+        organization_id=ticket.organization_id,
+        incident_id=ticket.incident_id,
+        ticket_id=ticket.id,
+        evidence_type=EvidenceType(EVIDENCE_TYPE_BY_KIND[sniffed.kind]),
+        title=(title or original_name).strip()[:250] or "Evidence",
+        description=description,
+        storage_ref=storage_ref,
+        sha256=sniffed.sha256,
+        content={
+            "filename": original_name,
+            "size_bytes": sniffed.size,
+            "content_type": sniffed.content_type,
+            "kind": sniffed.kind,  # pdf vs zip vs log -- the enum only has log|file|screenshot
+        },
+        added_by_type=actor_type,
+        added_by_id=actor_id,
+    )
+    db.add(evidence)
+    await _audit(
+        db,
+        scope,
+        ticket,
+        action="ticket.evidence_add",
+        after={"filename": original_name, "sha256": sniffed.sha256, "size_bytes": sniffed.size},
+    )
+    await db.commit()
+    await db.refresh(evidence)
+    return _evidence_row(evidence, ticket_id=ticket.id)
+
+
+@router.get("/{ticket_id}/evidence/{evidence_id}/download")
+async def download_ticket_evidence(
+    ticket_id: uuid.UUID,
+    evidence_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    scope: Scope = Depends(_read_gate),
+):
+    """Authenticated download: org scope is enforced by the ticket's
+    visibility (a cross-org id is 404, never a leak), the response is
+    always an attachment with the sniffed content type and nosniff."""
+    ticket = await _visible_ticket(db, scope, ticket_id)
+    evidence = (
+        await db.execute(
+            select(Evidence).where(
+                Evidence.id == evidence_id,
+                Evidence.ticket_id == ticket.id,
+                Evidence.organization_id == ticket.organization_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if evidence is None or evidence.storage_ref is None:
+        raise _err("evidence_not_found", "Evidence not found.", 404)
+
+    content = _download_evidence_bytes(evidence)
+    filename = (evidence.content or {}).get("filename") or "evidence.bin"
+    safe_name = filename.replace('"', "")
+    return Response(
+        content=content,
+        media_type=(evidence.content or {}).get("content_type") or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+def _download_evidence_bytes(evidence: Evidence) -> bytes:
+    try:
+        _, data = open_evidence_file(evidence.storage_ref)
+    except (ValueError, OSError) as exc:
+        raise _err("evidence_not_found", "The evidence file is missing from storage.", 404) from exc
+    return data
+
+
+def _evidence_row(evidence: Evidence, *, ticket_id: uuid.UUID | None = None, incident_id: uuid.UUID | None = None) -> dict:
+    """The evidence row shape shared by list, create and upload."""
+    content = evidence.content or {}
+    row = {
         "id": str(evidence.id),
-        "ticket_id": str(ticket.id),
-        "evidence_type": evidence.evidence_type.value,
+        "evidence_type": evidence.evidence_type.value if hasattr(evidence.evidence_type, "value") else evidence.evidence_type,
         "title": evidence.title,
+        "description": evidence.description,
+        "filename": content.get("filename"),
+        "size_bytes": content.get("size_bytes"),
+        "sha256": evidence.sha256,
+        "content_type": content.get("content_type"),
         "storage_ref": evidence.storage_ref,
+        "added_by_type": evidence.added_by_type.value if hasattr(evidence.added_by_type, "value") else evidence.added_by_type,
+        "added_by_id": str(evidence.added_by_id) if evidence.added_by_id else None,
+        "created_at": evidence.created_at.isoformat() if evidence.created_at else None,
     }
+    if ticket_id is not None:
+        row["ticket_id"] = str(ticket_id)
+    if incident_id is not None:
+        row["incident_id"] = str(incident_id)
+    return row
 
 
 # ---------------------------------------------------------------------------
