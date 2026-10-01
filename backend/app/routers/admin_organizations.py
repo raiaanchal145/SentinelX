@@ -693,6 +693,23 @@ async def resend_owner_invitation(
     except Exception as exc:
         print(f"[SentinelX] Failed to send invitation email to {invitation.email}: {exc}")
 
+    # P16: record the resend as a notification event too (the SOC's
+    # in-app trail of what happened to this org's onboarding).
+    from app.notifications import notify
+
+    await notify(
+        db,
+        "invitation.resend",
+        organization_id=organization_id,
+        payload={
+            "organization_name": org.name if org else "",
+            "email": invitation.email,
+            "related_type": "invitation",
+            "related_id": invitation.id,
+        },
+    )
+    await db.commit()
+
     return {"id": str(invitation.id), "status": invitation.status, "expires_at": invitation.expires_at.isoformat()}
 
 

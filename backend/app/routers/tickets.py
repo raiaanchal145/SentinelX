@@ -951,6 +951,23 @@ async def transition_ticket(
         before={"status": from_status.value},
         after={"status": target.value, **({"note": payload.note} if payload.note else {})},
     )
+    # P16: IT's submission for verification is the hand-off -- the org's
+    # SOC (and owner) learn that the fix awaits their verification.
+    if target == TicketStatus.verification and it_caller:
+        from app.notifications import notify
+
+        await notify(
+            db,
+            "ticket.needs_verification",
+            organization_id=ticket.organization_id,
+            payload={
+                "ticket_id": str(ticket.id),
+                "ticket_number": ticket.ticket_number,
+                "ticket_title": ticket.title,
+                "related_type": "ticket",
+                "related_id": ticket.id,
+            },
+        )
     await db.commit()
     await db.refresh(ticket)
     return _row(ticket)
@@ -1058,6 +1075,23 @@ async def assign_ticket(
                      "user_id": str(payload.user_id) if payload.user_id else None,
                      "reason": payload.reason,
                  })
+    if payload.user_id:
+        # P16: the assignee hears about it in-app and by email (prefs
+        # respected; a failure never fails the assignment).
+        from app.notifications import notify
+
+        await notify(
+            db,
+            "ticket.assigned",
+            organization_id=ticket.organization_id,
+            payload={
+                "ticket_id": str(ticket.id),
+                "ticket_number": ticket.ticket_number,
+                "ticket_title": ticket.title,
+                "related_type": "ticket",
+                "related_id": ticket.id,
+            },
+        )
     await db.commit()
     await db.refresh(ticket)
     return _row(ticket)
@@ -1615,6 +1649,29 @@ async def verify_ticket(
         before={"status": from_status.value},
         after={"status": target.value, "result": result.value},
     )
+    # P16: verification outcomes cross the boundary -- failed/reopened go
+    # back to the org's SOC and owner (plus the IT assignee, who re-works
+    # the ticket); "verified" needs no notification (the SOC did it).
+    from app.notifications import notify
+
+    verification_event = {
+        VerificationResult.verified: None,
+        VerificationResult.failed: "ticket.verification_failed",
+        VerificationResult.reopened: "ticket.reopened",
+    }.get(result)
+    if verification_event is not None:
+        await notify(
+            db,
+            verification_event,
+            organization_id=ticket.organization_id,
+            payload={
+                "ticket_id": str(ticket.id),
+                "ticket_number": ticket.ticket_number,
+                "ticket_title": ticket.title,
+                "related_type": "ticket",
+                "related_id": ticket.id,
+            },
+        )
     await db.commit()
     await db.refresh(ticket)
     return _row(ticket)
@@ -1690,6 +1747,21 @@ async def request_ticket_close(
         metadata={"ticket_id": str(ticket.id), "approval_id": None},
     )
     await _audit(db, scope, ticket, action="ticket.close_request", after={"priority": ticket.priority})
+    # P16: the organization's approvers (owner, security_manager) hear
+    # that a P1 close needs their decision.
+    from app.notifications import notify
+
+    await notify(
+        db,
+        "approval.requested",
+        organization_id=ticket.organization_id,
+        payload={
+            "action_type": "ticket_close",
+            "ticket_number": ticket.ticket_number,
+            "related_type": "ticket",
+            "related_id": ticket.id,
+        },
+    )
     await db.commit()
     await db.refresh(approval)
     return {

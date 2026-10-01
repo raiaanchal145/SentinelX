@@ -147,6 +147,44 @@ async def decide_approval(
         before={"status": "pending"},
         after={"status": payload.decision, "action_type": approval.action_type},
     )
+    # P16: the requesting SOC hears the verdict (in-app + email).
+    from app.models import Organization
+
+    from app.notifications import notify
+
+    org = await db.get(Organization, approval.organization_id)
+    await notify(
+        db,
+        "approval.decided",
+        organization_id=approval.organization_id,
+        payload={
+            "action_type": approval.action_type,
+            "decision": payload.decision,
+            "related_type": "approval",
+            "related_id": approval.id,
+        },
+    )
+    if approval.action_type == "ticket_close" and approval.action_payload:
+        # The close gate consumes the decision -- make sure the ticket-side
+        # SOC also hears it even if the requester was a different analyst.
+        ticket_id = approval.action_payload.get("ticket_id")
+        if ticket_id:
+            from app.models import Ticket
+
+            ticket = await db.get(Ticket, uuid.UUID(ticket_id))
+            if ticket is not None:
+                await notify(
+                    db,
+                    "approval.decided",
+                    organization_id=ticket.organization_id,
+                    payload={
+                        "action_type": "ticket_close",
+                        "decision": payload.decision,
+                        "organization_name": org.name if org else "",
+                        "related_type": "ticket",
+                        "related_id": ticket.id,
+                    },
+                )
     await db.commit()
     await db.refresh(approval)
     return _row(approval)

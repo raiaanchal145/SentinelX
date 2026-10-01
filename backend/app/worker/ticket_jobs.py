@@ -94,9 +94,40 @@ async def ticket_sla_check(
                         )
                     )
                     escalations += 1
+                    # P16: the breach crosses the boundary -- the org's SOC
+                    # AND its owner hear about it (in-app + email, prefs
+                    # respected; a failure never fails the sweep).
+                    from app.notifications import notify
+
+                    await notify(
+                        db,
+                        "ticket.sla_breached",
+                        organization_id=ticket.organization_id,
+                        payload={
+                            "ticket_id": str(ticket.id),
+                            "ticket_number": ticket.ticket_number,
+                            "ticket_title": ticket.title,
+                            "related_type": "ticket",
+                            "related_id": ticket.id,
+                        },
+                    )
             elif at_risk and not ticket.sla_at_risk:
                 ticket.sla_at_risk = True
                 marked_at_risk += 1
+                from app.notifications import notify
+
+                await notify(
+                    db,
+                    "ticket.sla_at_risk",
+                    organization_id=ticket.organization_id,
+                    payload={
+                        "ticket_id": str(ticket.id),
+                        "ticket_number": ticket.ticket_number,
+                        "ticket_title": ticket.title,
+                        "related_type": "ticket",
+                        "related_id": ticket.id,
+                    },
+                )
 
         await db.commit()
 

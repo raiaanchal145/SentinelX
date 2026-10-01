@@ -279,6 +279,26 @@ async def create_alerts_for_hits(
                 detail={"dedup_key": dedup_key, "hit_id": str(hit.id)},
             )
         )
+        # P16: a critical/high alert pages the on-duty SOC (the org's
+        # soc route by mode -- platform analysts for managed, own analyst
+        # for in-house). In-app always; email if the preference allows.
+        if hit.severity in (EventSeverity.critical, EventSeverity.high):
+            from app.notifications import notify
+
+            await notify(
+                db,
+                "alert.high_severity",
+                organization_id=organization_id,
+                payload={
+                    "severity": hit.severity.value if hasattr(hit.severity, "value") else str(hit.severity),
+                    "alert_title": f"{hit.rule_name} -- {hit.group_key}",
+                    "alert_description": (
+                        f"{hit.event_count} event(s) matched '{hit.rule_name}' for {hit.group_key}."
+                    ),
+                    "related_type": "alert",
+                    "related_id": alert.id,
+                },
+            )
         created += 1
 
     return created
