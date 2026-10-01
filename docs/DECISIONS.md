@@ -770,3 +770,38 @@ When any of the C-extension pins above is bumped, re-check wheel coverage
 for the new version on PyPI and update this entry and the README's
 First-time setup step together -- the README number is derived from this
 decision, not maintained independently.
+
+## Evidence upload policy: sniffed types, inert zip, incident-scoped rows (P15)
+
+The brief allowed zip "only if you propose a safe policy". The policy:
+**zip is allowed and stored completely inert** -- the API never
+extracts, lists or inspects archive contents, so zip bombs, nested
+paths and symlink tricks in the archive are irrelevant to the server;
+the only thing that ever happens to a stored zip is an authenticated
+byte-for-byte download. A single-file size cap still applies
+(`EVIDENCE_MAX_UPLOAD_MB`, default 10) so the disk can't be walked
+with one request; a per-organization quota can come later if needed.
+
+Type checking is by **magic-byte sniffing, never the client's declared
+content-type**: png/jpeg/pdf/zip by magic, text by "utf-8 decodable
+with no NUL bytes", everything else (binaries, executables) rejected
+with 415. The `EvidenceType` enum (models.py, frozen by migrations)
+only has log|file|screenshot -- pdf and zip upload as `file` with the
+precise kind in `content.kind`, so no migration was needed and none of
+the existing rows change meaning.
+
+File upload needs a **linked incident**: the evidence table's
+`incident_id` is NOT NULL with ON DELETE RESTRICT -- evidence is part
+of the incident's record by design. Standalone tickets get 422
+`evidence_requires_incident` on BOTH evidence paths (the old JSON
+endpoint looked like it accepted them and then died on the DB
+constraint; the API now says so up front).
+
+**Filenames never touch the filesystem**: the stored name is
+`{organization_id}/{uuid}` under `EVIDENCE_STORAGE_DIR` (default
+`backend/data/evidence/`, outside the web root). A traversal filename
+is inert by construction; the original name lives only in
+`content.filename` metadata and comes back in the download's
+`Content-Disposition: attachment` (with `X-Content-Type-Options:
+nosniff`). Rows are never deleted through the API -- retirement will
+be an audited flow.
