@@ -18,6 +18,7 @@ Create Date: 2026-10-01
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 revision = "e7f8a9b0c1d2"
 down_revision = "b9d2e3f4a5c6"
@@ -33,8 +34,21 @@ def upgrade() -> None:
         sa.Column("id", sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("organization_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=False),
         # Polymorphic account reference (admins | users), like
-        # notifications.recipient_id -- no FK by design.
-        sa.Column("account_type", sa.Enum("admin", "user", name="actor_type", native_enum=True), nullable=False),
+        # notifications.recipient_id -- no FK by design. References the
+        # SHARED actor_type enum (models.ActorType); create_type=False
+        # (the house pattern) or CREATE TYPE fails on the existing enum.
+        sa.Column(
+            "account_type",
+            postgresql.ENUM(
+                "admin",
+                "user",
+                "ai_agent",
+                "system",
+                name="actor_type",
+                create_type=False,
+            ),
+            nullable=False,
+        ),
         sa.Column("account_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("event_key", sa.String(length=80), nullable=False),
         sa.Column("in_app", sa.Boolean(), nullable=False, server_default=sa.text("true")),
