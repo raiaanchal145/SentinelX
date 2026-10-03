@@ -30,8 +30,8 @@ from alembic.config import Config
 
 from app.config import settings
 
-MIGRATION_HEAD = "a8c1e5f7b9d0"  # tickets remediation workflow (bumped each new migration)
-PREVIOUS_REVISION = "d3e4f5a6b7c8"  # -1 from HEAD lands on the alerts.created_at repair
+MIGRATION_HEAD = "b0c1d2e3f4a5"  # ai layer cost caps and defaults (bumped each new migration)
+PREVIOUS_REVISION = "e7f8a9b0c1d2"  # -1 from HEAD lands on the notification preferences migration
 SCRATCH_DB = "sentinelx_migration_scratch"
 
 

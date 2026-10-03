@@ -666,7 +666,15 @@ class OrganizationSettings(Base):
     auto_ticket_threshold: Mapped[EventSeverity | None] = mapped_column(
         Enum(EventSeverity, name="event_severity")
     )
-    ai_enabled: Mapped[bool] = mapped_column(default=True)
+    # AI analysis (the AI SOC Analyst milestone) -- OFF by default: an
+    # organization must opt in, and only after the platform admin
+    # enabled the `ai_agents` module. Both gates checked at run time.
+    ai_enabled: Mapped[bool] = mapped_column(default=False)
+    # Per-organization cost caps for AI calls, in USD. NULL = fall back
+    # to the platform defaults in app/config.py (cost-safe defaults,
+    # not unlimited) -- a missing cap must never mean "spend freely".
+    ai_daily_cost_cap_usd: Mapped[float | None] = mapped_column(Float)
+    ai_monthly_cost_cap_usd: Mapped[float | None] = mapped_column(Float)
     # Auto-ticket creation (P13): an incident auto-creates a remediation
     # ticket when severity >= auto_ticket_threshold AND confidence >=
     # auto_ticket_min_confidence. Either column NULL = "that half of the
@@ -1648,10 +1656,21 @@ class AgentRun(Base):
     # target_id=<alerts.id> -- polymorphic, so no FK.
     target_type: Mapped[str] = mapped_column(String(40), nullable=False)
     target_id: Mapped[uuid.UUID | None] = mapped_column()
+    # "running" | "succeeded" | "fallback" | "failed" -- a plain string
+    # so new states never need a Postgres enum migration.
     status: Mapped[str] = mapped_column(String(30), default="running")
     input: Mapped[dict | None] = mapped_column(JSONB)
+    # SHA-256 hex of the canonical prompt input -- lets an auditor prove
+    # two runs saw the same data (or find who re-ran a changed alert)
+    # without storing the full prompt twice.
+    input_hash: Mapped[str | None] = mapped_column(String(64))
     output: Mapped[dict | None] = mapped_column(JSONB)
     tokens_used: Mapped[int | None] = mapped_column(Integer)
+    # Real dollar cost of the call from the provider's reported token
+    # counts and the model price table (app/ai/client.py). Float like
+    # the other numeric columns in this schema; 6 significant decimals
+    # is plenty at sub-cent magnitudes.
+    cost_usd: Mapped[float | None] = mapped_column(Float)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -1671,6 +1690,11 @@ class AiAnalysis(Base):
     # "alert" | "incident" -- polymorphic, so no FK.
     target_type: Mapped[str] = mapped_column(String(40), nullable=False)
     target_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    # "ai" (model produced it) or "rules" (deterministic fallback --
+    # AI disabled/over budget/unavailable; docs/DECISIONS.md). Every
+    # analysis row is marked so an AI-versus-rules metric (P18/P25 of
+    # the AI SOC Analyst doc) never has to guess.
+    source: Mapped[str | None] = mapped_column(String(20))
     summary: Mapped[str | None] = mapped_column(Text)
     reasoning: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[float | None] = mapped_column(Float)
@@ -1678,6 +1702,13 @@ class AiAnalysis(Base):
     severity_suggestion: Mapped[EventSeverity | None] = mapped_column(
         Enum(EventSeverity, name="event_severity")
     )
+    # Evidence grounding: the event ids the model CITED, validated to
+    # be a subset of the ids it was actually shown -- a model inventing
+    # evidence ids is a hallucination signal, not a fact (AI SOC Analyst
+    # doc §24 "evidence grounding").
+    evidence_ids: Mapped[list | None] = mapped_column(JSONB)
+    # 0.0..1.0 model-estimated chance this is a false positive.
+    false_positive_likelihood: Mapped[float | None] = mapped_column(Float)
     # Whether an analyst accepted the recommendation -- feeds an
     # "AI acceptance rate" metric later.
     accepted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(

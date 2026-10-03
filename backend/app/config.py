@@ -68,6 +68,28 @@ class Settings(BaseSettings):
     evidence_storage_dir: str = "data/evidence"
     evidence_max_upload_mb: int = 10
 
+    # AI analysis (AI SOC Analyst milestone). The provider is called
+    # with plain httpx against the OpenAI chat-completions schema -- no
+    # SDK (docs/DECISIONS.md, provider decision). A blank openai_api_key
+    # means AI is UNAVAILABLE: every triage falls back to the
+    # deterministic rule-based summary and nothing ever calls the
+    # network. Tests always use the fake provider and never read these.
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
+    ai_model: str = "gpt-4o-mini"
+    ai_request_timeout_seconds: float = 30.0
+    ai_max_retries: int = 2  # after the first attempt fails w/ 429/5xx/timeout
+    ai_max_output_tokens: int = 800
+    # Cost caps applied when the organization has no explicit cap set
+    # (organization_settings.ai_*_cost_cap_usd IS NULL). Deliberately
+    # modest: a missing cap must never mean "spend freely".
+    ai_default_daily_cost_cap_usd: float = 2.0
+    ai_default_monthly_cost_cap_usd: float = 10.0
+    # Character budget for the untrusted-data block built from alert
+    # events/logs -- truncation keeps one alert from eating the context
+    # window (and the budget) with a log flood.
+    ai_data_block_max_chars: int = 12_000
+
 
 DEFAULT_SECRET_KEY = "sentinelx-dev-secret-change-me"
 
