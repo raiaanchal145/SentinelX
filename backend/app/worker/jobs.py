@@ -31,6 +31,10 @@ from app.worker.ticket_jobs import ticket_sla_check  # noqa: E402,F401
 # logs the message instead (app/worker/notification_jobs.py).
 from app.worker.notification_jobs import send_notification_email  # noqa: E402,F401
 
+# AI triage (AI SOC Analyst milestone) -- one alert per job; all gating
+# and fallback logic lives in app/ai/service.py.
+from app.worker.ai_jobs import ai_triage_alert  # noqa: E402,F401
+
 
 async def heartbeat(ctx: dict[str, Any], session_factory=None) -> dict[str, Any]:
     """
@@ -111,6 +115,18 @@ async def on_startup(ctx: dict[str, Any]) -> None:
     except Exception:  # noqa: BLE001 -- seeding failure is logged, not fatal
         logger.exception("alerting: correlation rule seeding failed -- rules may be stale")
 
+    # Seed the AI agent rows (AI SOC Analyst milestone) -- get-or-create
+    # by name; the triage service also self-heals if this was skipped.
+    try:
+        from app.ai.service import ensure_triage_agent
+
+        async with ctx["session_factory"]() as db:
+            agent = await ensure_triage_agent(db)
+            await db.commit()
+        logger.info("ai: agent '%s' ready (model=%s)", agent.name, agent.model)
+    except Exception:  # noqa: BLE001 -- seeding failure is logged, not fatal
+        logger.exception("ai: agent seeding failed -- the service will retry on first run")
+
 
 async def on_shutdown(ctx: dict[str, Any]) -> None:
     from app.worker.event_jobs import reset_detection_store
@@ -120,7 +136,13 @@ async def on_shutdown(ctx: dict[str, Any]) -> None:
 
 
 # The registry: both arq's function list and what enqueue_work() accepts.
-JOB_FUNCTIONS = [heartbeat, process_events, ticket_sla_check, send_notification_email]
+JOB_FUNCTIONS = [
+    heartbeat,
+    process_events,
+    ticket_sla_check,
+    send_notification_email,
+    ai_triage_alert,
+]
 
 
 class WorkerSettings:

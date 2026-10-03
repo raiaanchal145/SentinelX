@@ -69,17 +69,22 @@ async def _run_detection(ctx: dict[str, Any], db, organization_id: uuid.UUID, st
         )
         alerts_created = 0
         correlations_created = 0
+        new_alert_ids: list[uuid.UUID] = []
         if hits:
-            alerts_created = await create_alerts_for_hits(
+            alerts_created, detection_alert_ids = await create_alerts_for_hits(
                 db,
                 organization_id=organization_id,
                 hits=hits,
                 stored_events=stored_rows,
             )
+            new_alert_ids.extend(detection_alert_ids)
             # Correlation sees the alerts created so far (including this
             # batch's) -- it reads committed-or-pending rows in this
             # same session/transaction.
-            correlations_created = await run_correlations(db, organization_id=organization_id)
+            correlations_created, correlated_ids = await run_correlations(
+                db, organization_id=organization_id
+            )
+            new_alert_ids.extend(correlated_ids)
         await db.commit()
         if alerts_created or correlations_created:
             logger.info(
@@ -88,6 +93,13 @@ async def _run_detection(ctx: dict[str, Any], db, organization_id: uuid.UUID, st
                 alerts_created,
                 correlations_created,
             )
+        # AI triage fires AFTER the commit, so the job only ever reads
+        # committed rows. Redis down -> enqueue logs and returns; the
+        # alert just has no analysis, nothing else breaks.
+        if new_alert_ids:
+            from app.worker.ai_jobs import enqueue_triage_for_alerts
+
+            await enqueue_triage_for_alerts(new_alert_ids)
         return len(hits)
     except Exception:  # noqa: BLE001 -- detection must not break ingestion
         logger.exception("detection: evaluation failed for org %s -- hits from this batch may be missing", organization_id)
