@@ -1025,6 +1025,36 @@ Isolation: every query filters on (recipient_type, recipient_id) ==
 the caller's account -- notifications are readable only by the account
 they were written for, regardless of organization.
 
+## AI triage: `/api/v1/organization/ai-settings` (AI SOC Analyst)
+
+AI triage runs automatically on every new alert (worker job
+`ai_triage_alert`, enqueued after the alert commit). Its only
+configuration surface is the organization owner's settings endpoint;
+every AI artifact is written read-only alongside the alert:
+`agent_runs` (status/input_hash/tokens/cost/latency) plus one
+`ai_analyses` row per run carrying `severity_suggestion`,
+`confidence`, `summary`, `reasoning`, `recommended_actions`,
+`evidence_ids` (the event ids the model cited -- validated to be a
+subset of what it was shown), `false_positive_likelihood`, and
+`source`: **"ai"** when the model produced it, **"rules"** for a
+deterministic fallback (AI disabled per org, module off, over a cost
+cap, provider unavailable, or unparseable/ungrounded output -- the
+reason lands on `agent_runs.error`). Suggestions never mutate alert
+state; consuming them in the UI is a later milestone.
+
+| Method & path | Who | Notes |
+|---|---|---|
+| `GET /ai-settings` | organization owner only | `ai_enabled`, `platform_module_enabled` (the WHY for a blocked enable), resolved `daily_cost_cap_usd`/`monthly_cost_cap_usd` (explicit value, else platform default), the raw `explicit_*` caps (NULL = use default), `platform_defaults`, and live `spent_today_usd`/`spent_this_month_usd` summed from `agent_runs.cost_usd`. |
+| `PATCH /ai-settings` | organization owner only | Partial update of `{ai_enabled, ai_daily_cost_cap_usd, ai_monthly_cost_cap_usd}`. Enabling requires the platform admin's `ai_agents` module to be enabled for this organization first (403 `ai_agents_module_disabled` otherwise). A cap of 0 is valid ("spend nothing") and distinct from NULL ("use platform default"); negative values 400 `invalid_cost_cap`. Audited as `ai_settings.update` with before/after. |
+
+Cost gating is service-side, not endpoint-side: before each call the
+service sums the org's `agent_runs.cost_usd` for the day and month and
+falls back to rules when a cap would be exceeded (caps: org value,
+else `AI_DEFAULT_DAILY/MONTHLY_COST_CAP_USD`; NULL never means
+unlimited). With no `OPENAI_API_KEY` configured, AI is simply
+unavailable and every triage is a marked rules fallback -- no code
+path calls the network.
+
 ## Background worker
 
 `app/worker/` (Arq -- docs/DECISIONS.md) consumes the Redis queue
@@ -1043,10 +1073,13 @@ message instead of sending.
 The worker's jobs: `heartbeat`, `process_events` (event
 normalization, then inline detection evaluation AND the P10 alerting
 halves -- see "Event ingestion and read API", "Detection rules" and
-"Alerts" above), and `ticket_sla_check` (every minute: SLA at-risk and
-breach marking + breach escalations -- see "Tickets" above). Worker
-startup also seeds the 8 built-in detection rules and the built-in
-correlation rule idempotently.
+"Alerts" above), `ticket_sla_check` (every minute: SLA at-risk and
+breach marking + breach escalations -- see "Tickets" above), and
+`ai_triage_alert` (one job per new alert id, enqueued after the alert
+commit -- see "AI triage" above; writes agent_runs + ai_analyses
+never alert state). Worker startup also seeds the 8 built-in
+detection rules, the built-in correlation rule, and the triage agent
+("soc-triage") idempotently.
 
 ## Error code reference (structured-detail endpoints only)
 
@@ -1068,3 +1101,5 @@ correlation rule idempotently.
 | `invalid_role` | 400 | `organization.py` `_validate_role` |
 | `module_not_default_for_role` / `module_disabled_by_platform` | 422 | `organization.py` access matrix PUT |
 | `module_not_available` | 403 | `require_module` |
+| `ai_agents_module_disabled` / `invalid_cost_cap` | 403 / 400 | `organization.py` PATCH ai-settings |
+| `organization_settings_missing` | 500 | `organization.py` PATCH ai-settings (data-integrity; row always exists in practice) |

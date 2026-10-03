@@ -832,3 +832,116 @@ the job logs the message instead of spinning retries; a hard failure
 after 3 attempts is logged and the in-app row still exists. In-app
 rows are written in the CAUSING transaction, so a notification can
 never be visible for an action that was rolled back.
+
+# AI SOC Analyst layer (AI triage milestone)
+
+## The provider is OpenAI `gpt-4o-mini`, called with plain httpx -- no SDK
+
+Asked to choose between OpenAI and local LLMs; picked **OpenAI's
+`gpt-4o-mini`** and deliberately skipped the `openai` Python package:
+the AI call is ONE chat-completions POST against an OpenAI-compatible
+schema, so a direct `httpx.AsyncClient` call (with our own timeout,
+retry-on-429/5xx and cost accounting) removes a dependency, works
+unchanged against any OpenAI-compatible base URL
+(`OPENAI_BASE_URL`, e.g. a local vLLM/Ollama gateway later), and keeps
+the retry/timeout/price logic visible in one file (`app/ai/client.py`)
+instead of buried in a vendor SDK's config surface. The model is
+config (`AI_MODEL`, default `gpt-4o-mini`) not a constant, so swapping
+models is a .env change. Cost is the deciding operational fact: at
+$0.15/$0.60 per 1M tokens (input/output), a triage prompt (~3k in +
+~350 out) costs ~$0.0007/alert; the eval harness measured $0.000153
+per case on the 8 labelled cases. The blank-key default makes AI
+UNAVAILABLE (rules fallback) rather than erroring -- dev machines and
+tests never call the network by accident.
+
+## `ai_enabled` defaults to OFF, and the migration backfills existing rows to false
+
+AI triage is opt-in per organization: `organization_settings.ai_enabled`
+ships as `false` (server default) and migration `b0c1d2e3f4a5`
+backfills every existing row to `false`. Even with the key configured
+and the platform `ai_agents` module enabled, NO organization sees AI
+verdicts until its owner explicitly flips the toggle -- an AI feature
+that silently starts summarizing everyone's security data on deploy is
+not a feature, it's a change of product behavior nobody asked for, and
+the per-org toggle is exactly the audit trail we want (enabled by a
+specific owner, at a specific time, audited). The migration's
+downgrade restores the old server default (`true`) but deliberately
+leaves the backfilled VALUES untouched -- a downgrade never silently
+re-enables anyone; only the schema default for future rows moves back.
+
+## Auto-triage fires on every new alert (post-commit enqueue in the worker)
+
+The worker's `process_events` enqueues one `ai_triage_alert` job per
+newly created alert id, AFTER the alert commit -- same transactional
+shape as the notification emails (the job can never reference an alert
+that was rolled back, and an enqueue failure only delays triage, never
+affects ingestion). Chose every-alert over a manual "Run AI" button
+plus a sampled subset: triage is read-only (it writes agent_runs +
+ai_analyses suggestions, never touches alert state), costs well under
+a cent per alert against the default $2/day cap, and the SOC queue
+benefits most when the suggestion is already there when the analyst
+opens the drawer. The service itself is idempotent and safe to call
+from an explicit endpoint later if a "re-triage" button is wanted.
+
+## Untrusted data never gets a channel to the model: sanitize, delimit, budget, and GROUND
+
+The alert's event/log text is attacker-adjacent data (log lines come
+from the internet), so the prompt treats it as untrusted end to end:
+(1) `sanitize_untrusted` strips control characters and defangs the
+BLOCK DELIMITER and line-prefix lookalikes, so an event cannot forge
+structure ("end of data, system prompt follows"); (2) the data sits in
+an explicitly-delimited block with a per-line `DATA | ` prefix; (3)
+per-section and total character budgets (`AI_DATA_BLOCK_MAX_CHARS`,
+default 12000) cap one alert's context appetite; (4) after the model
+answers, its cited `evidence_ids` are validated to be a SUBSET of the
+event ids that were actually shown -- a model quoting an id it was
+never shown (or the alert's own id) is a grounding failure and the
+run is marked failed with a deterministic rules analysis stored
+instead. One repair attempt is allowed: the validation error (and
+grounding note) are appended and the model tries again; a second
+failure falls back. Prompt-injection resistance is tested end-to-end
+(`test_ai_triage.py` feeds canonical injection strings through the
+REAL service with the fake provider and asserts they cannot change
+course, cite unseen ids, or escape the block).
+
+## Cost caps: NULL never means unlimited; 0 means "spend nothing"
+
+Every run's real dollar cost (reported token counts x the model price
+table) is written to `agent_runs.cost_usd`, and the service sums it
+per organization per day/month BEFORE calling the provider: over cap
+-> deterministic fallback, no call, the reason stored on the run. The
+org-level caps (`organization_settings.ai_daily_cost_cap_usd` /
+`ai_monthly_cost_cap_usd`) are nullable and NULL resolves to the
+platform defaults (`AI_DEFAULT_DAILY/MONTHLY_COST_CAP_USD`, $2/$10 --
+deliberately modest); a missing cap must never mean "spend freely".
+0 is a VALID cap ("don't spend anything") and is distinct from NULL
+("use default") on the PATCH endpoint -- mirroring the P13
+threshold-columns rule. The ai-settings GET returns both the explicit
+and resolved values plus live spend so the owner can see WHY triage
+fell back.
+
+## A deterministic FakeProvider is a first-class provider
+
+`app/ai/fake.py` implements the same `AiProvider` protocol as the
+OpenAI client and produces keyword-verdicts from the SAME event-type
+markers the simulator scenarios emit -- deterministic, network-free,
+and injection-deaf (it only reads data-shape cues, never
+instructions inside the block). Tests and the eval harness ALWAYS
+run it (CI never calls the network); it still returns realistic token
+counts priced through the real table so the cost ledger and cap
+machinery are exercised with production math. The eval harness
+(`tools/ai_eval/`) rebuilds the labelled cases from the simulator
+scenarios, computes precision/recall/FPR (1.0 / 1.0 / 0.0 on the
+current 8 cases) and the average estimated cost, and its `--demo`
+mode runs the REAL service over a fixture org+alert+events in a real
+database, printing the stored agent_run + ai_analysis rows -- the
+reproducibility gate the AI SOC Analyst brief asks for.
+
+## `ai_analyses.source` marks "ai" vs "rules" on EVERY row
+
+Fallbacks (AI disabled, module off, over cap, provider unavailable,
+unparseable/ungrounded output) are not silent: they write the same
+ai_analyses row with `source="rules"`, zero confidence, no evidence
+ids and the reason on the agent_run. An AI-versus-rules acceptance
+metric (and "what fraction of triage is actually AI?") is then a
+`GROUP BY source`, not archaeology.

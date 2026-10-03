@@ -281,6 +281,70 @@ admin's organization detail has a read-only Assets tab backed by
 `GET /admin/organizations/{id}/assets`, and the platform SOC queue embeds
 a read-only assets view of the selected assigned organization.
 
+## The AI triage agent (AI SOC Analyst layer)
+
+The AI layer is ONE entry point other agents plug into:
+`app/ai/service.py::run_triage_for_alert(db, alert_id)` -- pass an
+alert id, get an `agent_runs` + `ai_analyses` row pair back. It never
+raises for AI reasons: every failure mode (provider down, key missing,
+over budget, unparseable or ungrounded output) degrades to a
+deterministic rules analysis marked `source="rules"` with the reason
+on the run. The worker calls it automatically for every new alert
+(`ai_triage_alert`, enqueued after the alert commit), so suggestions
+are already in the database when an analyst opens the alert.
+
+Package layout (`app/ai/`):
+
+```
+client.py    AiProvider protocol + OpenAICompatProvider: one httpx
+             POST against an OpenAI-compatible schema (no SDK),
+             timeout + retry with backoff on 429/5xx/transport only,
+             token/cost accounting against PRICE_TABLE, within_cap()
+             cost gating. build_provider() returns the OpenAI client
+             only when OPENAI_API_KEY is set, else signals unavailable.
+schemas.py   TriageResult (severity/confidence/summary/evidence_ids/
+             false_positive_likelihood/...), parse_triage_output()
+             with fence tolerance and grounding_failures() -- the
+             model's cited event ids must be a subset of the ids it
+             was actually shown.
+prompts.py   build_triage_messages(): untrusted alert/event text is
+             sanitized (control chars stripped, delimiter/tag
+             lookalikes defanged), wrapped in an explicitly delimited
+             DATA block with per-line prefixes and per-section + total
+             character budgets, under a fixed system prompt. The model
+             never sees raw log text outside the block.
+fake.py      FakeProvider: deterministic keyword verdicts over the
+             simulator's event-type markers, network-free, used by
+             every test and the eval harness (AI SOC Analyst doc:
+             reproducibility). It also returns realistic token counts
+             priced through the real table, so the cost ledger is
+             exercised with production math.
+fallback.py  build_fallback_result(): the rules-marked analysis.
+service.py   run_triage_for_alert(): gates (module -> ai_enabled ->
+             daily/monthly caps with org override else platform
+             defaults), provider call, ONE repair attempt appending
+             validation/grounding errors, grounding failure ->
+             failed run + rules fallback, persistence.
+```
+
+Cost accounting is real money, not tokens: every run stores
+`cost_usd` (reported tokens x model price), the service sums it per
+organization per day/month BEFORE calling, and a cap hit falls back
+to rules with the reason stored. Caps resolve org value -> platform
+default; NULL never means unlimited, and 0 means "spend nothing".
+The provider is `gpt-4o-mini` over plain httpx (docs/DECISIONS.md),
+~$0.0007/alert at list prices.
+
+The eval harness lives in `tools/ai_eval/`: `runner.py --seed N`
+prints precision/recall/FPR and the average estimated cost over the
+labelled cases rebuilt from the simulator scenarios (currently 8
+cases: precision 1.0, recall 1.0, FPR 0.0, $0.000153/case);
+`runner.py --demo` builds a fixture organization + alert + events in
+a real database, runs the REAL service with the fake provider, and
+prints the stored agent_run + ai_analysis rows (cleaning up after
+itself). Tests pin the injection/truncation/grounding behavior
+end-to-end through the real service (`backend/tests/test_ai_triage.py`).
+
 ## The mock data layer (frontend)
 
 ```
