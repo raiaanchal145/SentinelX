@@ -19,6 +19,7 @@ import uuid
 from typing import Any
 
 from app.ai.service import run_triage_for_alert
+from app.ai.incident_service import run_incident_draft_for_incident
 from app.worker.queue import enqueue_work  # noqa: F401 -- re-exported for tests to patch
 
 logger = logging.getLogger("sentinelx.ai")
@@ -46,4 +47,29 @@ async def ai_triage_alert(ctx: dict[str, Any], *, alert_id: str) -> dict[str, An
         run = await run_triage_for_alert(db, alert_uuid)
         if run is None:
             return {"status": "missing_alert"}
+        return {"status": run.status, "run_id": str(run.id), "cost_usd": run.cost_usd}
+
+
+async def enqueue_incident_draft(incident_id: str) -> None:
+    """Fire one incident-draft job. Best-effort: an enqueue failure
+    (Redis down) only delays the draft, never blocks the incident."""
+    await enqueue_work("ai_incident_draft", incident_id=incident_id)
+
+
+async def ai_incident_draft(ctx: dict[str, Any], *, incident_id: str) -> dict[str, Any]:
+    """Worker entry: draft one incident's AI analysis. A vanished
+    incident is a no-op. The service is draft-only: nothing is created
+    from the model output here."""
+    from app.database import AsyncSessionLocal
+
+    try:
+        incident_uuid = uuid.UUID(incident_id)
+    except ValueError:
+        logger.warning("ai: incident job got a non-UUID incident_id %r -- dropping", incident_id)
+        return {"status": "dropped"}
+
+    async with AsyncSessionLocal() as db:
+        run = await run_incident_draft_for_incident(db, incident_uuid)
+        if run is None:
+            return {"status": "missing_incident"}
         return {"status": run.status, "run_id": str(run.id), "cost_usd": run.cost_usd}

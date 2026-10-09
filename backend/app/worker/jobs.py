@@ -33,7 +33,7 @@ from app.worker.notification_jobs import send_notification_email  # noqa: E402,F
 
 # AI triage (AI SOC Analyst milestone) -- one alert per job; all gating
 # and fallback logic lives in app/ai/service.py.
-from app.worker.ai_jobs import ai_triage_alert  # noqa: E402,F401
+from app.worker.ai_jobs import ai_triage_alert, ai_incident_draft  # noqa: E402,F401
 
 
 async def heartbeat(ctx: dict[str, Any], session_factory=None) -> dict[str, Any]:
@@ -142,6 +142,7 @@ JOB_FUNCTIONS = [
     ticket_sla_check,
     send_notification_email,
     ai_triage_alert,
+    ai_incident_draft,
 ]
 
 

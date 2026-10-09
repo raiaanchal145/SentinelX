@@ -8,6 +8,7 @@ from app.database import get_db
 from app.routers import (
     admin_organizations,
     admin_soc,
+    ai,
     alerts,
     approvals,
     assignment_rules,
@@ -96,3 +97,4 @@ app.include_router(tickets.router)
 app.include_router(approvals.router)
 app.include_router(assignment_rules.router)
 app.include_router(notifications.router)
+app.include_router(ai.router)

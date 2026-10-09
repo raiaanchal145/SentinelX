@@ -744,6 +744,11 @@ async def create_incident(
     incident = await _create_incident(db, scope, organization_id=organization_id, payload=payload, alert_ids=[])
     await db.commit()
     await db.refresh(incident)
+    # Best-effort AI draft enqueue (post-commit, mirrors alert triage):
+    # a Redis failure only delays the draft, never the incident.
+    from app.worker.ai_jobs import enqueue_incident_draft
+
+    await enqueue_incident_draft(str(incident.id))
     return _row(incident)
 
 
@@ -819,6 +824,10 @@ async def create_from_alerts(
 
     await db.commit()
     await db.refresh(incident)
+    # Best-effort AI draft enqueue (post-commit, mirrors alert triage).
+    from app.worker.ai_jobs import enqueue_incident_draft
+
+    await enqueue_incident_draft(str(incident.id))
     return _row(incident)
 
 
