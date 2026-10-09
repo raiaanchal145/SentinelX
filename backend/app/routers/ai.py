@@ -214,6 +214,36 @@ async def decide_analysis(
     return _shape_analysis(analysis)
 
 
+@router.get("/ai/alerts/{alert_id}/analysis")
+async def get_alert_analysis(
+    alert_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    scope: Scope = Depends(_require_soc_read),
+):
+    """The alert's latest AI analysis. 404 on a hidden/unknown alert.
+    None when the alert simply has not been triaged yet."""
+    from app.models import Alert
+
+    alert = (await db.execute(select(Alert).where(Alert.id == alert_id))).scalar_one_or_none()
+    if alert is None:
+        raise _err("alert_not_found", "Alert not found.", 404)
+    mode, org_ids = await _ai_visibility(db, scope)
+    if mode == "forbidden" or (mode == "orgs" and alert.organization_id not in (org_ids or [])):
+        raise _err("alert_not_found", "Alert not found.", 404)
+
+    analysis = (
+        await db.execute(
+            select(AiAnalysis)
+            .where(AiAnalysis.target_type == "alert", AiAnalysis.target_id == alert_id)
+            .order_by(AiAnalysis.created_at.desc(), AiAnalysis.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if analysis is None:
+        return {"analysis": None}
+    return {"analysis": _shape_analysis(analysis)}
+
+
 @router.get("/ai/incidents/{incident_id}/analysis")
 async def get_incident_analysis(
     incident_id: uuid.UUID,

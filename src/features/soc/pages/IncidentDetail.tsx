@@ -25,6 +25,7 @@ import {
 import { useMe } from "../../../lib/me"
 
 import { ageLabel } from "../components/alertShared"
+import AiAnalysisPanel from "../components/AiAnalysisPanel"
 import IncidentNoteDialog from "../components/IncidentNoteDialog"
 import IncidentTicketPanel from "../components/IncidentTicketPanel"
 import IncidentTransitionDialog from "../components/IncidentTransitionDialog"
@@ -254,6 +255,9 @@ function IncidentDetail({ platform = false }: { platform?: boolean }) {
             label: "Overview",
             content: (
               <div className="grid gap-4 lg:grid-cols-2">
+                <div className="lg:col-span-2">
+                  <AiAnalysisPanel targetType="incident" targetId={data.incident.id} canWrite={!isReadOnlyCaller(me)} />
+                </div>
                 <section aria-label="Affected assets" className="rounded-card border border-line bg-surface p-4">
                   <h2 className="text-sm font-semibold text-fg-primary">Affected assets</h2>
                   {data.assets.length === 0 ? (
