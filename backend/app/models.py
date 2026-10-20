@@ -224,6 +224,34 @@ class NotificationChannel(str, enum.Enum):
     email = "email"
 
 
+class NotificationPreference(Base):
+    """Per-account, per-event channel switches (P16). Rows are opt-OUT:
+    a missing row means every channel is ON (the service consults this
+    table only to silence an event; docs/DECISIONS.md). One row per
+    (account_type, account_id, event_key)."""
+
+    __tablename__ = "notification_preferences"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    account_type: Mapped[ActorType] = mapped_column(
+        Enum(ActorType, name="actor_type"), nullable=False
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    event_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    in_app: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    email: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("account_type", "account_id", "event_key", name="uq_notification_preferences_account_event"),
+    )
+
+
 class ReportType(str, enum.Enum):
     incident = "incident"
     management = "management"
@@ -638,7 +666,20 @@ class OrganizationSettings(Base):
     auto_ticket_threshold: Mapped[EventSeverity | None] = mapped_column(
         Enum(EventSeverity, name="event_severity")
     )
-    ai_enabled: Mapped[bool] = mapped_column(default=True)
+    # AI analysis (the AI SOC Analyst milestone) -- OFF by default: an
+    # organization must opt in, and only after the platform admin
+    # enabled the `ai_agents` module. Both gates checked at run time.
+    ai_enabled: Mapped[bool] = mapped_column(default=False)
+    # P19: automatic execution of LOW-risk tools (comments, tags,
+    # notify, priority nudges) without a human approval. OFF by default
+    # (fail closed, like ai_enabled): with the flag off, low-risk calls
+    # also route to needs_approval.
+    low_risk_automation_enabled: Mapped[bool] = mapped_column(default=False)
+    # Per-organization cost caps for AI calls, in USD. NULL = fall back
+    # to the platform defaults in app/config.py (cost-safe defaults,
+    # not unlimited) -- a missing cap must never mean "spend freely".
+    ai_daily_cost_cap_usd: Mapped[float | None] = mapped_column(Float)
+    ai_monthly_cost_cap_usd: Mapped[float | None] = mapped_column(Float)
     # Auto-ticket creation (P13): an incident auto-creates a remediation
     # ticket when severity >= auto_ticket_threshold AND confidence >=
     # auto_ticket_min_confidence. Either column NULL = "that half of the
@@ -1522,10 +1563,26 @@ class Approval(Base):
     status: Mapped[ApprovalStatus] = mapped_column(
         Enum(ApprovalStatus, name="approval_status"), default=ApprovalStatus.pending
     )
+    # WHY the action was requested (the requester's own words) and WHY it
+    # was approved/rejected (the reviewer's, required on reject -- P19).
+    requested_reason: Mapped[str | None] = mapped_column(Text)
+    decision_reason: Mapped[str | None] = mapped_column(Text)
+    # The decision record (who approved, separate from the requester) and
+    # WHEN the request stops being approvable -- an expired approval can
+    # never execute (P19: execution re-checks this under a row lock).
     reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    # The incident this action belongs to (tool-flow approvals from P19).
+    # SET NULL: killing the incident must not erase the approval record.
+    incident_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("incidents.id", name="fk_approvals_incident", ondelete="SET NULL")
+    )
+    # Set by the worker job that ran the action. NULL = never executed
+    # (still pending, rejected, or expired). Guarantees one execution.
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -1620,10 +1677,21 @@ class AgentRun(Base):
     # target_id=<alerts.id> -- polymorphic, so no FK.
     target_type: Mapped[str] = mapped_column(String(40), nullable=False)
     target_id: Mapped[uuid.UUID | None] = mapped_column()
+    # "running" | "succeeded" | "fallback" | "failed" -- a plain string
+    # so new states never need a Postgres enum migration.
     status: Mapped[str] = mapped_column(String(30), default="running")
     input: Mapped[dict | None] = mapped_column(JSONB)
+    # SHA-256 hex of the canonical prompt input -- lets an auditor prove
+    # two runs saw the same data (or find who re-ran a changed alert)
+    # without storing the full prompt twice.
+    input_hash: Mapped[str | None] = mapped_column(String(64))
     output: Mapped[dict | None] = mapped_column(JSONB)
     tokens_used: Mapped[int | None] = mapped_column(Integer)
+    # Real dollar cost of the call from the provider's reported token
+    # counts and the model price table (app/ai/client.py). Float like
+    # the other numeric columns in this schema; 6 significant decimals
+    # is plenty at sub-cent magnitudes.
+    cost_usd: Mapped[float | None] = mapped_column(Float)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -1643,6 +1711,11 @@ class AiAnalysis(Base):
     # "alert" | "incident" -- polymorphic, so no FK.
     target_type: Mapped[str] = mapped_column(String(40), nullable=False)
     target_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    # "ai" (model produced it) or "rules" (deterministic fallback --
+    # AI disabled/over budget/unavailable; docs/DECISIONS.md). Every
+    # analysis row is marked so an AI-versus-rules metric (P18/P25 of
+    # the AI SOC Analyst doc) never has to guess.
+    source: Mapped[str | None] = mapped_column(String(20))
     summary: Mapped[str | None] = mapped_column(Text)
     reasoning: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[float | None] = mapped_column(Float)
@@ -1650,6 +1723,13 @@ class AiAnalysis(Base):
     severity_suggestion: Mapped[EventSeverity | None] = mapped_column(
         Enum(EventSeverity, name="event_severity")
     )
+    # Evidence grounding: the event ids the model CITED, validated to
+    # be a subset of the ids it was actually shown -- a model inventing
+    # evidence ids is a hallucination signal, not a fact (AI SOC Analyst
+    # doc §24 "evidence grounding").
+    evidence_ids: Mapped[list | None] = mapped_column(JSONB)
+    # 0.0..1.0 model-estimated chance this is a false positive.
+    false_positive_likelihood: Mapped[float | None] = mapped_column(Float)
     # Whether an analyst accepted the recommendation -- feeds an
     # "AI acceptance rate" metric later.
     accepted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -1669,17 +1749,43 @@ class ToolCallLog(Base):
     __tablename__ = "tool_call_logs"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    agent_run_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", name="fk_tool_call_logs_organization", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
+    # Who ATTEMPTED the call: an agent via its run, a user through the
+    # action endpoints, or the worker executing an approval. agent_run_id
+    # is NULL for user/worker rows (P19 widened it from NOT NULL because
+    # the permission layer now audits people, not only agents).
+    agent_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    actor_type: Mapped[ActorType] = mapped_column(
+        Enum(ActorType, name="actor_type"), nullable=False
+    )
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
     tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
     arguments: Mapped[dict | None] = mapped_column(JSONB)
+    # sha-256 of the canonical JSON of `arguments` -- lets an auditor
+    # prove the executed call used exactly the approved arguments.
+    arguments_hash: Mapped[str | None] = mapped_column(String(64))
     risk_level: Mapped[ApprovalRiskLevel] = mapped_column(
         Enum(ApprovalRiskLevel, name="approval_risk_level"), nullable=False
     )
+    # The policy engine's verdict for THIS attempt: "allow",
+    # "needs_approval" (logged, nothing executed) or "deny" (+ reason in
+    # result). `allowed` stays for compatibility -- True iff decision is
+    # not deny and execution happened on this row.
+    decision: Mapped[str] = mapped_column(String(20), nullable=False)
+    deny_reason: Mapped[str | None] = mapped_column(String(200))
     allowed: Mapped[bool] = mapped_column(nullable=False)
     approval_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("approvals.id", ondelete="SET NULL")
+        ForeignKey("approvals.id", name="fk_tool_call_logs_approval", ondelete="SET NULL"), index=True
+    )
+    # The incident context of a response action, for the SOC's view.
+    incident_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("incidents.id", name="fk_tool_call_logs_incident", ondelete="SET NULL")
     )
     result: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -1712,6 +1818,10 @@ class Notification(Base):
     related_id: Mapped[uuid.UUID | None] = mapped_column()
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The event key that produced this row ("ticket.assigned"...); NULL
+    # on rows written before P16. Drives the frontend's icon/label and
+    # which preference silences it.
+    template_key: Mapped[str | None] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

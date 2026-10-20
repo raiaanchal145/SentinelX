@@ -31,7 +31,9 @@ export default defineConfig({
               // `localhost` resolves to ::1 first on Windows, so a proxy
               // connection landing there is refused (same reason
               // src/lib/apiBase.ts names 127.0.0.1 directly).
-              target: 'http://127.0.0.1:8000',
+              // Port must match BACKEND_PORT in scripts/dev.mjs -- both
+              // default to 8001 (overridable via SENTINELX_BACKEND_PORT).
+              target: `http://127.0.0.1:${process.env.SENTINELX_BACKEND_PORT || '8001'}`,
               changeOrigin: true,
             },
           },

@@ -88,6 +88,8 @@ function Login() {
         user.account_type,
       )
 
+      window.dispatchEvent(new Event("sentinelx_auth_change"))
+
       navigate(homePathFor(user.role))
     } catch (err) {
       if (err instanceof ApiError) {

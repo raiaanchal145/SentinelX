@@ -162,14 +162,16 @@ async def create_alerts_for_hits(
     organization_id: uuid.UUID,
     hits: list[RuleHit],
     stored_events: list[dict[str, Any]],
-) -> int:
+) -> tuple[int, list[uuid.UUID]]:
     """Create-or-fold one alert per (rule, group key, dedup bucket).
-    Returns how many alert rows were created (folds don't count).
+    Returns (how many alert rows were created, their ids) -- folds don't
+    count, and only NEW alerts need an AI triage enqueue (the fold's
+    target alert was already triaged when it was created).
     stored_events is the worker's stored-row view (id, username,
     source_ip, occurred_at, asset_id) -- used to resolve correlation
     keys and link alert_events."""
     if not hits:
-        return 0
+        return 0, []
 
     event_by_id: dict[str, dict[str, Any]] = {str(e["id"]): e for e in stored_events}
 
@@ -183,6 +185,7 @@ async def create_alerts_for_hits(
     }
 
     created = 0
+    created_alerts: list[uuid.UUID] = []
     for hit in hits:
         rule = rules.get(hit.rule_id)
         window_seconds = rule.dedup_window_seconds if rule else 900
@@ -279,9 +282,30 @@ async def create_alerts_for_hits(
                 detail={"dedup_key": dedup_key, "hit_id": str(hit.id)},
             )
         )
-        created += 1
+        # P16: a critical/high alert pages the on-duty SOC (the org's
+        # soc route by mode -- platform analysts for managed, own analyst
+        # for in-house). In-app always; email if the preference allows.
+        if hit.severity in (EventSeverity.critical, EventSeverity.high):
+            from app.notifications import notify
 
-    return created
+            await notify(
+                db,
+                "alert.high_severity",
+                organization_id=organization_id,
+                payload={
+                    "severity": hit.severity.value if hasattr(hit.severity, "value") else str(hit.severity),
+                    "alert_title": f"{hit.rule_name} -- {hit.group_key}",
+                    "alert_description": (
+                        f"{hit.event_count} event(s) matched '{hit.rule_name}' for {hit.group_key}."
+                    ),
+                    "related_type": "alert",
+                    "related_id": alert.id,
+                },
+            )
+        created += 1
+        created_alerts.append(alert.id)
+
+    return created, created_alerts
 
 
 # ---------------------------------------------------------------------------
@@ -325,12 +349,14 @@ async def run_correlations(
     db: AsyncSession,
     *,
     organization_id: uuid.UUID,
-) -> int:
+) -> tuple[int, list[uuid.UUID]]:
     """Evaluate enabled correlation rules for the organization over its
-    recent (30x window) detection alerts. Returns how many correlation
-    rows were created. Deterministic: ordered by (username, first_seen),
-    greedy earliest-match per candidate set, no double-assignment of an
-    alert to two correlations of the same rule."""
+    recent (30x window) detection alerts. Returns (how many correlation
+    rows were created, the new correlated alerts' ids -- those need an
+    AI triage enqueue like any other new alert).
+    Deterministic: ordered by (username, first_seen), greedy
+    earliest-match per candidate set, no double-assignment of an alert
+    to two correlations of the same rule."""
     rules = (
         (
             await db.execute(
@@ -345,7 +371,7 @@ async def run_correlations(
         .all()
     )
     if not rules:
-        return 0
+        return 0, []
 
     recent_window = max(r.time_window_seconds for r in rules) * 10
     cutoff = datetime.now(timezone.utc) - dt.timedelta(seconds=recent_window)
@@ -366,9 +392,10 @@ async def run_correlations(
         .all()
     )
     if len(candidates) < 2:
-        return 0
+        return 0, []
 
     created = 0
+    created_alerts: list[uuid.UUID] = []
     for rule in rules:
         window_seconds = rule.time_window_seconds
         match_names = list((rule.conditions or {}).get("match_rule_names") or [])
@@ -457,5 +484,6 @@ async def run_correlations(
             )
         )
         created += 1
+        created_alerts.append(correlated.id)
 
-    return created
+    return created, created_alerts

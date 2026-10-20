@@ -7,11 +7,12 @@ dependency's docstring for why the overview is the one exception,
 alongside GET /auth/me.
 """
 
+import datetime as dt
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.access import (
@@ -28,12 +29,14 @@ from app.invite_service import build_invite_link, check_invitation_rate_limit, c
 from app.models import (
     AccountEmail,
     ActorType,
+    AgentRun,
     AuditLog,
     Escalation,
     Invitation,
     Organization,
     OrganizationModule,
     OrganizationRoleAccess,
+    OrganizationSettings,
     OrganizationStatus,
     SocMode,
     Team,
@@ -42,7 +45,7 @@ from app.models import (
     UserAccessOverride,
     UserRole,
 )
-from app.modules import ALL_MODULE_KEYS
+from app.modules import ALL_MODULE_KEYS, ModuleKey
 from app.org_summary import compute_org_counts
 from app.scope import Scope
 
@@ -698,3 +701,141 @@ async def update_member_access(
     )
     await db.commit()
     return {"id": str(user_id), "denied_modules": sorted(denied)}
+
+
+# ---------------------------------------------------------------------------
+# AI analysis settings (AI SOC Analyst milestone) -- owner-only, gated on
+# the platform admin's `ai_agents` module toggle.
+# ---------------------------------------------------------------------------
+
+
+class AiSettingsPatchRequest(BaseModel):
+    ai_enabled: bool | None = None
+    # None = "clear my explicit cap, use the platform default" -- a cap
+    # of 0 is meaningful ("spend nothing") and must stay distinct from
+    # NULL ("use default"), mirroring the P13 threshold-columns rule.
+    ai_daily_cost_cap_usd: float | None = None
+    ai_monthly_cost_cap_usd: float | None = None
+
+
+async def _org_module_row(db: AsyncSession, organization_id: uuid.UUID, key: str) -> OrganizationModule | None:
+    return (
+        await db.execute(
+            select(OrganizationModule).where(
+                OrganizationModule.organization_id == organization_id,
+                OrganizationModule.module_key == key,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def _ai_spend_since(db: AsyncSession, organization_id: uuid.UUID, since: dt.datetime) -> float:
+    total = await db.execute(
+        select(func.coalesce(func.sum(AgentRun.cost_usd), 0.0)).where(
+            AgentRun.organization_id == organization_id,
+            AgentRun.started_at >= since,
+            AgentRun.cost_usd.is_not(None),
+        )
+    )
+    return float(total.scalar_one())
+
+
+@router.get("/ai-settings")
+async def get_ai_settings(
+    db: AsyncSession = Depends(get_db),
+    scope: Scope = Depends(require_active_organization),
+    _owner: Scope = Depends(require_org_owner),
+):
+    """The owner's view of the AI toggle: org state, resolved caps, the
+    platform module state (so the UI can say WHY enabling is blocked),
+    and current spend against the caps."""
+    org_settings = (
+        await db.execute(
+            select(OrganizationSettings).where(OrganizationSettings.organization_id == scope.organization_id)
+        )
+    ).scalar_one_or_none()
+    module_row = await _org_module_row(db, scope.organization_id, ModuleKey.ai_agents.value)
+
+    daily_cap = (
+        org_settings.ai_daily_cost_cap_usd
+        if org_settings and org_settings.ai_daily_cost_cap_usd is not None
+        else settings.ai_default_daily_cost_cap_usd
+    )
+    monthly_cap = (
+        org_settings.ai_monthly_cost_cap_usd
+        if org_settings and org_settings.ai_monthly_cost_cap_usd is not None
+        else settings.ai_default_monthly_cost_cap_usd
+    )
+    now = dt.datetime.now(dt.timezone.utc)
+
+    return {
+        "ai_enabled": bool(org_settings and org_settings.ai_enabled),
+        "platform_module_enabled": bool(module_row and module_row.enabled),
+        "daily_cost_cap_usd": daily_cap,
+        "monthly_cost_cap_usd": monthly_cap,
+        "explicit_daily_cap_usd": org_settings.ai_daily_cost_cap_usd if org_settings else None,
+        "explicit_monthly_cap_usd": org_settings.ai_monthly_cost_cap_usd if org_settings else None,
+        "platform_defaults": {
+            "daily_cost_cap_usd": settings.ai_default_daily_cost_cap_usd,
+            "monthly_cost_cap_usd": settings.ai_default_monthly_cost_cap_usd,
+        },
+        "spent_today_usd": await _ai_spend_since(db, scope.organization_id, now.replace(hour=0, minute=0, second=0, microsecond=0)),
+        "spent_this_month_usd": await _ai_spend_since(db, scope.organization_id, now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)),
+    }
+
+
+@router.patch("/ai-settings")
+async def patch_ai_settings(
+    payload: AiSettingsPatchRequest, request: Request,
+    db: AsyncSession = Depends(get_db), scope: Scope = Depends(require_active_organization),
+    _owner: Scope = Depends(require_org_owner),
+):
+    """Owner-only. Enabling AI requires the platform admin to have
+    enabled the `ai_agents` module FIRST -- the toggle is doubly-gated
+    exactly as the AI SOC Analyst brief specifies (onboarding step
+    "Enable AI Analysis" comes after platform setup)."""
+    org_settings = (
+        await db.execute(
+            select(OrganizationSettings).where(OrganizationSettings.organization_id == scope.organization_id)
+        )
+    ).scalar_one_or_none()
+    if org_settings is None:
+        raise _err("organization_settings_missing", "Organization settings row is missing.", status_code=500)
+
+    if payload.ai_enabled is True:
+        module_row = await _org_module_row(db, scope.organization_id, ModuleKey.ai_agents.value)
+        if not (module_row and module_row.enabled):
+            raise _err(
+                "ai_agents_module_disabled",
+                "AI analysis cannot be enabled: the platform admin has not enabled the ai_agents module for this organization.",
+                status_code=403,
+            )
+
+    for field in ("ai_daily_cost_cap_usd", "ai_monthly_cost_cap_usd"):
+        value = getattr(payload, field)
+        if value is not None and value < 0:
+            raise _err("invalid_cost_cap", f"{field} must be >= 0 (0 means 'spend nothing').")
+
+    before = {
+        "ai_enabled": org_settings.ai_enabled,
+        "ai_daily_cost_cap_usd": org_settings.ai_daily_cost_cap_usd,
+        "ai_monthly_cost_cap_usd": org_settings.ai_monthly_cost_cap_usd,
+    }
+    if payload.ai_enabled is not None:
+        org_settings.ai_enabled = payload.ai_enabled
+    if payload.ai_daily_cost_cap_usd is not None:
+        org_settings.ai_daily_cost_cap_usd = payload.ai_daily_cost_cap_usd
+    if payload.ai_monthly_cost_cap_usd is not None:
+        org_settings.ai_monthly_cost_cap_usd = payload.ai_monthly_cost_cap_usd
+    after = {
+        "ai_enabled": org_settings.ai_enabled,
+        "ai_daily_cost_cap_usd": org_settings.ai_daily_cost_cap_usd,
+        "ai_monthly_cost_cap_usd": org_settings.ai_monthly_cost_cap_usd,
+    }
+
+    await audit_from_scope(
+        db, scope, "ai_settings.update", target_type="organization", target_id=scope.organization_id,
+        request=request, before=before, after=after,
+    )
+    await db.commit()
+    return after

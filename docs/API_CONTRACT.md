@@ -989,6 +989,102 @@ evidence_add|task_create|task_update|task_delete`), and, when the
 ticket is linked to an incident, one `incident_timeline` entry -- all
 in the same transaction.
 
+## Notifications: `/api/v1/notifications` (P16)
+
+In-app + email notifications that cross the platform/organization
+boundary. One service (`app/notifications.py::notify`) is the only
+sender: other code passes an event key + payload and never builds
+messages itself. Routing lives in the service's EVENTS table:
+
+- **SOC of the organization** (base route, by soc mode): managed ->
+  the platform SOC analysts ASSIGNED to the org; in-house -> the org's
+  own soc_analyst users. Ticket needs-verification, verification
+  failed/reopened, SLA events, approvals, high-severity alerts.
+- **+ the organization owner** on SLA at-risk/breach, needs-verification,
+  verification outcomes (oversight; DECISIONS.md "Owner included").
+- **+ the ticket's IT assignee** on assignment, verification failed/reopened.
+- **High-severity alerts** (critical AND high) page the org's SOC from
+  the worker's alert creation.
+
+Every notification row carries `template_key` (the event key) and the
+in-app rows carry `related_type`/`related_id` for deep links. Email
+delivery is a worker job (`send_notification_email`, 3 attempts) that
+logs instead of sending when SMTP is not configured (dev); enqueue
+failures and delivery failures NEVER fail the action that caused the
+notification.
+
+| Method & path | Who | Notes |
+|---|---|---|
+| `GET /` | any authenticated org account | The caller's in-app feed. Unread first, then newest; keyset cursor on (read state, created_at, id); `unread_only`, `limit`; response carries the live `unread_count`. |
+| `POST /{id}/read` | the recipient | Marks one read; a foreign id is 404 (never a leak). |
+| `POST /read-all` | the recipient | Marks every unread row read. |
+| `GET /preferences` | any authenticated org account | Every known event key with the caller's resolved switches -- a missing preference row resolves to all-ON (opt-out defaults; DECISIONS.md). |
+| `PUT /preferences` | any authenticated org account | Upserts `{event_key, in_app, email}` rows; setting an event back to all-ON DELETES its row (the default needs no storage). Unknown event key 422. |
+
+Isolation: every query filters on (recipient_type, recipient_id) ==
+the caller's account -- notifications are readable only by the account
+they were written for, regardless of organization.
+
+## AI triage: `/api/v1/organization/ai-settings` (AI SOC Analyst)
+
+AI triage runs automatically on every new alert (worker job
+`ai_triage_alert`, enqueued after the alert commit). Its only
+configuration surface is the organization owner's settings endpoint;
+every AI artifact is written read-only alongside the alert:
+`agent_runs` (status/input_hash/tokens/cost/latency) plus one
+`ai_analyses` row per run carrying `severity_suggestion`,
+`confidence`, `summary`, `reasoning`, `recommended_actions`,
+`evidence_ids` (the event ids the model cited -- validated to be a
+subset of what it was shown), `false_positive_likelihood`, and
+`source`: **"ai"** when the model produced it, **"rules"** for a
+deterministic fallback (AI disabled per org, module off, over a cost
+cap, provider unavailable, or unparseable/ungrounded output -- the
+reason lands on `agent_runs.error`). Suggestions never mutate alert
+state; consuming them in the UI is a later milestone.
+
+| Method & path | Who | Notes |
+|---|---|---|
+| `GET /ai-settings` | organization owner only | `ai_enabled`, `platform_module_enabled` (the WHY for a blocked enable), resolved `daily_cost_cap_usd`/`monthly_cost_cap_usd` (explicit value, else platform default), the raw `explicit_*` caps (NULL = use default), `platform_defaults`, and live `spent_today_usd`/`spent_this_month_usd` summed from `agent_runs.cost_usd`. |
+| `PATCH /ai-settings` | organization owner only | Partial update of `{ai_enabled, ai_daily_cost_cap_usd, ai_monthly_cost_cap_usd}`. Enabling requires the platform admin's `ai_agents` module to be enabled for this organization first (403 `ai_agents_module_disabled` otherwise). A cap of 0 is valid ("spend nothing") and distinct from NULL ("use platform default"); negative values 400 `invalid_cost_cap`. Audited as `ai_settings.update` with before/after. |
+
+Cost gating is service-side, not endpoint-side: before each call the
+service sums the org's `agent_runs.cost_usd` for the day and month and
+falls back to rules when a cap would be exceeded (caps: org value,
+else `AI_DEFAULT_DAILY/MONTHLY_COST_CAP_USD`; NULL never means
+unlimited). With no `OPENAI_API_KEY` configured, AI is simply
+unavailable and every triage is a marked rules fallback -- no code
+path calls the network.
+
+## AI analyses: decisions, incident drafts, metrics (AI triage milestone)
+
+Analyst feedback and the incident agent complete the AI surface. Same
+ledger (`agent_runs` + `ai_analyses`); the incident agent (
+`soc-incident-drafter`) is DRAFT-ONLY -- it never creates incidents,
+tickets or timeline rows from model output. Any auto-created ticket
+under an organization's explicit policy goes through the ticket
+service with an audit actor of `ai_agent`, and only for low-risk
+(severity <= medium, FP-likelihood < 0.3) high-confidence (>= 0.9)
+drafts the org's own `auto_ticket_*` thresholds also accept.
+
+Analyst decisions (`POST /ai-analyses/{id}/decision`):
+
+- `accepted` | `edited` (with optional `edits` JSON) | `rejected`
+  (with REQUIRED `reason`, 422 `reason_required` otherwise);
+- stored on the analysis row (`accepted_by_user_id`, `accepted_at`,
+  and the decision block inside `recommended_actions` -- no new
+  columns for this milestone);
+- who may decide = exactly the alerts router's WRITE matrix (a managed
+  org's owner/security_manager stay read-only); anyone else gets the
+  same shapes the alerts router returns;
+- audited as `ai_analysis.accepted/edited/rejected`.
+
+| Method & path | Who | Notes |
+|---|---|---|
+| `POST /ai-analyses/{id}/decision` | alerts-write matrix | Body `{decision, reason?, edits?}`. Rejected requires reason. Idempotent on re-post (latest decision wins, audit keeps the history). Cross-org ids are 404 (never a leak). |
+| `GET /ai/alerts/{id}/analysis` | soc read matrix | The alert's latest analysis, `{analysis: null}` when not yet triaged. 404 when the caller cannot see the alert's organization. |
+| `GET /ai/incidents/{id}/analysis` | soc read matrix | The incident's latest incident-agent draft (same shape; `recommended_actions` carries `title`, `timeline_entries`, `ticket_draft`, `status_suggestion`). |
+| `GET /ai/metrics` | soc read matrix | Acceptance rate, average confidence (AI rows), override (edited) rate, and total spend, scoped exactly like the alerts queue; optional `organization_id` filter (invisible org -> 404). |
+
 ## Background worker
 
 `app/worker/` (Arq -- docs/DECISIONS.md) consumes the Redis queue
@@ -1000,13 +1096,22 @@ Postgres alone; worker startup fails fast with a clear error when Redis
 is unreachable. The dev launcher starts Redis and a worker terminal
 with the rest of the stack and checks both in `dev:doctor`.
 
+P16 adds `send_notification_email` (see "Notifications"): one job per
+notification email, 3 attempts, and in dev without SMTP it logs the
+message instead of sending.
+
 The worker's jobs: `heartbeat`, `process_events` (event
 normalization, then inline detection evaluation AND the P10 alerting
 halves -- see "Event ingestion and read API", "Detection rules" and
-"Alerts" above), and `ticket_sla_check` (every minute: SLA at-risk and
-breach marking + breach escalations -- see "Tickets" above). Worker
-startup also seeds the 8 built-in detection rules and the built-in
-correlation rule idempotently.
+"Alerts" above), `ticket_sla_check` (every minute: SLA at-risk and
+breach marking + breach escalations -- see "Tickets" above), and
+`ai_triage_alert` (one job per new alert id, enqueued after the alert
+commit -- see "AI triage" above; writes agent_runs + ai_analyses
+never alert state), and `ai_incident_draft` (one job per new
+incident, enqueued post-commit -- draft-only, see "AI analyses"
+above). Worker startup also seeds the 8 built-in detection rules, the
+built-in correlation rule, and the triage agent ("soc-triage")
+idempotently (the incident drafter seeds lazily on first run).
 
 ## Error code reference (structured-detail endpoints only)
 
@@ -1028,3 +1133,5 @@ correlation rule idempotently.
 | `invalid_role` | 400 | `organization.py` `_validate_role` |
 | `module_not_default_for_role` / `module_disabled_by_platform` | 422 | `organization.py` access matrix PUT |
 | `module_not_available` | 403 | `require_module` |
+| `ai_agents_module_disabled` / `invalid_cost_cap` | 403 / 400 | `organization.py` PATCH ai-settings |
+| `organization_settings_missing` | 500 | `organization.py` PATCH ai-settings (data-integrity; row always exists in practice) |

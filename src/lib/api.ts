@@ -62,7 +62,7 @@ type StatsOverview = {
   organizations: number
 }
 
-async function request<T>(
+export async function request<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
@@ -90,7 +90,7 @@ async function request<T>(
     // real HTTP responses are always 200-599, and nothing in the app
     // branches on ApiError.status or .code === "network_error".
     throw new ApiError(
-      "Could not reach the SentinelX server. Make sure the backend is running (uvicorn) on port 8000.",
+      "Could not reach the SentinelX server. Make sure the backend is running (uvicorn) on the configured backend port (default 8001).",
       0,
       "network_error",
     )

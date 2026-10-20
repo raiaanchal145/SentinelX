@@ -201,8 +201,8 @@ async def test_managed_org_end_to_end_platform_soc_verifies_and_closes(client, d
     assert requested.status_code == 201, requested.text
     owner_token = await login(client, f"owner-{org.id}@x.io")
     decided = await client.post(
-        f"/api/v1/approvals/{requested.json()['id']}/decision",
-        json={"decision": "approved"}, headers=auth(owner_token),
+        f"/api/v1/approvals/{requested.json()['id']}/approve",
+        json={"reason": "fix verified by the org"}, headers=auth(owner_token),
     )
     assert decided.status_code == 200, decided.text
 
@@ -467,8 +467,8 @@ async def test_critical_ticket_closes_with_approved_approval(client, db_session)
     )
     sm_token = await login(client, sm.email)
     resp = await client.post(
-        f"/api/v1/approvals/{approval_id}/decision",
-        json={"decision": "approved", "notes": "ok"},
+        f"/api/v1/approvals/{approval_id}/approve",
+        json={"reason": "ok"},
         headers=auth(sm_token),
     )
     assert resp.status_code == 200, resp.text
@@ -524,8 +524,8 @@ async def test_close_request_endpoint_lifecycle(client, db_session):
     # Owner approves; the audit trail records the request.
     owner_token = await login(client, f"owner-{org.id}@x.io")
     resp = await client.post(
-        f"/api/v1/approvals/{approval_id}/decision",
-        json={"decision": "approved", "notes": "ok"},
+        f"/api/v1/approvals/{approval_id}/approve",
+        json={"reason": "ok"},
         headers=auth(owner_token),
     )
     assert resp.status_code == 200, resp.text
@@ -556,8 +556,8 @@ async def test_soc_analyst_cannot_decide_approvals(client, db_session):
     await db_session.commit()
     soc_token = await login(client, soc_email)
     resp = await client.post(
-        f"/api/v1/approvals/{approval.id}/decision",
-        json={"decision": "approved"},
+        f"/api/v1/approvals/{approval.id}/approve",
+        json={},
         headers=auth(soc_token),
     )
     assert resp.status_code == 403

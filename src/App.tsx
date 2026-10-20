@@ -27,6 +27,8 @@ import OwnerSettings from "./features/owner/pages/OwnerSettings"
 import OwnerIncidents from "./features/owner/pages/OwnerIncidents"
 
 import UserLayout from "./layouts/UserLayout"
+import NotificationsPage from "./features/notifications/pages/NotificationsPage"
+import NotificationPreferencesPage from "./features/notifications/pages/NotificationPreferencesPage"
 import ModuleGuard from "./components/ModuleGuard"
 
 import SocOverview from "./features/soc/pages/SocOverview"
@@ -378,6 +380,20 @@ function App() {
           </ProtectedRoute>
         }
       />
+
+      {/* NOTIFICATIONS -- every UserLayout role's bell lands here (P16).
+          One shared shell group: the page is role-agnostic, the layout
+          adapts its nav to whoever is signed in. */}
+      <Route
+        element={
+          <ProtectedRoute allowedRoles={["soc_analyst", "it_developer", "security_manager", "auditor"]}>
+            <UserLayout />
+          </ProtectedRoute>
+        }
+      >
+        <Route path="/notifications" element={<NotificationsPage />} />
+        <Route path="/notifications/preferences" element={<NotificationPreferencesPage />} />
+      </Route>
 
       {/* SOC ANALYST -- top navigation shell */}
 

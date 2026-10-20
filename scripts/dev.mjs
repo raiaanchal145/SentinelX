@@ -74,7 +74,21 @@ import {
   startQuickTunnel,
 } from './lib/share.mjs';
 
-const BACKEND_PORT = 8000;
+// Backend port. Port 8000 is Splunkd's default on many machines, so this
+// defaults to 8001 now. Override per-session, no code edits:
+//   PowerShell:  $env:SENTINELX_BACKEND_PORT = "8090"; npm run dev
+//   POSIX:       SENTINELX_BACKEND_PORT=8090 npm run dev
+const BACKEND_PORT = (() => {
+  const raw = process.env.SENTINELX_BACKEND_PORT;
+  if (raw === undefined || raw === '') return 8001;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    throw new Error(
+      `SENTINELX_BACKEND_PORT "${raw}" is not a valid port number (1-65535).`
+    );
+  }
+  return n;
+})();
 const FRONTEND_PORT = 5173;
 const WORKER_PORT = null; // the worker listens nowhere -- it connects out to Postgres+Redis
 // 127.0.0.1, not localhost: uvicorn binds IPv4 only, and on Windows

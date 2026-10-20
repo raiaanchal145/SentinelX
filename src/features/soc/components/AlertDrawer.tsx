@@ -20,6 +20,7 @@ import {
 } from "../../../lib/api"
 
 import { ageLabel, ALERT_STATUS_LABELS, historyActionLabel } from "./alertShared"
+import AiAnalysisPanel from "./AiAnalysisPanel"
 import EventDetailDrawer from "./EventDetailDrawer"
 
 type AlertDrawerProps = {
@@ -149,6 +150,13 @@ function AlertDrawer({ alert, onClose, canWrite, assignees, onChanged, onCreateI
                 </div>
               )}
             </section>
+
+            <AiAnalysisPanel
+              targetType="alert"
+              targetId={row.id}
+              canWrite={canWrite}
+              onOpenEvent={(eventId) => setSelectedEventId(eventId)}
+            />
 
             <section>
               <h3 className="text-xs font-semibold uppercase tracking-wide text-fg-muted">

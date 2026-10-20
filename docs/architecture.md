@@ -73,6 +73,7 @@ Current routes / screens (see `App.tsx` for the authoritative list):
 | `/manager/*` | security_manager | `/manager/assets` is the real asset inventory (write); `/manager/incidents(/:id)` is the real read-only incident oversight (P14); every other route is a mock-data dashboard; every route but `/manager` itself is `ModuleGuard`-wrapped (`incidents`/`approvals`/`reports`/`assets`/`audit_logs`) |
 | `/organization/incidents(/:id)` | organization_admin | real read-only incident oversight (P14) — same shared components as the manager view; for managed orgs the timeline arrives shared-only from the API |
 | `/auditor/*` | auditor | `/auditor/assets` is the real, read-only asset inventory; every other route is a mock-data dashboard; every route but `/auditor` itself is `ModuleGuard`-wrapped (`audit_logs`/`incidents`/`assets`/`reports`) |
+| `/notifications(/preferences)` | every UserLayout role (soc_analyst, it_developer, security_manager, auditor) | real notifications (P16): the top bar's bell (unread count + dropdown) and the full feed/preferences pages; the API isolates every account's rows |
 | `/soc-dashboard`, `/it-dashboard` | -- | legacy paths, redirect to `/soc`/`/it` |
 
 ## Backend
@@ -279,6 +280,104 @@ per-row actions follow the backend-computed `can_edit`. The platform
 admin's organization detail has a read-only Assets tab backed by
 `GET /admin/organizations/{id}/assets`, and the platform SOC queue embeds
 a read-only assets view of the selected assigned organization.
+
+## The AI triage agent (AI SOC Analyst layer)
+
+The AI layer is ONE entry point other agents plug into:
+`app/ai/service.py::run_triage_for_alert(db, alert_id)` -- pass an
+alert id, get an `agent_runs` + `ai_analyses` row pair back. It never
+raises for AI reasons: every failure mode (provider down, key missing,
+over budget, unparseable or ungrounded output) degrades to a
+deterministic rules analysis marked `source="rules"` with the reason
+on the run. The worker calls it automatically for every new alert
+(`ai_triage_alert`, enqueued after the alert commit), so suggestions
+are already in the database when an analyst opens the alert.
+
+Package layout (`app/ai/`):
+
+```
+client.py    AiProvider protocol + OpenAICompatProvider: one httpx
+             POST against an OpenAI-compatible schema (no SDK),
+             timeout + retry with backoff on 429/5xx/transport only,
+             token/cost accounting against PRICE_TABLE, within_cap()
+             cost gating. build_provider() returns the OpenAI client
+             only when OPENAI_API_KEY is set, else signals unavailable.
+schemas.py   TriageResult (severity/confidence/summary/evidence_ids/
+             false_positive_likelihood/...), parse_triage_output()
+             with fence tolerance and grounding_failures() -- the
+             model's cited event ids must be a subset of the ids it
+             was actually shown.
+prompts.py   build_triage_messages(): untrusted alert/event text is
+             sanitized (control chars stripped, delimiter/tag
+             lookalikes defanged), wrapped in an explicitly delimited
+             DATA block with per-line prefixes and per-section + total
+             character budgets, under a fixed system prompt. The model
+             never sees raw log text outside the block.
+fake.py      FakeProvider: deterministic keyword verdicts over the
+             simulator's event-type markers, network-free, used by
+             every test and the eval harness (AI SOC Analyst doc:
+             reproducibility). It also returns realistic token counts
+             priced through the real table, so the cost ledger is
+             exercised with production math.
+fallback.py  build_fallback_result(): the rules-marked analysis.
+service.py   run_triage_for_alert(): gates (module -> ai_enabled ->
+             daily/monthly caps with org override else platform
+             defaults), provider call, ONE repair attempt appending
+             validation/grounding errors, grounding failure ->
+             failed run + rules fallback, persistence.
+```
+
+Cost accounting is real money, not tokens: every run stores
+`cost_usd` (reported tokens x model price), the service sums it per
+organization per day/month BEFORE calling, and a cap hit falls back
+to rules with the reason stored. Caps resolve org value -> platform
+default; NULL never means unlimited, and 0 means "spend nothing".
+The provider is `gpt-4o-mini` over plain httpx (docs/DECISIONS.md),
+~$0.0007/alert at list prices.
+
+The eval harness lives in `tools/ai_eval/`: `runner.py --seed N`
+prints precision/recall/FPR and the average estimated cost over the
+labelled cases rebuilt from the simulator scenarios (currently 8
+cases: precision 1.0, recall 1.0, FPR 0.0, $0.000153/case);
+`runner.py --demo` builds a fixture organization + alert + events in
+a real database, runs the REAL service with the fake provider, and
+prints the stored agent_run + ai_analysis rows (cleaning up after
+itself). Tests pin the injection/truncation/grounding behavior
+end-to-end through the real service (`backend/tests/test_ai_triage.py`).
+
+## The incident agent (draft-only, analyst-reviewed)
+
+`app/ai/incident_service.py::run_incident_draft_for_incident` extends
+the same shape to incidents: identical gates, wrapper, repair path and
+ledger, but its output is a DRAFT (title, summary, timeline entries,
+ticket draft with suggested priority/team) stored on the incident's
+ai_analyses row (target_type="incident") under `recommended_actions` --
+never an INSERT into incidents/tickets/timeline. Incident creation
+enqueues one `ai_incident_draft` job post-commit (mirroring triage);
+a Redis failure only delays the draft. The file layout mirrors the
+triage package: `incident_schemas.py` (IncidentDraft +
+parse_incident_output), `incident_prompts.py` (same data block, a
+"you never create anything" system rule), and the service sharing
+service.py's day/month floors and spend sums.
+
+Analyst review closes the loop through `app/routers/ai.py`:
+`POST /ai-analyses/{id}/decision` (accepted/edited/rejected + reason,
+alerts-write matrix, audited), `GET /ai/alerts/{id}/analysis` and
+`GET /ai/incidents/{id}/analysis` (latest analysis or `{analysis:
+null}`), and `GET /ai/metrics` -- acceptance/override rates, average
+confidence and spend, scoped exactly like the alerts queue. The ticket
+auto-create path, when an organization's P13 thresholds AND the
+draft's low-risk/high-confidence checks all pass, runs through the
+tickets service with an `ai_agent` audit actor. Safety properties
+(injection inertness, grounding, org isolation, cap stop, no row
+creation) are pinned in `backend/tests/test_ai_incident_agent.py`.
+
+The SOC UI reads all of this through one shared panel
+(`AiAnalysisPanel.tsx`) mounted in the alert drawer and incident
+detail in BOTH modes: verify-before-acting label, confidence bar,
+event-linked citations, accept/reject controls, and the
+"AI unavailable" deterministic-fallback state when AI is off or the
+draft has not landed yet.
 
 ## The mock data layer (frontend)
 

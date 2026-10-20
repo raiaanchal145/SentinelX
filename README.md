@@ -40,7 +40,7 @@ does everything automatically:
 - makes sure PostgreSQL is reachable — using an already-running local install if it finds one, otherwise starting just the `postgres` service via Docker Compose,
 - applies any pending Alembic migrations,
 - on a **first run only**: if the database has no super_admin yet, offers to create it right there (invite-only platform -- see below),
-- starts the FastAPI backend (`uvicorn app.main:app --reload --port 8000`) in a **new terminal window** titled "SentinelX Backend",
+- starts the FastAPI backend (`uvicorn app.main:app --reload --port 8001`) in a **new terminal window** titled "SentinelX Backend",
 - starts the Vite frontend in the terminal you're already in.
 
 The first run on a laptop takes a little while (installs + Docker image pull); every run after that is quick, since each step is skipped once it's already done. You never need to type `uvicorn`, `alembic`, `pip`, `docker compose`, or venv-activation commands by hand.
@@ -140,7 +140,9 @@ exactly once).
 
 | Argument | Meaning |
 |---|---|
-| `--api-url` | Backend base URL (default `http://localhost:8000`) |
+```bash
+npm run dev   # starts the API on port 8001 by default; SENTINELX_BACKEND_PORT overrides it
+```
 | `--api-key` | An event-source ingestion key (`sx_...`); required unless `--list`/`--dry-run` |
 | `--scenario` | One of the names below (required unless `--list`) |
 | `--rate` | Events per second (default 2) |
@@ -197,11 +199,11 @@ To set that up: install PostgreSQL from <https://www.postgresql.org/download/win
 
 ## 3. Troubleshooting
 
-**Start here:** run `npm run dev:doctor` — it checks Node/Python versions, the virtual environment, installed packages, `backend/.env`, database reachability, and whether ports 8000/5173 are free, and prints a PASS/FAIL table without starting anything.
+**Start here:** run `npm run dev:doctor` — it checks Node/Python versions, the virtual environment, installed packages, `backend/.env`, database reachability, and whether ports 8001/5173 are free, and prints a PASS/FAIL table without starting anything.
 
 **Docker Desktop isn't open** — `npm run dev` will tell you to open it and wait, polling automatically for up to about two minutes; you don't need to restart the command once you open it.
 
-**Port 8000 or 5173 is already in use by something else** — the launcher tells you which port and how to find the process (`netstat -ano | findstr :8000` on Windows, `lsof -i :8000` on macOS/Linux). If it's an old SentinelX backend from a previous `npm run dev` that didn't shut down cleanly, run `npm run dev:stop` first.
+**Port 8001 or 5173 is already in use by something else** — the launcher tells you which port and how to find the process (`netstat -ano | findstr :8001` on Windows, `lsof -i :8001` on macOS/Linux). If it's an old SentinelX backend from a previous `npm run dev` that didn't shut down cleanly, run `npm run dev:stop` first. The backend port defaults to 8001 (port 8000 is often taken by Splunkd or similar); change it with `SENTINELX_BACKEND_PORT=9000 npm run dev` if 8001 is taken too.
 
 **Port 5432 is occupied by a local PostgreSQL that isn't set up for this project** — either stop that local PostgreSQL Windows service (Services app → the `postgresql-x64-...` service → Stop) so Docker can use the port, or set up the `sentinelx` user/database in it as described above.
 
@@ -230,7 +232,7 @@ docker compose up -d postgres        # start only the database container
 cd backend
 .venv\Scripts\python.exe -m alembic upgrade head      # apply migrations (Windows)
 .venv/bin/python -m alembic upgrade head               # apply migrations (macOS/Linux)
-.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000   # run the backend (Windows)
+.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8001   # run the backend (Windows)
 ```
 Never run `docker compose down -v`, `alembic revision --autogenerate` against someone else's migration, or `backend/reset_db.py` unless you specifically mean to wipe local data — none of these are things `npm run dev` will ever do for you.
 

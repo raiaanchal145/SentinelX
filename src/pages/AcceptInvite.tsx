@@ -92,6 +92,8 @@ function AcceptInvite() {
       localStorage.setItem("sentinelx_email", user.email)
       localStorage.setItem("sentinelx_account_type", user.account_type)
 
+      window.dispatchEvent(new Event("sentinelx_auth_change"))
+
       navigate(homePathFor(user.role), { replace: true })
     } catch (err) {
       setError(

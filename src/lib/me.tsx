@@ -27,6 +27,14 @@ export function MeProvider({ children }: { children: ReactNode }) {
   const refetch = useCallback(() => setNonce((n) => n + 1), [])
 
   useEffect(() => {
+    function onAuthChange() {
+      refetch()
+    }
+    window.addEventListener("sentinelx_auth_change", onAuthChange)
+    return () => window.removeEventListener("sentinelx_auth_change", onAuthChange)
+  }, [refetch])
+
+  useEffect(() => {
     let cancelled = false
 
     if (!getSession().loggedIn) {
