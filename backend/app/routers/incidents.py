@@ -38,7 +38,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,6 +60,8 @@ from app.models import (
     Alert,
     AlertHistory,
     AlertStatus,
+    Approval,
+    ApprovalStatus,
     Asset,
     Evidence,
     EvidenceType,
@@ -1073,6 +1075,23 @@ async def get_incident(
     elif is_security_manager:
         allowed_next = [s for s in allowed_next if s == IncidentStatus.escalated.value]
 
+    # P19: this incident's pending response-action approvals -- the
+    # "waiting for approval" badge the SOC's actions panel reads.
+    pending_approvals = (
+        (
+            await db.execute(
+                select(Approval)
+                .where(
+                    Approval.incident_id == incident.id,
+                    Approval.status == ApprovalStatus.pending,
+                )
+                .order_by(Approval.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
     parent = None
     if incident.duplicate_of_id:
         parent_row = await db.get(Incident, incident.duplicate_of_id)
@@ -1113,6 +1132,18 @@ async def get_incident(
             for a in linked_assets
         ],
         "duplicate_of": parent,
+        "pending_approvals": [
+            {
+                "id": str(pa.id),
+                "action_type": pa.action_type,
+                "tool": (pa.action_payload or {}).get("tool"),
+                "risk_level": pa.risk_level.value if hasattr(pa.risk_level, "value") else pa.risk_level,
+                "requested_reason": pa.requested_reason,
+                "expires_at": pa.expires_at.isoformat() if pa.expires_at else None,
+                "created_at": pa.created_at.isoformat() if pa.created_at else None,
+            }
+            for pa in pending_approvals
+        ],
         "timeline": [
             {
                 "id": str(t.id),
@@ -1750,3 +1781,54 @@ async def download_incident_evidence(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# P19 response actions: the SOC's action panel goes through the policy
+# engine. The endpoint authorizes via the SAME gates the rest of the
+# router uses (incident visibility + write matrix) and then hands the
+# attempt to run_tool_call(), which makes the allow/needs_approval/deny
+# decision, writes the tool_call_logs evidence row, and (for high risk)
+# creates the approval request the security manager sees in their queue.
+# ---------------------------------------------------------------------------
+
+
+class ResponseActionPayload(BaseModel):
+    tool: str = Field(min_length=1, max_length=100)
+    arguments: dict = Field(default_factory=dict)
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+@router.post("/{incident_id}/actions", status_code=202)
+async def incident_action(
+    incident_id: uuid.UUID,
+    payload: ResponseActionPayload,
+    db: AsyncSession = Depends(get_db),
+    scope: Scope = Depends(_require_incidents_read),
+):
+    """Trigger a registered response tool against this incident.
+
+    202 says: the attempt is recorded -- the body tells whether it ran
+    (allow), entered the approval queue (needs_approval) or was refused
+    (deny+reason). Callers need the incident write matrix (SOC writes,
+    managers may request per the locked-in managed-mode decision) but
+    the TOOL's own risk/module/actor rules are the policy engine's, not
+    this router's -- there is no second permission list to drift.
+    """
+    incident = await _visible_incident(db, scope, incident_id)
+    await _require_incident_write(db, scope, incident.organization_id)
+
+    from app.ai.policy import actor_from_scope, run_tool_call
+
+    tool_name = payload.tool.strip()
+    outcome = await run_tool_call(
+        db,
+        actor=actor_from_scope(scope),
+        tool_name=tool_name,
+        args=payload.arguments or {},
+        incident_id=incident.id,
+        requested_reason=payload.reason,
+    )
+    status_map = {"allow": 200, "needs_approval": 202, "deny": 403}
+    code = status_map.get(outcome.get("decision"), 400)
+    return JSONResponse(status_code=code, content=outcome)
