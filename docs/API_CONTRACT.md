@@ -1055,6 +1055,36 @@ unlimited). With no `OPENAI_API_KEY` configured, AI is simply
 unavailable and every triage is a marked rules fallback -- no code
 path calls the network.
 
+## AI analyses: decisions, incident drafts, metrics (AI triage milestone)
+
+Analyst feedback and the incident agent complete the AI surface. Same
+ledger (`agent_runs` + `ai_analyses`); the incident agent (
+`soc-incident-drafter`) is DRAFT-ONLY -- it never creates incidents,
+tickets or timeline rows from model output. Any auto-created ticket
+under an organization's explicit policy goes through the ticket
+service with an audit actor of `ai_agent`, and only for low-risk
+(severity <= medium, FP-likelihood < 0.3) high-confidence (>= 0.9)
+drafts the org's own `auto_ticket_*` thresholds also accept.
+
+Analyst decisions (`POST /ai-analyses/{id}/decision`):
+
+- `accepted` | `edited` (with optional `edits` JSON) | `rejected`
+  (with REQUIRED `reason`, 422 `reason_required` otherwise);
+- stored on the analysis row (`accepted_by_user_id`, `accepted_at`,
+  and the decision block inside `recommended_actions` -- no new
+  columns for this milestone);
+- who may decide = exactly the alerts router's WRITE matrix (a managed
+  org's owner/security_manager stay read-only); anyone else gets the
+  same shapes the alerts router returns;
+- audited as `ai_analysis.accepted/edited/rejected`.
+
+| Method & path | Who | Notes |
+|---|---|---|
+| `POST /ai-analyses/{id}/decision` | alerts-write matrix | Body `{decision, reason?, edits?}`. Rejected requires reason. Idempotent on re-post (latest decision wins, audit keeps the history). Cross-org ids are 404 (never a leak). |
+| `GET /ai/alerts/{id}/analysis` | soc read matrix | The alert's latest analysis, `{analysis: null}` when not yet triaged. 404 when the caller cannot see the alert's organization. |
+| `GET /ai/incidents/{id}/analysis` | soc read matrix | The incident's latest incident-agent draft (same shape; `recommended_actions` carries `title`, `timeline_entries`, `ticket_draft`, `status_suggestion`). |
+| `GET /ai/metrics` | soc read matrix | Acceptance rate, average confidence (AI rows), override (edited) rate, and total spend, scoped exactly like the alerts queue; optional `organization_id` filter (invisible org -> 404). |
+
 ## Background worker
 
 `app/worker/` (Arq -- docs/DECISIONS.md) consumes the Redis queue
@@ -1077,9 +1107,11 @@ halves -- see "Event ingestion and read API", "Detection rules" and
 breach marking + breach escalations -- see "Tickets" above), and
 `ai_triage_alert` (one job per new alert id, enqueued after the alert
 commit -- see "AI triage" above; writes agent_runs + ai_analyses
-never alert state). Worker startup also seeds the 8 built-in
-detection rules, the built-in correlation rule, and the triage agent
-("soc-triage") idempotently.
+never alert state), and `ai_incident_draft` (one job per new
+incident, enqueued post-commit -- draft-only, see "AI analyses"
+above). Worker startup also seeds the 8 built-in detection rules, the
+built-in correlation rule, and the triage agent ("soc-triage")
+idempotently (the incident drafter seeds lazily on first run).
 
 ## Error code reference (structured-detail endpoints only)
 

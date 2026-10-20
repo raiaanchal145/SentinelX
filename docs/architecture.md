@@ -345,6 +345,40 @@ prints the stored agent_run + ai_analysis rows (cleaning up after
 itself). Tests pin the injection/truncation/grounding behavior
 end-to-end through the real service (`backend/tests/test_ai_triage.py`).
 
+## The incident agent (draft-only, analyst-reviewed)
+
+`app/ai/incident_service.py::run_incident_draft_for_incident` extends
+the same shape to incidents: identical gates, wrapper, repair path and
+ledger, but its output is a DRAFT (title, summary, timeline entries,
+ticket draft with suggested priority/team) stored on the incident's
+ai_analyses row (target_type="incident") under `recommended_actions` --
+never an INSERT into incidents/tickets/timeline. Incident creation
+enqueues one `ai_incident_draft` job post-commit (mirroring triage);
+a Redis failure only delays the draft. The file layout mirrors the
+triage package: `incident_schemas.py` (IncidentDraft +
+parse_incident_output), `incident_prompts.py` (same data block, a
+"you never create anything" system rule), and the service sharing
+service.py's day/month floors and spend sums.
+
+Analyst review closes the loop through `app/routers/ai.py`:
+`POST /ai-analyses/{id}/decision` (accepted/edited/rejected + reason,
+alerts-write matrix, audited), `GET /ai/alerts/{id}/analysis` and
+`GET /ai/incidents/{id}/analysis` (latest analysis or `{analysis:
+null}`), and `GET /ai/metrics` -- acceptance/override rates, average
+confidence and spend, scoped exactly like the alerts queue. The ticket
+auto-create path, when an organization's P13 thresholds AND the
+draft's low-risk/high-confidence checks all pass, runs through the
+tickets service with an `ai_agent` audit actor. Safety properties
+(injection inertness, grounding, org isolation, cap stop, no row
+creation) are pinned in `backend/tests/test_ai_incident_agent.py`.
+
+The SOC UI reads all of this through one shared panel
+(`AiAnalysisPanel.tsx`) mounted in the alert drawer and incident
+detail in BOTH modes: verify-before-acting label, confidence bar,
+event-linked citations, accept/reject controls, and the
+"AI unavailable" deterministic-fallback state when AI is off or the
+draft has not landed yet.
+
 ## The mock data layer (frontend)
 
 ```

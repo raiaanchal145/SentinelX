@@ -945,3 +945,58 @@ ai_analyses row with `source="rules"`, zero confidence, no evidence
 ids and the reason on the agent_run. An AI-versus-rules acceptance
 metric (and "what fraction of triage is actually AI?") is then a
 `GROUP BY source`, not archaeology.
+
+## The incident agent is DRAFT-ONLY; auto-create is a policy gate the router owns
+
+The brief's rule "the agent never creates tickets by itself unless the
+organization's policy explicitly allows auto-creation for low-risk,
+high-confidence cases" is enforced in three layers. (1) The incident
+agent's service (`run_incident_draft_for_incident`) writes ONLY
+agent_runs + ai_analyses -- there is no code path from model output to
+an incidents/tickets/timeline INSERT, so even a fully-jailbroken prompt
+cannot create a row (pinned by row-count before/after in
+test_ai_incident_agent.py). (2) The auto-create decision is the API
+layer's (`app/routers/incidents.py`), gated on the org's own P13
+`auto_ticket_threshold`/`auto_ticket_min_confidence` columns being set
+(NULL = off, same rule as incident-driven auto-tickets) AND the draft
+being low-risk (severity <= medium) AND high-confidence (>= 0.9) AND
+the model's own FP-likelihood below 0.3 -- any failure leaves the draft
+for the analyst to create by hand. (3) When auto-create DOES fire, the
+ticket goes through the same ticket service any human-created one does,
+with the audit log's actor marked `ai_agent`, so the tickets table
+cannot tell an AI-created ticket apart structurally -- only by its
+audit trail, which is the point.
+
+## Analyst decisions reuse the alerts WRITE matrix, and rejections require a reason
+
+Who may accept/edit/reject an AI analysis is exactly who may change the
+alert it hangs off (`_require_ai_write` mirrors `_require_alert_write`
+verbatim, managed orgs read-only) -- a second permission matrix would
+drift from the first. A rejected decision without a reason is 422
+`reason_required`: the acceptance-rate metric is only meaningful if a
+rejection says why (same instinct as alert dismissal's required
+reason). An "accepted" decision carrying prose is stored as `edited` --
+acceptance with unexplained corrections would blur the metric.
+
+## Decisions live inside `recommended_actions` (no new columns)
+
+The decision block ({decision, reason, edits, decided_by,
+decided_at}) rides in the existing `ai_analyses.recommended_actions`
+JSONB rather than four new columns: the column already exists for
+exactly this kind of payload, `accepted_by_user_id`/`accepted_at`
+(schema columns that already exist) carry who/when, and a future
+milestone that wants first-class decision columns can backfill from
+the JSONB without having invented a duplicate now.
+
+## The AI panel is one shared component, both SOC modes
+
+`src/features/soc/components/AiAnalysisPanel.tsx` renders in the alert
+drawer AND the incident detail page; the placement differences are
+props (targetType/targetId/canWrite/onOpenEvent), not parallel copies
+-- the same rule as the rest of the SOC component set. The
+"AI-generated -- verify before acting" label is always visible, the
+confidence bar is the number's only visualization (no traffic-light
+colors -- a 0.7-confidence critical should not look safe), citations
+link to the cited events, and when the analysis is a rules fallback or
+hasn't arrived yet the panel says "AI unavailable" and shows the
+deterministic summary instead of an empty box.

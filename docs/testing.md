@@ -104,3 +104,58 @@ size. If you're working from a Linux sandbox bridged to a Windows
 checkout, `tsc -b` runs fine there, but `npm run build`'s bundler step
 and `npm run lint` need native bindings that won't match across
 platforms -- verify those two on the actual development machine.
+
+## AI triage + incident agent (evaluation harness)
+
+Run from the repo root with the project venv (`tools/ai_eval/`):
+
+```
+backend/.venv/Scripts/python.exe backend/../tools/ai_eval/main.py --provider fake   # deterministic, no network
+backend/.venv/Scripts/python.exe -m tools.ai_eval.runner --provider real            # needs OPENAI_API_KEY
+```
+
+(most robust from `backend/`:
+`.venv/Scripts/python -m ...` -- see docs/DECISIONS.md's provider
+note).
+
+Latest run (2026-10-09, provider = FakeProvider, seed 7, 8 cases):
+
+```
+cases: 8
+true_positives: 7
+false_positives: 0
+true_negatives: 1
+false_negatives: 0
+precision: 1.0
+recall: 1.0
+false_positive_rate: 0.0
+avg_estimated_cost_usd: 0.000153
+failures: none
+```
+
+The fake provider is deterministic and injection-deaf (see
+`docs/DECISIONS.md`), so these numbers are stable across machines and
+runs -- the reproducibility gate the AI SOC Analyst brief asks for.
+Re-run with `--provider real` on a machine with a configured key and
+replace this table; production expectations stay the same bands.
+
+### Incident-agent safety properties (pinned tests)
+
+`backend/tests/test_ai_incident_agent.py` pins, on fake/scripted
+providers only:
+
+- injection strings inside event content stay inert inside the
+  untrusted data block (one delimiter, every line `DATA |-prefixed);
+- a payload whose structure was changed by data-content instructions
+  fails the parser (nothing executes, nothing is created);
+- invented evidence citations -> grounding failure -> the stored
+  analysis is the deterministic rules draft, never the model's
+  hallucinated ids;
+- runs are organization-isolated (org A's run never touches org B's
+  rows, and B's incident is untouched);
+- the daily/monthly cost cap stops runs before any provider call;
+- the model path NEVER creates incidents, tickets or timeline rows
+  (draft-only, confirmed by row counts before/after);
+- decisions persist (accepted/edited/rejected + reason) and feed
+  `GET /ai/metrics`; a cross-org caller gets a 404, never an
+  unauthorized-view that reveals existence.
