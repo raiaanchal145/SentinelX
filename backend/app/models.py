@@ -670,6 +670,11 @@ class OrganizationSettings(Base):
     # organization must opt in, and only after the platform admin
     # enabled the `ai_agents` module. Both gates checked at run time.
     ai_enabled: Mapped[bool] = mapped_column(default=False)
+    # P19: automatic execution of LOW-risk tools (comments, tags,
+    # notify, priority nudges) without a human approval. OFF by default
+    # (fail closed, like ai_enabled): with the flag off, low-risk calls
+    # also route to needs_approval.
+    low_risk_automation_enabled: Mapped[bool] = mapped_column(default=False)
     # Per-organization cost caps for AI calls, in USD. NULL = fall back
     # to the platform defaults in app/config.py (cost-safe defaults,
     # not unlimited) -- a missing cap must never mean "spend freely".
@@ -1558,10 +1563,26 @@ class Approval(Base):
     status: Mapped[ApprovalStatus] = mapped_column(
         Enum(ApprovalStatus, name="approval_status"), default=ApprovalStatus.pending
     )
+    # WHY the action was requested (the requester's own words) and WHY it
+    # was approved/rejected (the reviewer's, required on reject -- P19).
+    requested_reason: Mapped[str | None] = mapped_column(Text)
+    decision_reason: Mapped[str | None] = mapped_column(Text)
+    # The decision record (who approved, separate from the requester) and
+    # WHEN the request stops being approvable -- an expired approval can
+    # never execute (P19: execution re-checks this under a row lock).
     reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    # The incident this action belongs to (tool-flow approvals from P19).
+    # SET NULL: killing the incident must not erase the approval record.
+    incident_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("incidents.id", name="fk_approvals_incident", ondelete="SET NULL")
+    )
+    # Set by the worker job that ran the action. NULL = never executed
+    # (still pending, rejected, or expired). Guarantees one execution.
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -1728,17 +1749,43 @@ class ToolCallLog(Base):
     __tablename__ = "tool_call_logs"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    agent_run_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", name="fk_tool_call_logs_organization", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
+    # Who ATTEMPTED the call: an agent via its run, a user through the
+    # action endpoints, or the worker executing an approval. agent_run_id
+    # is NULL for user/worker rows (P19 widened it from NOT NULL because
+    # the permission layer now audits people, not only agents).
+    agent_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    actor_type: Mapped[ActorType] = mapped_column(
+        Enum(ActorType, name="actor_type"), nullable=False
+    )
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
     tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
     arguments: Mapped[dict | None] = mapped_column(JSONB)
+    # sha-256 of the canonical JSON of `arguments` -- lets an auditor
+    # prove the executed call used exactly the approved arguments.
+    arguments_hash: Mapped[str | None] = mapped_column(String(64))
     risk_level: Mapped[ApprovalRiskLevel] = mapped_column(
         Enum(ApprovalRiskLevel, name="approval_risk_level"), nullable=False
     )
+    # The policy engine's verdict for THIS attempt: "allow",
+    # "needs_approval" (logged, nothing executed) or "deny" (+ reason in
+    # result). `allowed` stays for compatibility -- True iff decision is
+    # not deny and execution happened on this row.
+    decision: Mapped[str] = mapped_column(String(20), nullable=False)
+    deny_reason: Mapped[str | None] = mapped_column(String(200))
     allowed: Mapped[bool] = mapped_column(nullable=False)
     approval_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("approvals.id", ondelete="SET NULL")
+        ForeignKey("approvals.id", name="fk_tool_call_logs_approval", ondelete="SET NULL"), index=True
+    )
+    # The incident context of a response action, for the SOC's view.
+    incident_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("incidents.id", name="fk_tool_call_logs_incident", ondelete="SET NULL")
     )
     result: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

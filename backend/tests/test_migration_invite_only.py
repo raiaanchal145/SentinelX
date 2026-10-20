@@ -30,8 +30,8 @@ from alembic.config import Config
 
 from app.config import settings
 
-MIGRATION_HEAD = "b0c1d2e3f4a5"  # ai layer cost caps and defaults (bumped each new migration)
-PREVIOUS_REVISION = "e7f8a9b0c1d2"  # -1 from HEAD lands on the notification preferences migration
+MIGRATION_HEAD = "c4d5e6f7a8b9"  # response actions + tool governance (bumped each new migration)
+PREVIOUS_REVISION = "b0c1d2e3f4a5"  # -1 from HEAD lands on the ai layer cost-caps migration
 SCRATCH_DB = "sentinelx_migration_scratch"
 
 
@@ -116,11 +116,10 @@ async def test_upgrade_empty_populated_and_downgrade(monkeypatch):
             assert pending_table is None
 
         # ------------------------------------------------------------
-        # 2. Downgrade -1 (the spec's own gate): back to e6f7a8b9c0d1.
-        #    f7a8's downgrade drops the P07 indexes and leaves the
-        #    'windows' event_source_type value (Postgres cannot DROP a
-        #    value -- documented in the migration); worker_status and the
-        #    invite-only state are untouched.
+        # 2. Downgrade -1 (the spec's own gate): back to b0c1d2e3f4a5.
+        #    c4d5e's downgrade drops the P19 columns/structures and
+        #    leaves the invite-only state (enum without 'pending',
+        #    pending_registrations gone) untouched.
         # ------------------------------------------------------------
         await asyncio.to_thread(command.downgrade, _alembic_config(), "-1")
 
