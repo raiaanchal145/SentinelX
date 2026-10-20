@@ -24,7 +24,10 @@
  * allow-list matches the PAGE origin (http://localhost:5173), which is
  * unchanged -- the API base's host form doesn't affect it.
  */
-const LOOPBACK_API_BASE = "http://127.0.0.1:8000/api/v1"
+// Must match scripts/dev.mjs BACKEND_PORT (defaults to 8001; overridable via
+// SENTINELX_BACKEND_PORT, which vite.config.ts shares with the dev launcher).
+const BACKEND_DEV_PORT = (import.meta.env.VITE_BACKEND_PORT as string | undefined) || "8001"
+const LOOPBACK_API_BASE = `http://127.0.0.1:${BACKEND_DEV_PORT}/api/v1`
 
 function computeApiBase(): string {
   if (typeof window === "undefined") return LOOPBACK_API_BASE

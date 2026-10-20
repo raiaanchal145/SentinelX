@@ -1681,7 +1681,7 @@ async def verify_ticket(
 # Close-request (critical tickets): the SOC asks the organization's
 # security_manager or owner for the ticket_close approval the close gate
 # requires. The row these create is decided via the approvals router
-# (POST /api/v1/approvals/{id}/decision); P19 brings the full UI.
+# (POST /api/v1/approvals/{id}/approve); P19 brought the full UI.
 # ---------------------------------------------------------------------------
 
 
