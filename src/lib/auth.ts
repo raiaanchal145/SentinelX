@@ -97,4 +97,7 @@ export function logout() {
   localStorage.removeItem("sentinelx_email")
   localStorage.removeItem("sentinelx_token")
   localStorage.removeItem("sentinelx_account_type")
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("sentinelx_auth_change"))
+  }
 }
