@@ -50,6 +50,7 @@ from app.models import (
     AdminLevel,
     AiAnalysis,
     AgentRun,
+    Alert,
     Incident,
     Organization,
     SocMode,
@@ -242,6 +243,73 @@ async def get_alert_analysis(
     if analysis is None:
         return {"analysis": None}
     return {"analysis": _shape_analysis(analysis)}
+
+
+@router.post("/ai/alerts/{alert_id}/regenerate")
+async def regenerate_alert_analysis(
+    alert_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    scope: Scope = Depends(_require_soc_read),
+):
+    """Re-runs triage for one alert under cost caps, scoped to callers with
+    alert write permissions."""
+    from app.ai.service import run_triage_for_alert
+
+    alert = (await db.execute(select(Alert).where(Alert.id == alert_id))).scalar_one_or_none()
+    if alert is None:
+        raise _err("alert_not_found", "Alert not found.", 404)
+    mode, org_ids = await _ai_visibility(db, scope)
+    if mode == "forbidden" or (mode == "orgs" and alert.organization_id not in (org_ids or [])):
+        raise _err("alert_not_found", "Alert not found.", 404)
+    await _require_ai_write(db, scope, alert.organization_id)
+
+    run = await run_triage_for_alert(db, alert_id)
+    if run is None:
+        raise _err("alert_not_found", "Alert not found.", 404)
+
+    analysis = (
+        await db.execute(
+            select(AiAnalysis)
+            .where(AiAnalysis.target_type == "alert", AiAnalysis.target_id == alert_id)
+            .order_by(AiAnalysis.created_at.desc(), AiAnalysis.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return {"analysis": _shape_analysis(analysis) if analysis else None}
+
+
+@router.post("/ai/incidents/{incident_id}/regenerate")
+async def regenerate_incident_analysis(
+    incident_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    scope: Scope = Depends(_require_soc_read),
+):
+    """Re-runs incident drafting under cost caps, scoped to callers with
+    incident write permissions."""
+    from app.ai.incident_service import run_incident_draft_for_incident
+
+    incident = (await db.execute(select(Incident).where(Incident.id == incident_id))).scalar_one_or_none()
+    if incident is None:
+        raise _err("incident_not_found", "Incident not found.", 404)
+    mode, org_ids = await _ai_visibility(db, scope)
+    if mode == "forbidden" or (mode == "orgs" and incident.organization_id not in (org_ids or [])):
+        raise _err("incident_not_found", "Incident not found.", 404)
+    await _require_ai_write(db, scope, incident.organization_id)
+
+    run = await run_incident_draft_for_incident(db, incident_id)
+    if run is None:
+        raise _err("incident_not_found", "Incident not found.", 404)
+
+    analysis = (
+        await db.execute(
+            select(AiAnalysis)
+            .join(AgentRun, AgentRun.id == AiAnalysis.agent_run_id)
+            .where(AiAnalysis.target_type == "incident", AiAnalysis.target_id == incident_id)
+            .order_by(AiAnalysis.created_at.desc(), AiAnalysis.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return {"analysis": _shape_analysis(analysis) if analysis else None}
 
 
 @router.get("/ai/incidents/{incident_id}/analysis")

@@ -163,3 +163,18 @@ async def test_done_flow_triage_accept_incident_ticket_metrics(client, db_sessio
     assert metrics["decisions"]["acceptance_rate"] == 1.0
     assert metrics["decisions"]["average_confidence"] > 0.0
     assert metrics["cost"]["total_spend_usd"] >= 0.0
+
+    # ------------------------------------------------------------------
+    # 7. Regeneration: re-running triage/incident draft under cost caps.
+    # ------------------------------------------------------------------
+    regen_resp = await client.post(
+        f"/api/v1/ai/alerts/{alert.id}/regenerate", headers=auth(token)
+    )
+    assert regen_resp.status_code == 200, regen_resp.text
+    assert regen_resp.json()["analysis"] is not None
+
+    regen_inc_resp = await client.post(
+        f"/api/v1/ai/incidents/{incident_id}/regenerate", headers=auth(token)
+    )
+    assert regen_inc_resp.status_code == 200, regen_inc_resp.text
+    assert regen_inc_resp.json()["analysis"] is not None

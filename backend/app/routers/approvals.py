@@ -231,10 +231,11 @@ async def _decide(
         "related_type": "approval",
         "related_id": approval.id,
     }
-    if not approve:
-        from app.notifications import notify
+    from app.notifications import notify
 
-        await notify(db, "approval.decided", organization_id=approval.organization_id, payload=decided_payload)
+    await notify(db, "approval.decided", organization_id=approval.organization_id, payload=decided_payload)
+
+    if not approve:
         await db.commit()
         await db.refresh(approval)
         return _row(approval)
