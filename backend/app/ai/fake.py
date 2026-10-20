@@ -57,8 +57,15 @@ class FakeProvider(AiProvider):
 
     async def complete(self, messages: list[dict[str, str]]) -> AiCallResult:
         user_text = next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")
-        verdict = self._verdict(user_text)
-        prompt_tokens = len(user_text) // 4
+        # The shape selector needs the whole conversation: the incident
+        # agent's shape marker ('ticket_draft') lives in the SYSTEM
+        # prompt, and the untrusted data sits in the user message. The
+        # verdict keywords only ever match data-shape cues -- never
+        # instructions -- so reading the system text introduces no new
+        # injection surface.
+        shape_text = "\n".join(m.get("content", "") for m in messages)
+        verdict = self._verdict(shape_text, user_text)
+        prompt_tokens = len(shape_text) // 4
         completion_tokens = len(verdict) // 4
         return AiCallResult(
             text=verdict,
@@ -69,7 +76,7 @@ class FakeProvider(AiProvider):
             latency_ms=0,
         )  # cost_usd: estimated at default prices -- nothing was actually billed
 
-    def _verdict(self, user_text: str) -> str:
+    def _verdict(self, shape_text: str, user_text: str) -> str:
         lowered = user_text.lower()
         event_ids = _EVENT_ID_LINE_RE.findall(user_text)
 
@@ -104,6 +111,41 @@ class FakeProvider(AiProvider):
             else ["No action needed; close if the pattern is known-benign."]
         )
         import json
+
+        # The prompt's shape marker decides the verdict shape: the
+        # incident agent's prompt interpolates INCIDENT_JSON_SHAPE, which
+        # is the only prompt mentioning "ticket_draft". Same keyword
+        # verdict, but emitted in the shape the caller's parser needs --
+        # one provider must serve both agents (triage + incident draft).
+        if "ticket_draft" in shape_text.lower():
+            priority = {"critical": "P1", "high": "P2", "medium": "P3"}.get(severity, "P4")
+            status_suggestion = "investigating" if severity in ("critical", "high") else "triaged"
+            return json.dumps(
+                {
+                    "title": summary[:200],
+                    "summary": summary,
+                    "timeline_entries": [
+                        {
+                            "description": f"Agency verdict recorded from {len(event_ids)} seen event(s): {summary}",
+                            "evidence_ids": event_ids[:5],
+                        }
+                    ],
+                    "ticket_draft": {
+                        "description": (
+                            f"Remediation for the reviewed activity: {summary} "
+                            "(fake provider draft -- analyst reviews before creation)."
+                        ),
+                        "remediation_steps": actions,
+                        "suggested_priority": priority,
+                        "suggested_team": None,
+                    },
+                    "severity": severity,
+                    "status_suggestion": status_suggestion,
+                    "confidence": confidence,
+                    "false_positive_likelihood": fp,
+                    "reasoning": reasoning,
+                }
+            )
 
         return json.dumps(
             {

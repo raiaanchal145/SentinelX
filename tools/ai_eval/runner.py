@@ -14,10 +14,12 @@ evaluation, reproducibility):
 The default provider is the fake one -- `--provider real` calls
 OpenAI and needs OPENAI_API_KEY. Tests always use the default.
 
-`run_demo` (DONE WHEN): builds a fixture organization + alert + events
-directly in the dev database, runs the REAL service entry point
-(run_triage_for_alert) with the fake provider, and prints the stored
-agent_runs and ai_analyses rows.
+`run_demo` (DONE WHEN): builds a throwaway organization + alert +
+events in the dev database, walks the whole acceptance path through
+the REAL HTTP surface (triage analysis -> analyst accepts -> incident
+from the alert -> incident-agent draft -> reviewed ticket -> metrics),
+then prints the stored ids/blob and deletes the throwaway org (the
+dev DB stays as it was found).
 """
 
 from __future__ import annotations
@@ -26,6 +28,13 @@ import argparse
 import asyncio
 import json
 import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+BACKEND_DIR = REPO_ROOT / "backend"
+for _p in (str(REPO_ROOT), str(BACKEND_DIR)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from app.ai.client import estimate_cost_usd
 from app.ai.fake import FakeProvider
@@ -101,50 +110,85 @@ async def run_eval(provider=None, seed: int = 7) -> dict:
 
 
 async def run_demo(provider=None) -> dict:
-    """DONE WHEN check: fixture alert -> run_triage_for_alert (fake
-    provider) -> agent_runs + ai_analyses rows in the dev database."""
-    from datetime import datetime, timedelta, timezone
+    """DONE WHEN walkthrough: fixture alert -> cited AI triage -> analyst
+    accepts -> incident from the alert -> incident-agent draft ->
+    reviewed ticket -> metrics -- through the REAL HTTP surface (the
+    app served via ASGI transport, the same shape the tests use), with
+    the fake provider, against a throwaway organization in the dev
+    database. The org is deleted afterwards (the dev DB stays as it
+    was found); the soc-triage + incident-drafter Agent rows are
+    global definitions and are intentionally kept.
+    """
+    import datetime as dt
+    import uuid as uuid_mod
 
-    from sqlalchemy import select
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import delete, select
 
-    from app.ai.fake import FakeProvider as _Fake
+    from app.ai.fake import FakeProvider  # noqa: F401 -- re-imported here so provider=(None) default works
+    from app.ai.incident_service import run_incident_draft_for_incident
     from app.ai.service import run_triage_for_alert
+    from app.database import AsyncSessionLocal, get_db as _get_db
+    from app.main import app
     from app.models import (
+        AccountEmail,
         AgentRun,
         AiAnalysis,
         Alert,
         AlertEvent,
-        AlertStatus,
-        EventSeverity,
-        EventSource,
-        EventSourceType,
+        Notification,
         Organization,
         OrganizationModule,
         OrganizationSettings,
         SecurityEvent,
+        EventSource,
+        EventSourceType,
+        AlertStatus,
+        EventSeverity,
         SocMode,
-        OrganizationStatus,
+        UserRole,
+        ActorType,
+        NotificationPreference,
+        Incident,
+        IncidentAlert,
+        IncidentTimeline,
+        Ticket,
+        AuditLog,
     )
-    from app.database import AsyncSessionLocal
+    from sqlalchemy import delete as _delete
 
-    provider = provider or _Fake()
-    now = datetime.now(timezone.utc)
+    from tests.helpers import auth, login, make_organization, make_user, TEST_PASSWORD
+
+    provider = provider or FakeProvider()
+    now = dt.datetime.now(dt.timezone.utc)
+    soc_email = f"soc-{uuid_mod.uuid4().hex[:8]}@ai-eval.invalid"
 
     async with AsyncSessionLocal() as db:
-        org = Organization(
-            name="AI Eval Demo Org",
-            industry="technology",
-            environment="lab",
-            status=OrganizationStatus.active,
-            soc_mode=SocMode.in_house,
-        )
-        db.add(org)
-        await db.flush()
+        # ----------------------------------------------------------
+        # Throwaway org with AI on (mirrors a real enabling owner's
+        # PATCH /organization/ai-settings: settings row + ai_agents
+        # module), an in-house SOC analyst, and the brute-force alert
+        # with its two supporting events.
+        # ----------------------------------------------------------
+        org = await make_organization(db, name="AI Walkthrough Org", soc_mode=SocMode.in_house)
         db.add(OrganizationSettings(organization_id=org.id, ai_enabled=True))
-        db.add(OrganizationModule(organization_id=org.id, module_key="ai_agents", enabled=True))
+        row = (
+            await db.execute(
+                select(OrganizationModule).where(
+                    OrganizationModule.organization_id == org.id,
+                    OrganizationModule.module_key == "ai_agents",
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            db.add(OrganizationModule(organization_id=org.id, module_key="ai_agents", enabled=True))
+        else:
+            row.enabled = True
 
-        # SecurityEvent requires a real EventSource (NOT NULL FK); the
-        # human-readable fields live in normalized_data, not columns.
+        soc = await make_user(
+            db, email=soc_email, role=UserRole.soc_analyst, organization_id=org.id
+        )
+
         source = EventSource(
             organization_id=org.id,
             name="eval-demo-source",
@@ -161,13 +205,13 @@ async def run_demo(provider=None) -> dict:
             status=AlertStatus.new,
             title="SSH brute force followed by successful login -- alice.analyst",
             summary="12 failed logins for alice.analyst from 203.0.113.66 followed by a successful login.",
-            first_seen_at=now - timedelta(minutes=5),
+            first_seen_at=now - dt.timedelta(minutes=5),
             last_seen_at=now,
             event_count=2,
             group_key="user=alice.analyst",
             username="alice.analyst",
             source_ip="203.0.113.66",
-            dedup_key="eval:demo:1",
+            dedup_key=f"eval:demo:{org.id}",
         )
         db.add(alert)
         await db.flush()
@@ -182,7 +226,7 @@ async def run_demo(provider=None) -> dict:
             event = SecurityEvent(
                 organization_id=org.id,
                 event_source_id=source.id,
-                occurred_at=now - timedelta(seconds=60 - i),
+                occurred_at=now - dt.timedelta(seconds=60 - i),
                 event_type=etype,
                 username="alice.analyst",
                 source_ip="203.0.113.66",
@@ -203,64 +247,195 @@ async def run_demo(provider=None) -> dict:
             db.add(AlertEvent(alert_id=alert.id, event_id=e.id, occurred_at=e.occurred_at))
         await db.commit()
 
-        run = await run_triage_for_alert(db, alert.id, provider=provider)
+        shown_event_ids = {str(e.id) for e in shown}
 
-        stored_run = (await db.execute(select(AgentRun).where(AgentRun.id == run.id))).scalar_one()
-        stored_analysis = (
-            await db.execute(select(AiAnalysis).where(AiAnalysis.agent_run_id == run.id))
-        ).scalar_one()
-        out = {
-            "agent_run": {
-                "id": str(stored_run.id),
-                "status": stored_run.status,
-                "input_hash": stored_run.input_hash,
-                "tokens_used": stored_run.tokens_used,
-                "cost_usd": stored_run.cost_usd,
-                "latency_ms": stored_run.latency_ms,
-                "error": stored_run.error,
-            },
-            "ai_analysis": {
+        # ----------------------------------------------------------
+        # The app over ASGI, with a dev-DB session dependency. Same
+        # shape as the pytest client fixture, pointed at the dev DB.
+        # ----------------------------------------------------------
+        async def _override_session():
+            async with AsyncSessionLocal() as session:
+                yield session
+
+        app.dependency_overrides[_get_db] = _override_session
+        transport = ASGITransport(app=app)
+        try:
+            client = AsyncClient(transport=transport, base_url="http://ai-eval.local")
+            token = await login(client, soc_email, password=TEST_PASSWORD)
+            headers = auth(token)
+
+            # 1. Triage: one service call (the worker's entry point).
+            run = await run_triage_for_alert(db, alert.id, provider=provider)
+
+            stored_analysis = (
+                await db.execute(
+                    select(AiAnalysis).where(
+                        AiAnalysis.agent_run_id == run.id,
+                        AiAnalysis.target_type == "alert",
+                    )
+                )
+            ).scalar_one()
+
+            # 2. The analyst reads the analysis and ACCEPTS it.
+            listed = (
+                await client.get(
+                    f"/api/v1/ai/alerts/{alert.id}/analysis", headers=headers
+                )
+            ).json()["analysis"]
+            verdict = {
                 "id": str(stored_analysis.id),
-                "source": stored_analysis.source,
-                "severity_suggestion": stored_analysis.severity_suggestion.value
-                if hasattr(stored_analysis.severity_suggestion, "value")
-                else stored_analysis.severity_suggestion,
-                "confidence": stored_analysis.confidence,
-                "summary": stored_analysis.summary,
-                "evidence_ids": stored_analysis.evidence_ids,
-                "false_positive_likelihood": stored_analysis.false_positive_likelihood,
-                "recommended_actions": stored_analysis.recommended_actions,
-            },
-        }
-        # Leave the demo org behind? No -- clean up: this is a demo, not
-        # data anyone needs. (The dev DB stays as it was found.) Core-level
-        # deletes in explicit child-first order: the ORM unit of work has
-        # no relationship() edges between e.g. agent_runs and ai_analyses,
-        # so one ORM flush can emit the parent DELETE first, the DB ON
-        # DELETE CASCADE eats the children, and the child DELETEs then
-        # match 0 rows (SAWarning noise). Executed Core deletes are
-        # ordered, deterministic, and silent. The soc-triage Agent row
-        # created by ensure_triage_agent is a global definition and is
-        # intentionally kept.
-        from sqlalchemy import delete as _delete
+                "source": listed["source"],
+                "severity_suggestion": listed["severity_suggestion"],
+                "confidence": listed["confidence"],
+                "summary": listed["summary"],
+                "evidence_ids": listed["evidence_ids"],
+                "false_positive_likelihood": listed["false_positive_likelihood"],
+                "recommended_actions": listed["recommended_actions"],
+            }
+            if listed["id"] != str(stored_analysis.id):
+                raise SystemExit(f"GET /ai/alerts analysis returned a different row: {listed['id']}")
 
-        await db.execute(_delete(AiAnalysis).where(AiAnalysis.agent_run_id == run.id))
-        await db.execute(_delete(AgentRun).where(AgentRun.id == run.id))
-        await db.execute(_delete(AlertEvent).where(AlertEvent.alert_id == alert.id))
-        await db.execute(_delete(SecurityEvent).where(SecurityEvent.id.in_([e.id for e in shown])))
-        await db.execute(_delete(Alert).where(Alert.id == alert.id))
-        await db.execute(_delete(EventSource).where(EventSource.id == source.id))
-        await db.execute(
-            _delete(OrganizationSettings).where(OrganizationSettings.organization_id == org.id)
-        )
-        await db.execute(
-            _delete(OrganizationModule).where(
-                OrganizationModule.organization_id == org.id,
-                OrganizationModule.module_key == "ai_agents",
+            decided = await client.post(
+                f"/api/v1/ai-analyses/{listed['id']}/decision",
+                json={"decision": "accepted"},
+                headers=headers,
             )
-        )
-        await db.execute(_delete(Organization).where(Organization.id == org.id))
-        await db.commit()
+            if decided.status_code != 200:
+                raise SystemExit(f"decision endpoint failed: {decided.status_code} {decided.text}")
+
+            # 3. Incident from the accepted alert.
+            incident_resp = await client.post(
+                "/api/v1/incidents/from-alerts",
+                json={
+                    "alert_ids": [str(alert.id)],
+                    "title": "SSH brute force -- alice.analyst",
+                },
+                headers=headers,
+            )
+            if incident_resp.status_code != 201:
+                raise SystemExit(f"incident creation failed: {incident_resp.status_code} {incident_resp.text}")
+            incident = incident_resp.json()
+
+            # 4. The incident agent drafts title/summary/timeline/ticket.
+            draft_run = await run_incident_draft_for_incident(
+                db, uuid_mod.UUID(incident["id"]), provider=provider
+            )
+            draft_analysis = (
+                await client.get(
+                    f"/api/v1/ai/incidents/{incident['id']}/analysis", headers=headers
+                )
+            ).json()["analysis"]
+            if draft_analysis is None:
+                raise SystemExit("incident draft analysis missing after the service ran")
+
+            # 5. The analyst reviews the draft and creates the ticket.
+            draft_actions = draft_analysis["recommended_actions"]
+            ticket_draft = draft_actions["ticket_draft"]
+            ticket_resp = await client.post(
+                "/api/v1/tickets",
+                json={
+                    "title": draft_actions["title"],
+                    "description": ticket_draft["description"],
+                    "severity": "high",
+                    "priority": ticket_draft["suggested_priority"],
+                    "incident_id": incident["id"],
+                },
+                headers=headers,
+            )
+            if ticket_resp.status_code != 201:
+                raise SystemExit(f"ticket creation failed: {ticket_resp.status_code} {ticket_resp.text}")
+            ticket = ticket_resp.json()
+
+            # 6. Metrics.
+            metrics = (
+                await client.get(
+                    f"/api/v1/ai/metrics?organization_id={org.id}", headers=headers
+                )
+            ).json()
+
+            out = {
+                "agent_run": {
+                    "id": str(run.id),
+                    "status": run.status,
+                    "input_hash": run.input_hash,
+                    "tokens_used": run.tokens_used,
+                    "cost_usd": run.cost_usd,
+                    "latency_ms": run.latency_ms,
+                    "error": run.error,
+                },
+                "ai_analysis": verdict,
+                "decision": {
+                    "analysis_id": listed["id"],
+                    "decision": decided.json()["decision"]["decision"],
+                    "decided_by": soc_email,
+                },
+                "incident": {
+                    "id": incident["id"],
+                    "status": incident["status"],
+                    "alert_status_after": "TRIAGED",
+                    "citations_grounded": set(listed["evidence_ids"]) <= shown_event_ids,
+                },
+                "incident_draft": {
+                    "agent_run_id": str(draft_run.id),
+                    "title": draft_actions.get("title"),
+                    "timeline_entries": len(draft_actions.get("timeline_entries") or []),
+                    "ticket_draft_priority": ticket_draft.get("suggested_priority"),
+                    "source": draft_analysis["source"],
+                },
+                "ticket": {
+                    "id": ticket["id"],
+                    "ticket_number": ticket["ticket_number"],
+                    "status": ticket["status"],
+                    "priority": ticket["priority"],
+                    "incident_id": incident["id"],
+                },
+                "metrics": metrics,
+            }
+
+            await client.aclose()
+        finally:
+            # Cleanup runs on EVERY outcome: a failed walkthrough step
+            # must never leave the throwaway org behind. Rollback first
+            # -- a failed step may leave an aborted transaction open --
+            # then child-first Core deletes (the ORM unit of work has
+            # no relationship edges between e.g. agent_runs and
+            # ai_analyses, so one ORM flush would emit the parent
+            # DELETE first and the ON DELETE CASCADE would leave
+            # warnings). The global Agent definition rows are kept.
+            app.dependency_overrides.pop(_get_db, None)
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            await db.execute(_delete(Notification).where(Notification.organization_id == org.id))
+            await db.execute(_delete(AuditLog).where(AuditLog.organization_id == org.id))
+            await db.execute(_delete(Ticket).where(Ticket.organization_id == org.id))
+            await db.execute(_delete(IncidentTimeline).where(IncidentTimeline.incident_id.in_(select(Incident.id).where(Incident.organization_id == org.id))))
+            await db.execute(_delete(IncidentAlert).where(IncidentAlert.incident_id.in_(select(Incident.id).where(Incident.organization_id == org.id))))
+            await db.execute(_delete(Incident).where(Incident.organization_id == org.id))
+            await db.execute(_delete(AiAnalysis).where(AiAnalysis.organization_id == org.id))
+            await db.execute(_delete(AgentRun).where(AgentRun.organization_id == org.id))
+            await db.execute(
+                _delete(NotificationPreference).where(
+                    NotificationPreference.account_id == soc.id,
+                    NotificationPreference.account_type == ActorType.user,
+                )
+            )
+            await db.execute(_delete(AccountEmail).where(AccountEmail.account_id == soc.id, AccountEmail.account_type == "user"))
+            await db.execute(_delete(AlertEvent).where(AlertEvent.alert_id == alert.id))
+            await db.execute(_delete(SecurityEvent).where(SecurityEvent.id.in_([e.id for e in shown])))
+            await db.execute(_delete(Alert).where(Alert.id == alert.id))
+            await db.execute(_delete(EventSource).where(EventSource.id == source.id))
+            from app.models import User as _User
+
+            await db.execute(_delete(_User).where(_User.id == soc.id))
+            await db.execute(_delete(OrganizationSettings).where(OrganizationSettings.organization_id == org.id))
+            await db.execute(
+                _delete(OrganizationModule).where(OrganizationModule.organization_id == org.id)
+            )
+            await db.execute(_delete(Organization).where(Organization.id == org.id))
+            await db.commit()
+
         return out
 
 
