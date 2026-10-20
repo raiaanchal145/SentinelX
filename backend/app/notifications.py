@@ -107,6 +107,14 @@ EVENTS: dict[str, EventTemplate] = {
         title="{severity} alert: {alert_title}",
         body="{alert_description}",
     ),
+    # P19: the low-risk user.notify tool sends an envelope about an
+    # incident. audience=soc routes like alert events, audience=owner
+    # rides to the owner (the template renders both shapes).
+    "tool.notify": EventTemplate(
+        title="Response action notice: {incident_title}",
+        body="{message}",
+        with_owner=True,
+    ),
 }
 
 PREFERENCE_EVENT_KEYS = sorted(EVENTS.keys())
