@@ -111,3 +111,4 @@ export function apiTriggerIncidentAction(
     body: JSON.stringify(payload),
   })
 }
+

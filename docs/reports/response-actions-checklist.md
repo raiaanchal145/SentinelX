@@ -87,3 +87,4 @@ Verify end-to-end authorization, anti-self-approval, worker execution, and evide
 1. In organization settings:
    - When `low_risk_automation_enabled` is `false`: Low-risk actions (comments, tags, priority nudges) require approval (`needs_approval`).
    - When `low_risk_automation_enabled` is `true`: Low-risk actions run automatically (`allow`) without queuing an approval.
+
