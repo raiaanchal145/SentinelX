@@ -1155,6 +1155,15 @@ export type IncidentDetailResponse = {
   assets: IncidentLinkedAsset[]
   duplicate_of: { id: string; title: string; status: string } | null
   timeline: IncidentTimelineEntry[]
+  pending_approvals?: Array<{
+    id: string
+    action_type: string
+    tool?: string | null
+    risk_level: string
+    requested_reason?: string | null
+    expires_at?: string | null
+    created_at?: string | null
+  }>
 }
 
 export type IncidentListParams = {
