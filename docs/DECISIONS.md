@@ -1017,3 +1017,20 @@ colors -- a 0.7-confidence critical should not look safe), citations
 link to the cited events, and when the analysis is a rules fallback or
 hasn't arrived yet the panel says "AI unavailable" and shows the
 deterministic summary instead of an empty box.
+
+## P19 Response Actions and Approval Governance
+
+Every tool action attempted by an AI agent or human analyst MUST pass
+through the policy engine (`authorize_tool_call()`). No code touches
+an executor except via `run_tool_call()`.
+- **Three-Tier Risk Model**:
+  - `read_only` (events.search, asset.get, alert.history): informational queries, permitted straight through.
+  - `low` (incident.add_comment, asset.add_tag, user.notify, incident.adjust_priority): bounded DB updates, requires human review unless `low_risk_automation_enabled` is explicitly turned ON at the organization level.
+  - `high` (host.isolate, account.disable, ip.block, process.kill, file.quarantine): state-altering containment actions. Gated unconditionally to human authorization (`needs_approval`).
+- **Human Authority & Anti-Self-Approval**:
+  - Only the organization's `security_manager` or owner (`organization_admin`) may approve or reject. Platform SOC analysts and super admins are structurally forbidden (403).
+  - Requesters can NEVER approve their own requests (`self_approval_not_allowed` 403).
+  - Rejections require a mandatory explanation reason.
+- **Evidence Layer & Exactly-Once Execution**:
+  - Every attempt (allowed, pending, or denied) is hashed via SHA-256 and committed to `tool_call_logs`.
+  - Execution runs under a database row lock (`with_for_update()`), ensuring that race conditions or duplicate worker deliveries cannot execute an approval more than once. Expired approvals (24-hour TTL) are refused and stamped `expired`.

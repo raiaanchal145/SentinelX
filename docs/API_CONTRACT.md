@@ -1104,14 +1104,30 @@ The worker's jobs: `heartbeat`, `process_events` (event
 normalization, then inline detection evaluation AND the P10 alerting
 halves -- see "Event ingestion and read API", "Detection rules" and
 "Alerts" above), `ticket_sla_check` (every minute: SLA at-risk and
-breach marking + breach escalations -- see "Tickets" above), and
+breach marking + breach escalations -- see "Tickets" above),
 `ai_triage_alert` (one job per new alert id, enqueued after the alert
 commit -- see "AI triage" above; writes agent_runs + ai_analyses
-never alert state), and `ai_incident_draft` (one job per new
+never alert state), `ai_incident_draft` (one job per new
 incident, enqueued post-commit -- draft-only, see "AI analyses"
-above). Worker startup also seeds the 8 built-in detection rules, the
+above), and `execute_approved_action_job` (one job per approved approval id,
+re-checking expiration and locking the row for exactly-once execution).
+Worker startup also seeds the 8 built-in detection rules, the
 built-in correlation rule, and the triage agent ("soc-triage")
 idempotently (the incident drafter seeds lazily on first run).
+
+## Approvals and Response Actions API (`/api/v1/approvals`, `/api/v1/incidents/{id}/actions`)
+
+All tool executions pass through the policy engine (`authorize_tool_call`). High-risk actions
+(`host.isolate`, `account.disable`, `ip.block`, `process.kill`, `file.quarantine`) and low-risk actions
+when automation is disabled produce `needs_approval` and create an `Approval` record with a 24-hour expiration.
+
+| Method & Path | Scope | Notes |
+|---|---|---|
+| `GET /approvals?view=pending\|mine\|history` | `pending`/`history`: owner or security_manager only; `mine`: active org caller | Returns approval records. Expired pending items are returned with computed `status: "expired"`. |
+| `GET /approvals/{id}` | owner or security_manager | Returns one approval record by id. |
+| `POST /approvals/{id}/approve` | owner or security_manager | Authorizes execution. Requester cannot approve own request (403 `self_approval_not_allowed`). Enqueues `execute_approved_action_job` (falls back inline). |
+| `POST /approvals/{id}/reject` | owner or security_manager | Rejects request. `reason` (1-2000 chars) is mandatory (422 if omitted). |
+| `POST /incidents/{id}/actions` | SOC writer, security_manager, or owner | Triggers a registered tool against the incident. Returns 200 on `allow`, 202 on `needs_approval` (with `approval_id`), or 403 on `deny`. Accepts `as_ai_agent: bool` to attribute request to an AI recommendation. |
 
 ## Error code reference (structured-detail endpoints only)
 
@@ -1135,3 +1151,8 @@ idempotently (the incident drafter seeds lazily on first run).
 | `module_not_available` | 403 | `require_module` |
 | `ai_agents_module_disabled` / `invalid_cost_cap` | 403 / 400 | `organization.py` PATCH ai-settings |
 | `organization_settings_missing` | 500 | `organization.py` PATCH ai-settings (data-integrity; row always exists in practice) |
+| `approvals_decide_not_allowed` | 403 | `approvals.py`: only owner or security_manager may decide |
+| `self_approval_not_allowed` | 403 | `approvals.py`: requester cannot decide own approval |
+| `approval_not_found` | 404 | `approvals.py`: unknown approval or cross-tenant attempt |
+| `approval_expired` | 409 | `approvals.py`: decision attempted after 24h expiration |
+| `approval_already_decided` | 409 | `approvals.py`: approval already decided |
