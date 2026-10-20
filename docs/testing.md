@@ -107,18 +107,18 @@ platforms -- verify those two on the actual development machine.
 
 ## AI triage + incident agent (evaluation harness)
 
-Run from the repo root with the project venv (`tools/ai_eval/`):
+Run from `backend/` with the project venv (the settings file is
+resolved from the working directory, so `backend/` is where it starts;
+see docs/DECISIONS.md's provider note):
 
 ```
-backend/.venv/Scripts/python.exe backend/../tools/ai_eval/main.py --provider fake   # deterministic, no network
-backend/.venv/Scripts/python.exe -m tools.ai_eval.runner --provider real            # needs OPENAI_API_KEY
+cd backend
+PYTHONPATH=.. .venv/Scripts/python -m tools.ai_eval.runner --provider fake            # metrics: 8 labelled cases, deterministic
+PYTHONPATH=.. .venv/Scripts/python -m tools.ai_eval.runner --provider fake --demo     # DONE-WHEN walkthrough against the dev DB
+PYTHONPATH=.. .venv/Scripts/python -m tools.ai_eval.runner --provider real            # needs OPENAI_API_KEY; calls WILL hit the network
 ```
 
-(most robust from `backend/`:
-`.venv/Scripts/python -m ...` -- see docs/DECISIONS.md's provider
-note).
-
-Latest run (2026-10-09, provider = FakeProvider, seed 7, 8 cases):
+Latest run (2026-10-20, provider = FakeProvider, seed 7, 8 cases):
 
 ```
 cases: 8
@@ -129,15 +129,51 @@ false_negatives: 0
 precision: 1.0
 recall: 1.0
 false_positive_rate: 0.0
-avg_estimated_cost_usd: 0.000153
+avg_estimated_cost_usd: 0.000232
 failures: none
 ```
 
 The fake provider is deterministic and injection-deaf (see
 `docs/DECISIONS.md`), so these numbers are stable across machines and
 runs -- the reproducibility gate the AI SOC Analyst brief asks for.
-Re-run with `--provider real` on a machine with a configured key and
-replace this table; production expectations stay the same bands.
+(The avg cost estimate moved 0.000153 -> 0.000232 on 2026-10-20 when
+the fake provider started billing the WHOLE prompt -- system + user --
+instead of only the user text; production billing counts every token.)
+
+### The DONE-WHEN walkthrough (`--demo`)
+
+`--demo` walks the whole acceptance path through the REAL HTTP surface
+(the app served via ASGI transport, same shape as the pytest client)
+against a throwaway organization in the DEV database:
+
+1. a simulated brute-force alert (+2 supporting events) is triaged by
+   the real service entry point the worker uses;
+2. the analysis is cited (grounded event ids), `source="ai"`;
+3. the analyst accepts via `POST /ai-analyses/{id}/decision`;
+4. an incident is created FROM THE ALERT (`POST /incidents/from-alerts`) --
+   the alert becomes TRIAGED;
+5. the incident agent drafts title/summary/timeline/ticket;
+6. the analyst reviews the draft and creates the ticket through the
+   normal ticket API (draft-only rule: the agent itself never creates);
+7. `GET /ai/metrics` shows 2 AI analyses, 1 decision, 1 accepted,
+   acceptance_rate 1.0, average_confidence 0.8, spend > $0.
+
+The throwaway org is deleted afterwards (cleanup runs in a `finally`,
+so a failed step leaves nothing behind). The same flow is pinned as a
+pytest: `backend/tests/test_ai_done_flow.py`.
+
+Latest walkthrough (2026-10-20, provider = FakeProvider): every step
+passed; metrics as above; total demo spend $0.000515 (est.), ticket
+TICK-1/P2 attached to the incident.
+
+### Real-provider evaluation: INCOMPLETE (no key available)
+
+The brief asks for ONE real-provider (OpenAI) harness run. **Not yet
+run**: no `OPENAI_API_KEY` was available when this milestone closed.
+The harness command above is ready; when a key is configured, run
+`--provider real`, replace the metrics table in this section with the
+real run's output, and note the provider + date. Expectations stay the
+same bands on the fake provider in the meantime.
 
 ### Incident-agent safety properties (pinned tests)
 

@@ -988,6 +988,23 @@ exactly this kind of payload, `accepted_by_user_id`/`accepted_at`
 milestone that wants first-class decision columns can backfill from
 the JSONB without having invented a duplicate now.
 
+## FakeProvider speaks BOTH agent shapes, and --demo walks the whole DONE path
+
+Follow-up to the fake-provider entry above. The fake originally emitted
+only the triage JSON shape, so every incident-agent prompt fell
+through to the rules draft -- the "first-class provider" was not
+actually a provider for half the milestone. It now detects the
+incident agent by the shape marker in the SYSTEM prompt ('ticket_draft'
+appears only there) and emits a title/summary/timeline/ticket draft
+from the SAME keyword verdict, keeping one deterministic verdict
+per input. Token accounting counts the whole prompt (system + user),
+which moved the eval's avg cost estimate (documented in
+docs/testing.md); production billing counts every token, so this is
+the honest number. The harness `--demo` now walks the WHOLE done-flow
+(triage -> accept -> incident -> draft -> reviewed ticket -> metrics)
+against the dev DB through the real HTTP surface, deletes its
+throwaway org in a finally so a failed step leaves nothing behind.
+
 ## The AI panel is one shared component, both SOC modes
 
 `src/features/soc/components/AiAnalysisPanel.tsx` renders in the alert
