@@ -77,6 +77,15 @@ export function apiGetAiAnalysis(
   return request(`/ai/${targetType === "alert" ? "alerts" : "incidents"}/${targetId}/analysis`)
 }
 
+export function apiRegenerateAiAnalysis(
+  targetType: "alert" | "incident",
+  targetId: string,
+): Promise<{ analysis: AiAnalysisView | null }> {
+  return request(`/ai/${targetType === "alert" ? "alerts" : "incidents"}/${targetId}/regenerate`, {
+    method: "POST",
+  })
+}
+
 export function apiDecideAiAnalysis(
   analysisId: string,
   payload: { decision: "accepted" | "edited" | "rejected"; reason?: string; edits?: Record<string, unknown> },

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Link } from "react-router-dom"
-import { Bot, Network, RefreshCw } from "lucide-react"
+import { Network, RefreshCw } from "lucide-react"
 
 import IconButton from "../../../components/ui/IconButton"
 import SegmentedControl from "../../../components/ui/SegmentedControl"
@@ -22,6 +22,7 @@ import { useMe } from "../../../lib/me"
 
 import AlertDrawer from "../components/AlertDrawer"
 import AlertKpiRow from "../components/AlertKpiRow"
+import AiMetricsCard from "../components/AiMetricsCard"
 import ConfirmDialog from "../../../components/ui/ConfirmDialog"
 import TriageQueue from "../components/TriageQueue"
 import { minutesSince } from "../components/alertShared"
@@ -236,16 +237,8 @@ function SocOverview() {
             </div>
           </section>
 
-          {/* PLACEHOLDER: AI insights arrive with the ai_agents milestone. */}
-          <section aria-label="AI insights (placeholder)" className="rounded-card border border-line bg-surface p-4">
-            <h2 className="flex items-center gap-2 text-sm font-semibold text-fg-primary">
-              AI insights <span className="text-xs font-normal text-fg-faint">-- not available yet</span>
-            </h2>
-            <div className="mt-3 flex items-center gap-2 rounded-control border border-dashed border-line bg-surface-sunken p-3 text-xs text-fg-muted">
-              <Bot size={14} aria-hidden="true" />
-              AI analysis of the current queue arrives with the AI-agents milestone.
-            </div>
-          </section>
+          {/* AI operations & metrics */}
+          <AiMetricsCard />
         </div>
       </div>
 

@@ -5,6 +5,7 @@ import ReadOnlyChip from "../../../components/shared/ReadOnlyChip"
 import AlertTable from "../components/AlertTable"
 import AlertDrawer from "../components/AlertDrawer"
 import AlertKpiRow from "../components/AlertKpiRow"
+import AiMetricsCard from "../components/AiMetricsCard"
 import AlertFilters from "../components/AlertFilters"
 import { alertRangeHours, INITIAL_ALERT_FILTERS, type AlertFilterState } from "../components/alertFilterShared"
 import { minutesSince } from "../components/alertShared"
@@ -91,6 +92,8 @@ function SecurityActivity() {
       )}
 
       <AlertKpiRow alerts={alerts} loading={loading && alerts.length === 0} alertsPath="" />
+
+      <AiMetricsCard organizationId={me?.organization?.id} />
 
       <AlertFilters value={filters} onChange={setFilters} />
 
