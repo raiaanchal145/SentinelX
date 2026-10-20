@@ -1797,6 +1797,7 @@ class ResponseActionPayload(BaseModel):
     tool: str = Field(min_length=1, max_length=100)
     arguments: dict = Field(default_factory=dict)
     reason: str | None = Field(default=None, max_length=1000)
+    as_ai_agent: bool = False
 
 
 @router.post("/{incident_id}/actions", status_code=202)
@@ -1816,14 +1817,35 @@ async def incident_action(
     this router's -- there is no second permission list to drift.
     """
     incident = await _visible_incident(db, scope, incident_id)
-    await _require_incident_write(db, scope, incident.organization_id)
+    # SOC writes; managers and owners may request per the locked-in decision.
+    if scope.role not in (
+        AdminLevel.super_admin.value,
+        AdminLevel.platform_soc_analyst.value,
+        UserRole.soc_analyst.value,
+        UserRole.security_manager.value,
+        AdminLevel.organization_admin.value,
+    ):
+        await _require_incident_write(db, scope, incident.organization_id)
 
     from app.ai.policy import actor_from_scope, run_tool_call
+    from app.ai.tools.base import ToolActor
 
     tool_name = payload.tool.strip()
+    if payload.as_ai_agent:
+        actor = ToolActor(
+            actor_type=ActorType.ai_agent,
+            actor_id=None,
+            kind="ai_agent",
+            role="ai_agent",
+            scope=scope,
+            organization_id=incident.organization_id,
+        )
+    else:
+        actor = actor_from_scope(scope)
+
     outcome = await run_tool_call(
         db,
-        actor=actor_from_scope(scope),
+        actor=actor,
         tool_name=tool_name,
         args=payload.arguments or {},
         incident_id=incident.id,

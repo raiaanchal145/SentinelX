@@ -83,6 +83,7 @@ ROLE_DEFAULT_MODULES: dict[UserRole, dict[str, str]] = {
         ModuleKey.it_tickets.value: ACCESS_WRITE,
         ModuleKey.approvals.value: ACCESS_WRITE,
         ModuleKey.reports.value: ACCESS_WRITE,
+        ModuleKey.device_agents.value: ACCESS_WRITE,
     },
     # assets: read, not write -- the Assets feature (app/routers/
     # assets.py) reserves module-level write on assets for
@@ -99,6 +100,7 @@ ROLE_DEFAULT_MODULES: dict[UserRole, dict[str, str]] = {
         ModuleKey.it_tickets.value: ACCESS_WRITE,
         ModuleKey.ai_agents.value: ACCESS_WRITE,
         ModuleKey.reports.value: ACCESS_WRITE,
+        ModuleKey.device_agents.value: ACCESS_WRITE,
     },
     # assets: write, not read -- scoped further at the row level in
     # app/routers/assets.py to only the assets it_developer owns or
