@@ -253,3 +253,4 @@ class SentinelXClient:
             logger.warning("Ingestion warning from server: %s", warning_hdr)
 
         return accepted, rejected, no_consent
+

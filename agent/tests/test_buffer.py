@@ -75,3 +75,4 @@ def test_buffer_fifo_item_limit_pruning():
         # The first 5 (item_0 .. item_4) were pruned; items 5..9 remain
         assert batch[0][1]["message"] == "item_5"
         assert batch[-1][1]["message"] == "item_9"
+

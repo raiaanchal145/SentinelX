@@ -195,3 +195,4 @@ def test_parse_1116_defender_detection():
 def test_parse_invalid_xml():
     assert parse_event_xml("not valid xml") is None
     assert parse_event_xml("<root></root>") is None
+

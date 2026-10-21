@@ -57,6 +57,15 @@ The agent verifies consent, swaps the token for an encrypted per-device API key,
 
 ## 4. Running the Agent
 
+### Automatic Mode (Integrated Developer Launcher):
+When developing locally, `npm run dev` automatically detects if the endpoint agent is enrolled and starts it in a dedicated window or inline with the backend, worker, and frontend:
+```powershell
+npm run dev
+# Or run agent standalone:
+npm run dev:agent
+```
+If the agent has not yet been enrolled, `npm run dev` skips it cleanly and prints an informative prompt.
+
 ### Foreground Mode (Testing / Development):
 ```powershell
 python -m agent.main run --foreground
@@ -119,3 +128,4 @@ powershell -ExecutionPolicy Bypass -File .\agent\tools\test_failed_logon.ps1 -Co
 powershell -ExecutionPolicy Bypass -File .\agent\tools\test_failed_logon.ps1 -Count 25
 ```
 After running, check the SentinelX SOC Overview dashboard (`/soc`) to observe the alert firing with real citations from your device.
+

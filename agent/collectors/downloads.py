@@ -161,3 +161,4 @@ class DownloadsCollector:
                 logger.debug("Failed scanning folder %s: %s", folder, exc)
 
         return results
+

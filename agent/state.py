@@ -59,3 +59,4 @@ class BookmarkState:
         if record_id > self.last_record_ids.get(channel, 0):
             self.last_record_ids[channel] = record_id
             self.save()
+

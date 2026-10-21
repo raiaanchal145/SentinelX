@@ -16,7 +16,8 @@ from typing import Any
 from agent.crypto import dpapi_decrypt, dpapi_encrypt, mask_secret
 
 AGENT_VERSION = "1.0.0"
-DEFAULT_SERVER_URL = "http://localhost:8000/api/v1"
+DEFAULT_PORT = os.environ.get("SENTINELX_BACKEND_PORT", "8001")
+DEFAULT_SERVER_URL = f"http://127.0.0.1:{DEFAULT_PORT}/api/v1"
 
 
 def get_data_dir() -> Path:
@@ -141,3 +142,4 @@ class AgentConfig:
             cfg_file.unlink(missing_ok=True)
         self.device_id = None
         self.enabled_categories = set()
+

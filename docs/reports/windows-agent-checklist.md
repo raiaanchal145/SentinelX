@@ -113,3 +113,4 @@ Verify end-to-end enrollment, DPAPI credential protection, real Windows Event Lo
    - Local DPAPI credentials are wiped.
    - Process halts with exit code 2.
    - Subsequent event sends are rejected by SentinelX with `403 Forbidden: device_revoked`.
+

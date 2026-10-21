@@ -21,3 +21,4 @@ def test_mask_secret():
     assert mask_secret("short") == "********"
     assert mask_secret("") == "<none>"
     assert mask_secret(None) == "<none>"
+

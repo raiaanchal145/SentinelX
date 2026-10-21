@@ -2,7 +2,7 @@
 SentinelX Windows Endpoint Agent — Main Entrypoint and Service Daemon.
 
 Usage:
-    python -m agent.main enroll --server http://localhost:8000/api/v1 --token sxe_...
+    python -m agent.main enroll --server http://localhost:8001/api/v1 --token sxe_...
     python -m agent.main run [--foreground]
     python -m agent.main service {install,uninstall,start,stop,status}
     python -m agent.main status
@@ -332,3 +332,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

@@ -328,3 +328,4 @@ class WindowsEventCollector:
         if success:
             return buf.value
         return None
+

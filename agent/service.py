@@ -128,3 +128,4 @@ def get_service_status() -> str:
         return res.stdout.strip()
     except subprocess.CalledProcessError as exc:
         return f"Not Installed or Inaccessible: {exc.stderr.strip()}"
+

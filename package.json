@@ -8,6 +8,7 @@
     "dev:share": "node scripts/dev.mjs --share",
     "dev:web": "vite",
     "dev:api": "node scripts/dev.mjs --api-only",
+    "dev:agent": "node scripts/dev.mjs --agent-only",
     "dev:db": "node scripts/dev.mjs --db-only",
     "dev:setup": "node scripts/dev.mjs --setup-only",
     "dev:doctor": "node scripts/dev.mjs --doctor",

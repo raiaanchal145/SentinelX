@@ -58,3 +58,4 @@ def test_is_collector_consented():
     assert is_collector_consented(4720, granted) is False
     # 1116 belongs to security_defenses -> not consented
     assert is_collector_consented(1116, granted) is False
+
