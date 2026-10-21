@@ -1129,6 +1129,24 @@ when automation is disabled produce `needs_approval` and create an `Approval` re
 | `POST /approvals/{id}/reject` | owner or security_manager | Rejects request. `reason` (1-2000 chars) is mandatory (422 if omitted). |
 | `POST /incidents/{id}/actions` | SOC writer, security_manager, or owner | Triggers a registered tool against the incident. Returns 200 on `allow`, 202 on `needs_approval` (with `approval_id`), or 403 on `deny`. Accepts `as_ai_agent: bool` to attribute request to an AI recommendation. |
 
+## Consented Endpoint Monitoring & Device Agents API (`/api/v1/devices`, `/api/v1/agent`)
+
+Endpoints stream security telemetry only after deliberate, version-stamped, revocable consent. Ingestion strictly filters out non-consented categories.
+
+| Method & Path | Scope | Notes |
+|---|---|---|
+| `POST /devices/enrollment-tokens` | owner, security_manager, or it_developer with write access | Generates single-use 30-min token (`sxe_...`) for an active asset. Status starts at `pending_consent`. |
+| `GET /devices/enrollment-tokens/{token}/preview` | Public / Token-authenticated | Previews target asset, org name, agreement version, and the 6 consent categories with monitoring vs prohibited disclosures. |
+| `POST /devices/enrollment-tokens/{token}/consent` | Public / Token-authenticated | Signs consent agreement. Records version-stamped immutable `ConsentRecord` with IP and categories. Sets status to `active`. |
+| `POST /agent/enroll` | Device Agent | Exchanges token for per-device API key (`sxa_...`). Single-use: fails if consent not signed (403 `consent_required`), expired (409 `enrollment_token_expired`), or already used (409 `enrollment_token_used`). |
+| `POST /agent/heartbeat` | Device Key | Records heartbeat. Updates `last_heartbeat_at` and `last_seen_at`. |
+| `GET /agent/config` | Device Key | Returns current consent categories and agent collection directives. |
+| `GET /devices` | Org member with `device_agents` read, or Platform SOC (for assigned orgs) | Returns list of devices with computed status (`connected` $\le 2$m, `stale` $2-10$m, `offline` $> 10$m, `pending_consent`, `revoked`). |
+| `GET /devices/summary` | Org member with `device_agents` read, or Platform SOC | Returns aggregated device counts by status. |
+| `GET /devices/{id}` | Org member with `device_agents` read, or Platform SOC | Returns device metadata, bound asset details, active consent, and immutable consent history ledger. |
+| `POST /devices/{id}/consent` | owner, security_manager, or it_developer with write access | Appends a NEW versioned consent record. Historical records are never modified. |
+| `POST /devices/{id}/revoke` | owner, security_manager, or it_developer with write access | Revokes device key and consent record. A mandatory reason is required. Ingestion stops immediately (subsequent events return `device_revoked`). |
+
 ## Error code reference (structured-detail endpoints only)
 
 | Code | Status | Where |
@@ -1156,3 +1174,13 @@ when automation is disabled produce `needs_approval` and create an `Approval` re
 | `approval_not_found` | 404 | `approvals.py`: unknown approval or cross-tenant attempt |
 | `approval_expired` | 409 | `approvals.py`: decision attempted after 24h expiration |
 | `approval_already_decided` | 409 | `approvals.py`: approval already decided |
+| `enrollment_token_not_found` | 404 | `devices.py`: invalid or unhashed token |
+| `enrollment_token_expired` | 409 | `devices.py` / `agent.py`: token expired (> 30 mins) |
+| `enrollment_token_used` | 409 | `agent.py`: token already swapped for API key |
+| `consent_required` | 403 | `agent.py`: agent tried to enroll before user granted consent |
+| `device_revoked` | 403 | `events.py` / `agent.py`: device has been revoked |
+| `consent_revoked` | 403 | `events.py`: active consent record has been revoked |
+| `device_not_found` | 404 | `devices.py`: device enrollment record not found |
+| `device_already_revoked` | 409 | `devices.py`: attempt to revoke an already revoked device |
+| `no_active_consent` | 409 | `devices.py`: attempt to update consent on an unconsented or revoked device |
+| `reason_required` | 422 | `devices.py`: revocation reason missing or empty |
