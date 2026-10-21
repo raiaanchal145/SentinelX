@@ -18,3 +18,4 @@ function OwnerIncidentDetail() {
 }
 
 export default OwnerIncidentDetail
+
