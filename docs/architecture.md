@@ -559,3 +559,31 @@ lib/data.ts      getSocKpis(state, scope), getTriageQueue(...), etc. --
   `a8c1e5f7b9d0` adds `tickets.asset_id`, `sla_at_risk`,
   `auto_ticket_min_confidence` and backfills default SLA policies.
   docs/API_CONTRACT.md "Tickets" is the full contract.
+
+
+- **Windows Endpoint Agent (`agent/`, P21)** -- A privacy-first,
+  consent-gated Windows telemetry agent running as an elevated service
+  or Scheduled Task (`NT AUTHORITY\SYSTEM`). Completely isolated in
+  `agent/` with zero impact on main application dependencies.
+  - **Native Windows Bindings**: Uses `ctypes` to bind standard system
+    DLLs (`wevtapi.dll` for Windows Event Log and `crypt32.dll` for DPAPI
+    key encryption at rest with machine-level isolation).
+  - **Consent-Gated Subscriptions**: Reads active categories via
+    `GET /api/v1/agent/config`. Subscriptions generate dynamic XPath
+    queries that strictly exclude unconsented Event IDs at the Windows
+    kernel level. Channels monitored: Security, System, and Windows Defender.
+  - **Collectors & Schema Mapping**: Maps Windows Event IDs (4624, 4625,
+    4634, 4672, 4688, 4720, 4722, 4724, 4726, 4740, 7045, 1102, 1116,
+    1117) into SentinelX Normalized Event Schema v1.0. A Downloads
+    collector inspects `C:\Users\*\Downloads` for NTFS `Zone.Identifier`
+    Alternate Data Streams (`ZoneId=3`) and SHA-256 hashes, gated to
+    the `file_downloads` category.
+  - **Reliability & Resilience**: Channel bookmarks persist to
+    `bookmarks.json` to eliminate duplicate or dropped events across
+    restarts. An SQLite WAL queue (`queue.db`) buffers telemetry during
+    outages with a 50 MB / 50,000 event FIFO cap. Batches up to 200
+    events or 5 seconds with exponential backoff.
+  - **Heartbeat & Kill Switch**: Sends `POST /api/v1/agent/heartbeat`
+    every 30 seconds. If an administrator revokes the device or its
+    consent, the agent triggers an immediate kill switch: erases local
+    credentials and halts collection.

@@ -31,6 +31,8 @@ import OwnerAssets from "./features/owner/pages/OwnerAssets"
 import OwnerEventSources from "./features/owner/pages/OwnerEventSources"
 import OwnerSettings from "./features/owner/pages/OwnerSettings"
 import OwnerIncidents from "./features/owner/pages/OwnerIncidents"
+import OwnerIncidentDetail from "./features/owner/pages/OwnerIncidentDetail"
+import OwnerSecurityActivity from "./features/owner/pages/OwnerSecurityActivity"
 
 import UserLayout from "./layouts/UserLayout"
 import NotificationsPage from "./features/notifications/pages/NotificationsPage"
@@ -339,7 +341,7 @@ function App() {
         path="/organization/security-activity"
         element={
           <ProtectedRoute allowedRoles={["organization_admin"]}>
-            <SecurityActivity />
+            <OwnerSecurityActivity />
           </ProtectedRoute>
         }
       />
@@ -351,6 +353,15 @@ function App() {
         element={
           <ProtectedRoute allowedRoles={["organization_admin"]}>
             <OwnerIncidents />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/organization/incidents/:id"
+        element={
+          <ProtectedRoute allowedRoles={["organization_admin"]}>
+            <OwnerIncidentDetail />
           </ProtectedRoute>
         }
       />
@@ -443,7 +454,6 @@ function App() {
         {/* Manager/owner read-only detail reuses the same page: the API's
             allowed_next_states renders no write buttons for them. */}
         <Route path="/manager/incidents/:id" element={<ModuleGuard module="incidents"><IncidentDetail /></ModuleGuard>} />
-        <Route path="/organization/incidents/:id" element={<IncidentDetail />} />
         <Route path="/soc/events" element={<ModuleGuard module="soc"><SocEvents /></ModuleGuard>} />
         <Route path="/soc/assets" element={<ModuleGuard module="assets"><SocAssets /></ModuleGuard>} />
         <Route path="/soc/reports" element={<ModuleGuard module="reports"><SocReports /></ModuleGuard>} />

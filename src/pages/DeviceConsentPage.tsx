@@ -219,12 +219,12 @@ export default function DeviceConsentPage() {
               </p>
               <div className="flex items-center gap-2">
                 <code className="flex-1 font-mono text-xs bg-black/40 p-2.5 rounded border border-line text-emerald-400 select-all overflow-x-auto">
-                  sentinelx-agent --enroll-token {token}
+                  python -m agent.main enroll --token {token}
                 </code>
                 <Button
                   variant="secondary"
                   icon={copiedCmd ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
-                  onClick={() => copyCommand(`sentinelx-agent --enroll-token ${token}`)}
+                  onClick={() => copyCommand(`python -m agent.main enroll --token ${token}`)}
                 >
                   {copiedCmd ? "Copied" : "Copy"}
                 </Button>

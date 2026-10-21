@@ -336,7 +336,15 @@ async def create_member_invitation(
     except Exception as exc:
         print(f"[SentinelX] Failed to send invitation email to {email}: {exc}")
 
-    return {"id": str(invitation.id), "email": email, "role": role.value, "status": invitation.status, "expires_at": invitation.expires_at.isoformat()}
+    return {
+        "id": str(invitation.id),
+        "email": email,
+        "role": role.value,
+        "status": invitation.status,
+        "expires_at": invitation.expires_at.isoformat(),
+        "invite_link": invite_link,
+        "token": raw_token,
+    }
 
 
 @router.get("/invitations")
@@ -390,7 +398,13 @@ async def resend_invitation(
     except Exception as exc:
         print(f"[SentinelX] Failed to send invitation email to {invitation.email}: {exc}")
 
-    return {"id": str(invitation.id), "status": invitation.status, "expires_at": invitation.expires_at.isoformat()}
+    return {
+        "id": str(invitation.id),
+        "status": invitation.status,
+        "expires_at": invitation.expires_at.isoformat(),
+        "invite_link": invite_link,
+        "token": raw_token,
+    }
 
 
 @router.delete("/invitations/{invitation_id}")

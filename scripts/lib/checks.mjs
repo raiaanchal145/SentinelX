@@ -284,3 +284,27 @@ export function looksLikeOurBackend(pid) {
   const lower = name.toLowerCase();
   return lower.includes('python') || lower.includes('uvicorn') || lower.includes('cmd.exe');
 }
+
+// ---------------------------------------------------------------------------
+// Endpoint Agent enrollment probe
+// ---------------------------------------------------------------------------
+
+export function isAgentEnrolled(venvPython) {
+  if (!IS_WIN || !venvPython) return false;
+  try {
+    const res = spawnSync(
+      venvPython,
+      ['-c', 'from agent.config import AgentConfig; print("ENROLLED" if AgentConfig().is_enrolled() else "NOT_ENROLLED")'],
+      {
+        cwd: ROOT,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 5000,
+      }
+    );
+    return res.status === 0 && (res.stdout || '').trim() === 'ENROLLED';
+  } catch {
+    return false;
+  }
+}
+

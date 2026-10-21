@@ -1052,3 +1052,18 @@ Endpoint security telemetry is strictly consent-based: devices cannot be added o
   - If a device or its consent has been revoked, ingestion immediately rejects all events with `device_revoked`.
 - **Liveness & Health Status**:
   - Computed on the fly from `last_heartbeat_at`: $\le 2$ minutes is `connected`, $2\text{--}10$ minutes is `stale`, and $> 10$ minutes is `offline`.
+
+## P21 Windows Endpoint Agent: Language & Architecture Choice
+
+- **Language Choice**: Python 3.11 (isolated in `agent/` with dedicated requirements; zero additions to backend or frontend dependencies).
+- **Rationale vs. Go**:
+  - **Delivery Speed**: Python allows immediate implementation of Windows Event Log collection, DPAPI cryptographic protection, local buffering, and consent synchronization using standard library modules (`ctypes`, `sqlite3`, `xml.etree.ElementTree`, `urllib`).
+  - **Schema Continuity**: Directly reuses and validates normalized event schemas matching `app/worker/parsers.py` and `tools/simulator`.
+- **Risks & Antivirus Mitigations**:
+  - *Risk*: Single-file executables bundled via PyInstaller often trip Windows Defender heuristics (`Win32/Wacatac` false positives).
+  - *Mitigation*: Run as a service or startup task invoking the Python script with an isolated venv or embedded Python runtime (`python.exe agent/main.py service`). For packaged installations, sign binaries or exclude the agent installation directory (`C:\ProgramData\SentinelX\agent`).
+- **Security & Reliability Guarantees**:
+  - **DPAPI Key Storage**: Per-device API keys are protected at rest using Windows DPAPI (`crypt32.dll::CryptProtectData`), restricting decryption to local administrative / SYSTEM accounts.
+  - **Consent-Gated Collection**: Event categories disabled in the server consent config are excluded at query/subscription time via XPath filters where supported, ensuring non-consented channels are never monitored.
+  - **Reliable Telemetry**: Windows Event Log bookmarks (`EvtCreateBookmark`/`EvtUpdateBookmark`) prevent lost or duplicated records across service restarts. An encrypted/permission-locked local SQLite buffer handles network partitions with a 50 MB safety cap.
+  - **Kill Switch**: The agent actively monitors heartbeat and config responses; if the server reports the device or consent is revoked, the agent halts all collection and exits immediately.

@@ -16,7 +16,7 @@ Verify end-to-end token generation, user consent authorization, single-use key e
 4. Verify token creation:
    - Success view displays a 30-minute token (`sxe_...`) and full User Consent URL (`http://<host>/consent/enroll?token=sxe_...`).
    - Copy buttons for token and URL function with toast feedback.
-   - Setup command is presented: `sentinelx-agent --enroll-token <token>`.
+   - Setup command is presented: `python -m agent.main enroll --token <token>`.
    - The new device appears in the device table with status `pending_consent`.
 
 ---
@@ -39,7 +39,7 @@ Verify end-to-end token generation, user consent authorization, single-use key e
 4. Check the acknowledgment box and click **Authorize & Register Endpoint**.
 5. Verify success:
    - Confirmation displays a permanent consent record ID.
-   - The command `sentinelx-agent --enroll-token <token>` is shown.
+   - The command `python -m agent.main enroll --token <token>` is shown.
    - The device status on `/devices` changes to `offline` (awaiting first heartbeat) with active consent stamped.
 
 ---

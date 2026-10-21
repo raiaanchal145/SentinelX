@@ -11,6 +11,7 @@
 //   npm run dev:doctor   -- run every check, print a PASS/FAIL table, start nothing.
 //   npm run dev:db       -- only ensure Postgres is up and migrated.
 //   npm run dev:api      -- backend only, in the current terminal.
+//   npm run dev:agent    -- endpoint agent only, in the current terminal.
 //   npm run dev:share    -- same as dev, but asks LAN vs cloudflared tunnel
 //                            (--lan / --tunnel skip the prompt).
 //   npm run dev:stop     -- stop the backend this launcher started (add --db to also stop postgres).
@@ -39,6 +40,7 @@ import {
   venvPythonPath,
   findPidsOnPort,
   isPidAlive,
+  isAgentEnrolled,
 } from './lib/checks.mjs';
 import {
   LauncherError,
@@ -377,6 +379,20 @@ async function cmdDoctor() {
   add('Redis reachable', await probeRedis(), (await probeRedis()) ? 'localhost:6379' : 'not running (npm run dev starts it)');
   add('.venv-1 stray folder', !checkStrayVenv1(), checkStrayVenv1() ? 'found -- delete it' : 'none');
 
+  const venvPythonDoctor = venvExists() ? venvPythonPath() : null;
+  const agentEnrolledDoctor = isAgentEnrolled(venvPythonDoctor);
+  const agentStateDoctor = readState().agent || null;
+  const agentRunningDoctor = Boolean(agentStateDoctor?.pid && isPidAlive(agentStateDoctor.pid));
+  add(
+    'Endpoint agent',
+    true,
+    agentRunningDoctor
+      ? `RUNNING (PID ${agentStateDoctor.pid}, mode: ${agentStateDoctor.mode})`
+      : agentEnrolledDoctor
+      ? 'enrolled (will auto-start on `npm run dev`)'
+      : 'not enrolled (run python -m agent.main enroll)'
+  );
+
   // Sharing status: what's running now (if anything) and the candidate LAN URL.
   const shareState = readState().share || null;
   const sharingNow = Boolean(shareState?.pid && isPidAlive(shareState.pid));
@@ -436,6 +452,14 @@ async function cmdStop() {
     writeState({ worker: null });
   }
 
+  // The agent this launcher started (window or inline) -- best-effort PID.
+  if (state.agent?.pid) {
+    log.step(`Stopping agent process tree (PID ${state.agent.pid})...`);
+    const agentKilled = killPidTree(state.agent.pid);
+    stopped = stopped || agentKilled;
+    writeState({ agent: null });
+  }
+
   if (wantsDbStop) {
     log.step('Stopping the postgres container (docker compose stop postgres)...');
     const result = spawnSync('docker', ['compose', 'stop', 'postgres'], { cwd: ROOT, stdio: 'inherit' });
@@ -476,6 +500,16 @@ async function cmdApiOnly() {
   spawnSync(venvPython, ['-m', 'uvicorn', 'app.main:app', '--reload', '--host', BACKEND_HOST, '--port', String(BACKEND_PORT)], {
     cwd: path.join(ROOT, 'backend'),
     stdio: 'inherit',
+  });
+}
+
+async function cmdAgentOnly() {
+  const venvPython = ensurePythonVenv();
+  log.step(`Starting the SentinelX endpoint agent in this terminal -- Ctrl+C to stop.`);
+  spawnSync(venvPython, ['-m', 'agent.main', 'run', '--foreground'], {
+    cwd: ROOT,
+    stdio: 'inherit',
+    env: { ...process.env, SENTINELX_BACKEND_PORT: String(BACKEND_PORT) },
   });
 }
 
@@ -640,6 +674,26 @@ async function cmdFullDev() {
     writeState({ worker: { pid: workerPid, startedAt: new Date().toISOString(), mode: 'window' } });
   }
 
+  // Agent (fourth process): Windows endpoint telemetry agent.
+  // Runs if enrolled on Windows; skipped gracefully if not enrolled.
+  const agentEnrolled = isAgentEnrolled(venvPython);
+  if (agentEnrolled) {
+    log.step(INLINE ? 'Starting agent inline...' : 'Starting agent in a new terminal window ("SentinelX Agent")...');
+    const agentArgs = ['-m', 'agent.main', 'run', '--foreground'];
+    const agentCwd = ROOT;
+    const agentEnv = { ...process.env, SENTINELX_BACKEND_PORT: String(BACKEND_PORT) };
+    if (INLINE) {
+      const agentChild = spawnInline({ cwd: agentCwd, command: venvPython, args: agentArgs, label: 'agent', color: 'yellow', env: agentEnv });
+      writeState({ agent: { pid: agentChild.pid, startedAt: new Date().toISOString(), mode: 'inline' } });
+      inlineChildren.push(agentChild);
+    } else {
+      const agentPid = openWindow({ cwd: agentCwd, command: venvPython, args: agentArgs, title: 'SentinelX Agent', env: agentEnv });
+      writeState({ agent: { pid: agentPid, startedAt: new Date().toISOString(), mode: 'window' } });
+    }
+  } else {
+    log.info('Endpoint agent is not enrolled yet -- skipped.');
+  }
+
   log.step('Starting frontend (vite) in this terminal...');
   // shell:true is the reliable way to invoke the "npm" .cmd shim on Windows
   // (naming "npm.cmd" explicitly can throw EINVAL on some Node/Windows
@@ -667,6 +721,12 @@ async function cmdFullDev() {
     if (workerState?.pid) {
       killPidTree(workerState.pid);
       writeState({ worker: null });
+    }
+    // Stop the agent with the launcher.
+    const agentState = readState().agent;
+    if (agentState?.pid) {
+      killPidTree(agentState.pid);
+      writeState({ agent: null });
     }
     if (!reuseBackend) {
       if (INLINE) {
@@ -704,6 +764,7 @@ async function cmdFullDev() {
     `API docs   http://localhost:${BACKEND_PORT}/docs`,
     `Database   ${dbSource === 'docker' ? 'Docker (postgres container)' : 'local PostgreSQL install'}`,
     `Worker     ${INLINE ? '[worker] lines above' : '"SentinelX Worker" window'} (heartbeats every 30s)`,
+    `Agent      ${agentEnrolled ? (INLINE ? '[agent] lines above' : '"SentinelX Agent" window') : 'Not enrolled (skipped)'}`,
     `API health ${health.ok ? 'OK' : 'NOT RESPONDING YET'}`,
   ]);
   if (share) {
@@ -731,7 +792,7 @@ async function main() {
   // Log file mirroring is only worth it for the runs that actually do work --
   // skip it for --doctor/--stop, which are quick utilities.
   if (!flag('--doctor') && !flag('--stop')) {
-    const label = flag('--db-only') ? 'db' : flag('--api-only') ? 'api' : flag('--setup-only') ? 'setup' : 'dev';
+    const label = flag('--db-only') ? 'db' : flag('--api-only') ? 'api' : flag('--agent-only') ? 'agent' : flag('--setup-only') ? 'setup' : 'dev';
     log.initLogFile(ROOT, label);
   }
   try {
@@ -739,6 +800,7 @@ async function main() {
     if (flag('--stop')) return await cmdStop();
     if (flag('--db-only')) return await cmdDbOnly();
     if (flag('--api-only')) return await cmdApiOnly();
+    if (flag('--agent-only')) return await cmdAgentOnly();
     if (flag('--setup-only')) return await cmdSetup();
     return await cmdFullDev();
   } catch (err) {
