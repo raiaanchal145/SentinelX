@@ -1104,14 +1104,48 @@ The worker's jobs: `heartbeat`, `process_events` (event
 normalization, then inline detection evaluation AND the P10 alerting
 halves -- see "Event ingestion and read API", "Detection rules" and
 "Alerts" above), `ticket_sla_check` (every minute: SLA at-risk and
-breach marking + breach escalations -- see "Tickets" above), and
+breach marking + breach escalations -- see "Tickets" above),
 `ai_triage_alert` (one job per new alert id, enqueued after the alert
 commit -- see "AI triage" above; writes agent_runs + ai_analyses
-never alert state), and `ai_incident_draft` (one job per new
+never alert state), `ai_incident_draft` (one job per new
 incident, enqueued post-commit -- draft-only, see "AI analyses"
-above). Worker startup also seeds the 8 built-in detection rules, the
+above), and `execute_approved_action_job` (one job per approved approval id,
+re-checking expiration and locking the row for exactly-once execution).
+Worker startup also seeds the 8 built-in detection rules, the
 built-in correlation rule, and the triage agent ("soc-triage")
 idempotently (the incident drafter seeds lazily on first run).
+
+## Approvals and Response Actions API (`/api/v1/approvals`, `/api/v1/incidents/{id}/actions`)
+
+All tool executions pass through the policy engine (`authorize_tool_call`). High-risk actions
+(`host.isolate`, `account.disable`, `ip.block`, `process.kill`, `file.quarantine`) and low-risk actions
+when automation is disabled produce `needs_approval` and create an `Approval` record with a 24-hour expiration.
+
+| Method & Path | Scope | Notes |
+|---|---|---|
+| `GET /approvals?view=pending\|mine\|history` | `pending`/`history`: owner or security_manager only; `mine`: active org caller | Returns approval records. Expired pending items are returned with computed `status: "expired"`. |
+| `GET /approvals/{id}` | owner or security_manager | Returns one approval record by id. |
+| `POST /approvals/{id}/approve` | owner or security_manager | Authorizes execution. Requester cannot approve own request (403 `self_approval_not_allowed`). Enqueues `execute_approved_action_job` (falls back inline). |
+| `POST /approvals/{id}/reject` | owner or security_manager | Rejects request. `reason` (1-2000 chars) is mandatory (422 if omitted). |
+| `POST /incidents/{id}/actions` | SOC writer, security_manager, or owner | Triggers a registered tool against the incident. Returns 200 on `allow`, 202 on `needs_approval` (with `approval_id`), or 403 on `deny`. Accepts `as_ai_agent: bool` to attribute request to an AI recommendation. |
+
+## Consented Endpoint Monitoring & Device Agents API (`/api/v1/devices`, `/api/v1/agent`)
+
+Endpoints stream security telemetry only after deliberate, version-stamped, revocable consent. Ingestion strictly filters out non-consented categories.
+
+| Method & Path | Scope | Notes |
+|---|---|---|
+| `POST /devices/enrollment-tokens` | owner, security_manager, or it_developer with write access | Generates single-use 30-min token (`sxe_...`) for an active asset. Status starts at `pending_consent`. |
+| `GET /devices/enrollment-tokens/{token}/preview` | Public / Token-authenticated | Previews target asset, org name, agreement version, and the 6 consent categories with monitoring vs prohibited disclosures. |
+| `POST /devices/enrollment-tokens/{token}/consent` | Public / Token-authenticated | Signs consent agreement. Records version-stamped immutable `ConsentRecord` with IP and categories. Sets status to `active`. |
+| `POST /agent/enroll` | Device Agent | Exchanges token for per-device API key (`sxa_...`). Single-use: fails if consent not signed (403 `consent_required`), expired (409 `enrollment_token_expired`), or already used (409 `enrollment_token_used`). |
+| `POST /agent/heartbeat` | Device Key | Records heartbeat. Updates `last_heartbeat_at` and `last_seen_at`. |
+| `GET /agent/config` | Device Key | Returns current consent categories and agent collection directives. |
+| `GET /devices` | Org member with `device_agents` read, or Platform SOC (for assigned orgs) | Returns list of devices with computed status (`connected` $\le 2$m, `stale` $2-10$m, `offline` $> 10$m, `pending_consent`, `revoked`). |
+| `GET /devices/summary` | Org member with `device_agents` read, or Platform SOC | Returns aggregated device counts by status. |
+| `GET /devices/{id}` | Org member with `device_agents` read, or Platform SOC | Returns device metadata, bound asset details, active consent, and immutable consent history ledger. |
+| `POST /devices/{id}/consent` | owner, security_manager, or it_developer with write access | Appends a NEW versioned consent record. Historical records are never modified. |
+| `POST /devices/{id}/revoke` | owner, security_manager, or it_developer with write access | Revokes device key and consent record. A mandatory reason is required. Ingestion stops immediately (subsequent events return `device_revoked`). |
 
 ## Error code reference (structured-detail endpoints only)
 
@@ -1135,3 +1169,18 @@ idempotently (the incident drafter seeds lazily on first run).
 | `module_not_available` | 403 | `require_module` |
 | `ai_agents_module_disabled` / `invalid_cost_cap` | 403 / 400 | `organization.py` PATCH ai-settings |
 | `organization_settings_missing` | 500 | `organization.py` PATCH ai-settings (data-integrity; row always exists in practice) |
+| `approvals_decide_not_allowed` | 403 | `approvals.py`: only owner or security_manager may decide |
+| `self_approval_not_allowed` | 403 | `approvals.py`: requester cannot decide own approval |
+| `approval_not_found` | 404 | `approvals.py`: unknown approval or cross-tenant attempt |
+| `approval_expired` | 409 | `approvals.py`: decision attempted after 24h expiration |
+| `approval_already_decided` | 409 | `approvals.py`: approval already decided |
+| `enrollment_token_not_found` | 404 | `devices.py`: invalid or unhashed token |
+| `enrollment_token_expired` | 409 | `devices.py` / `agent.py`: token expired (> 30 mins) |
+| `enrollment_token_used` | 409 | `agent.py`: token already swapped for API key |
+| `consent_required` | 403 | `agent.py`: agent tried to enroll before user granted consent |
+| `device_revoked` | 403 | `events.py` / `agent.py`: device has been revoked |
+| `consent_revoked` | 403 | `events.py`: active consent record has been revoked |
+| `device_not_found` | 404 | `devices.py`: device enrollment record not found |
+| `device_already_revoked` | 409 | `devices.py`: attempt to revoke an already revoked device |
+| `no_active_consent` | 409 | `devices.py`: attempt to update consent on an unconsented or revoked device |
+| `reason_required` | 422 | `devices.py`: revocation reason missing or empty |

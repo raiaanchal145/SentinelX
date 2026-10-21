@@ -128,7 +128,16 @@ async def _module_access_level(
         return "write"
 
     # A user of the organization.
-    access = await get_effective_access(db, actor.scope.account, organization)
+    from app.models import User
+
+    account = (
+        actor.scope.account
+        if actor.scope is not None
+        else (await db.get(User, actor.actor_id) if actor.actor_id else None)
+    )
+    if account is None:
+        return None
+    access = await get_effective_access(db, account, organization)
     return access["modules"].get(module_key)
 
 

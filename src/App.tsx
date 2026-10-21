@@ -8,6 +8,12 @@ import AcceptInvite from "./pages/AcceptInvite"
 import OrganizationSuspended from "./pages/OrganizationSuspended"
 import NoAccess from "./pages/NoAccess"
 
+import DeviceConsentPage from "./pages/DeviceConsentPage"
+import DevicesPage from "./features/devices/pages/DevicesPage"
+import DeviceDetailPage from "./features/devices/pages/DeviceDetailPage"
+import OwnerDevices from "./features/owner/pages/OwnerDevices"
+import OwnerDeviceDetail from "./features/owner/pages/OwnerDeviceDetail"
+
 import AdminDashboard from "./pages/AdminDashboard"
 import OrganizationDashboard from "./pages/OrganizationDashboard"
 
@@ -182,6 +188,12 @@ function App() {
         element={<NoAccess />}
       />
 
+      {/* ENDPOINT DEVICE CONSENT SCREEN -- public / token-based (P20) */}
+      <Route
+        path="/consent/enroll"
+        element={<DeviceConsentPage />}
+      />
+
       {/* PLATFORM ADMIN: ORGANIZATIONS (Prompt B section A -- super_admin's
           new home; see homePathFor() in lib/auth.ts) */}
 
@@ -279,6 +291,24 @@ function App() {
         element={
           <ProtectedRoute allowedRoles={["organization_admin"]}>
             <OwnerAssets />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/organization/devices"
+        element={
+          <ProtectedRoute allowedRoles={["organization_admin"]}>
+            <OwnerDevices />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/organization/devices/:id"
+        element={
+          <ProtectedRoute allowedRoles={["organization_admin"]}>
+            <OwnerDeviceDetail />
           </ProtectedRoute>
         }
       />
@@ -393,6 +423,8 @@ function App() {
       >
         <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/notifications/preferences" element={<NotificationPreferencesPage />} />
+        <Route path="/devices" element={<ModuleGuard module="device_agents"><DevicesPage /></ModuleGuard>} />
+        <Route path="/devices/:id" element={<ModuleGuard module="device_agents"><DeviceDetailPage /></ModuleGuard>} />
       </Route>
 
       {/* SOC ANALYST -- top navigation shell */}

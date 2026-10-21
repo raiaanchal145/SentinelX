@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
-import { ArrowLeft, RefreshCw, ShieldCheck } from "lucide-react"
+import { ArrowLeft, Clock, RefreshCw, ShieldCheck } from "lucide-react"
 
 import EmptyState from "../../../components/EmptyState"
 import ReadOnlyChip from "../../../components/shared/ReadOnlyChip"
 import SeverityBadge from "../../../components/SeverityBadge"
 import Badge from "../../../components/ui/Badge"
 import Button from "../../../components/ui/Button"
+import Dialog from "../../../components/ui/Dialog"
 import Drawer from "../../../components/ui/Drawer"
 import IconButton from "../../../components/ui/IconButton"
 import Skeleton from "../../../components/ui/Skeleton"
@@ -22,6 +23,7 @@ import {
   type IncidentLinkedEvent,
   type IncidentStatus,
 } from "../../../lib/api"
+import { apiTriggerIncidentAction } from "../../../lib/approvalsApi"
 import { useMe } from "../../../lib/me"
 
 import { ageLabel } from "../components/alertShared"
@@ -84,6 +86,13 @@ function IncidentDetail({ platform = false }: { platform?: boolean }) {
   const [noteOpen, setNoteOpen] = useState(false)
   const [selectedEvent, setSelectedEvent] = useState<IncidentLinkedEvent | null>(null)
 
+  // Response action states
+  const [actionTool, setActionTool] = useState<"host.isolate" | "account.disable" | "ip.block" | null>(null)
+  const [actionTarget, setActionTarget] = useState("")
+  const [actionReason, setActionReason] = useState("")
+  const [actionAsAi, setActionAsAi] = useState(false)
+  const [actionSubmitting, setActionSubmitting] = useState(false)
+
   const readOnly = isReadOnlyCaller(me)
 
   const load = useCallback(
@@ -106,6 +115,66 @@ function IncidentDetail({ platform = false }: { platform?: boolean }) {
   useEffect(() => {
     load()
   }, [load])
+
+  function openAction(tool: "host.isolate" | "account.disable" | "ip.block") {
+    setActionTool(tool)
+    setActionReason("")
+    setActionAsAi(false)
+    if (tool === "host.isolate") {
+      setActionTarget(data?.assets[0]?.id || "")
+    } else if (tool === "account.disable") {
+      const u = data?.events.find((e) => e.username)?.username || ""
+      setActionTarget(u)
+    } else if (tool === "ip.block") {
+      const ip = data?.events.find((e) => e.source_ip)?.source_ip || ""
+      setActionTarget(ip)
+    }
+  }
+
+  async function handleActionSubmit() {
+    if (!id || !actionTool) return
+    if (!actionTarget.trim()) {
+      toast.show("Target parameter is required.", { tone: "danger" })
+      return
+    }
+    if (!actionReason.trim() || actionReason.trim().length < 3) {
+      toast.show("Please provide a justification (at least 3 characters).", { tone: "danger" })
+      return
+    }
+
+    setActionSubmitting(true)
+    try {
+      let args: Record<string, unknown> = {}
+      if (actionTool === "host.isolate") {
+        args = { asset_id: actionTarget.trim(), reason: actionReason.trim() }
+      } else if (actionTool === "account.disable") {
+        args = { username: actionTarget.trim(), reason: actionReason.trim() }
+      } else if (actionTool === "ip.block") {
+        args = { ip_address: actionTarget.trim(), reason: actionReason.trim() }
+      }
+
+      const res = await apiTriggerIncidentAction(id, {
+        tool: actionTool,
+        arguments: args,
+        reason: actionReason.trim(),
+        as_ai_agent: actionAsAi,
+      })
+
+      if (res.decision === "needs_approval") {
+        toast.show("High-risk action submitted. Gated pending Security Manager approval.", { tone: "info" })
+      } else if (res.decision === "allow") {
+        toast.show("Action authorized and executed.", { tone: "success" })
+      } else {
+        toast.show(res.reason || "Action was refused by policy.", { tone: "danger" })
+      }
+      setActionTool(null)
+      load()
+    } catch (err: unknown) {
+      toast.show(err instanceof Error ? err.message : "Failed to execute action.", { tone: "danger" })
+    } finally {
+      setActionSubmitting(false)
+    }
+  }
 
   async function confirmTransition(payload: { reason?: string; resolution_summary?: string; parent_incident_id?: string }) {
     if (!id || !transitionTarget) return
@@ -378,31 +447,173 @@ function IncidentDetail({ platform = false }: { platform?: boolean }) {
           {
             id: "response",
             label: "Response actions",
+            badge:
+              data.pending_approvals && data.pending_approvals.length > 0 ? (
+                <span className="ml-1 rounded-full bg-danger px-1.5 py-0.2 text-[10px] font-bold text-white">
+                  {data.pending_approvals.length}
+                </span>
+              ) : undefined,
             content: (
-              <div className="space-y-3">
-                <p className="text-xs text-fg-muted">
-                  Automated response actions arrive in P19. The confirmation dialogs are live now -- the buttons stay
-                  disabled until the backend exists.
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {["Isolate asset", "Disable account", "Block IP"].map((action) => (
-                    <Button
-                      key={action}
-                      variant="danger"
-                      disabled
-                      onClick={() =>
-                        toast.show(`${action} requires the response backend (P19).`, { tone: "info" })
-                      }
-                    >
-                      {action}
+              <div className="space-y-4">
+                {data.pending_approvals && data.pending_approvals.length > 0 && (
+                  <div className="rounded-card border border-warning/30 bg-warning/5 p-3 text-xs space-y-2">
+                    <div className="flex items-center gap-1.5 font-semibold text-warning-fg">
+                      <Clock size={14} />
+                      <span>Pending Authorization ({data.pending_approvals.length})</span>
+                    </div>
+                    <p className="text-fg-muted text-[11px]">
+                      The following containment actions are currently awaiting authorization from the Security Manager:
+                    </p>
+                    <div className="space-y-1.5">
+                      {data.pending_approvals.map((pa) => (
+                        <div
+                          key={pa.id}
+                          className="flex items-center justify-between rounded-control border border-line bg-surface p-2 text-xs"
+                        >
+                          <div>
+                            <span className="font-mono font-bold text-fg-primary">{pa.tool || pa.action_type}</span>
+                            <span className="ml-2 text-fg-secondary">{pa.requested_reason || "Requested action"}</span>
+                          </div>
+                          <Badge tone="danger">{pa.risk_level} risk</Badge>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="rounded-card border border-line bg-surface p-4 space-y-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-fg-primary">Containment &amp; Remediation</h3>
+                    <p className="text-xs text-fg-muted">
+                      Trigger containment actions directly against assets, accounts, or network perimeters linked to this
+                      incident. High-risk actions require human authorization before executing.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="danger" onClick={() => openAction("host.isolate")}>
+                      Isolate Host
                     </Button>
-                  ))}
+                    <Button variant="danger" onClick={() => openAction("account.disable")}>
+                      Disable Account
+                    </Button>
+                    <Button variant="danger" onClick={() => openAction("ip.block")}>
+                      Block IP Address
+                    </Button>
+                  </div>
                 </div>
               </div>
             ),
           },
         ]}
       />
+
+      {/* Containment Action Dialog */}
+      {actionTool && (
+        <Dialog
+          open
+          title={`Containment Action: ${actionTool}`}
+          onClose={() => setActionTool(null)}
+          footer={
+            <div className="flex w-full justify-end gap-2">
+              <Button variant="ghost" onClick={() => setActionTool(null)} disabled={actionSubmitting}>
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                onClick={handleActionSubmit}
+                disabled={actionSubmitting || !actionTarget.trim() || actionReason.trim().length < 3}
+              >
+                {actionSubmitting ? "Submitting..." : "Submit for Authorization"}
+              </Button>
+            </div>
+          }
+        >
+          <div className="space-y-3 text-xs">
+            <div className="rounded-control border border-danger/30 bg-danger/5 p-3 text-danger-fg">
+              <p className="font-semibold">High Risk Containment Action</p>
+              <p className="mt-1 text-[11px]">
+                This action modifies host or perimeter infrastructure. Gated by policy: it will be entered into the
+                Security Manager approval queue and executed once authorized.
+              </p>
+            </div>
+
+            {actionTool === "host.isolate" && (
+              <div>
+                <label className="block font-medium text-fg-primary mb-1">Target Asset ID</label>
+                {data.assets.length > 0 ? (
+                  <select
+                    value={actionTarget}
+                    onChange={(e) => setActionTarget(e.target.value)}
+                    className="w-full rounded-control border border-line bg-surface p-2 text-fg-primary"
+                  >
+                    {data.assets.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name} ({a.hostname}) - Criticality: {a.criticality}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={actionTarget}
+                    onChange={(e) => setActionTarget(e.target.value)}
+                    placeholder="Enter asset UUID..."
+                    className="w-full rounded-control border border-line bg-surface p-2 text-fg-primary placeholder:text-fg-faint"
+                  />
+                )}
+              </div>
+            )}
+
+            {actionTool === "account.disable" && (
+              <div>
+                <label className="block font-medium text-fg-primary mb-1">Target Username</label>
+                <input
+                  type="text"
+                  value={actionTarget}
+                  onChange={(e) => setActionTarget(e.target.value)}
+                  placeholder="e.g. jdoe or admin"
+                  className="w-full rounded-control border border-line bg-surface p-2 text-fg-primary placeholder:text-fg-faint"
+                />
+              </div>
+            )}
+
+            {actionTool === "ip.block" && (
+              <div>
+                <label className="block font-medium text-fg-primary mb-1">Target IP Address</label>
+                <input
+                  type="text"
+                  value={actionTarget}
+                  onChange={(e) => setActionTarget(e.target.value)}
+                  placeholder="e.g. 198.51.100.24"
+                  className="w-full rounded-control border border-line bg-surface p-2 text-fg-primary placeholder:text-fg-faint"
+                />
+              </div>
+            )}
+
+            <div>
+              <label className="block font-medium text-fg-primary mb-1">Justification / Reason (Required)</label>
+              <textarea
+                rows={3}
+                value={actionReason}
+                onChange={(e) => setActionReason(e.target.value)}
+                placeholder="Explain the security justification for this containment action..."
+                className="w-full rounded-control border border-line bg-surface p-2 text-fg-primary placeholder:text-fg-faint"
+              />
+            </div>
+
+            <label className="flex items-center gap-2 cursor-pointer pt-1">
+              <input
+                type="checkbox"
+                checked={actionAsAi}
+                onChange={(e) => setActionAsAi(e.target.checked)}
+                className="rounded border-line bg-surface text-brand"
+              />
+              <span className="text-fg-muted">Submit as AI Agent suggestion</span>
+            </label>
+          </div>
+        </Dialog>
+      )}
 
       {/* The typed-confirmation dialog for destructive transitions; also
           used for plain moves (with the fields hidden). */}

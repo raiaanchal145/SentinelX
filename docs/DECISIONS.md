@@ -1017,3 +1017,38 @@ colors -- a 0.7-confidence critical should not look safe), citations
 link to the cited events, and when the analysis is a rules fallback or
 hasn't arrived yet the panel says "AI unavailable" and shows the
 deterministic summary instead of an empty box.
+
+## P19 Response Actions and Approval Governance
+
+Every tool action attempted by an AI agent or human analyst MUST pass
+through the policy engine (`authorize_tool_call()`). No code touches
+an executor except via `run_tool_call()`.
+- **Three-Tier Risk Model**:
+  - `read_only` (events.search, asset.get, alert.history): informational queries, permitted straight through.
+  - `low` (incident.add_comment, asset.add_tag, user.notify, incident.adjust_priority): bounded DB updates, requires human review unless `low_risk_automation_enabled` is explicitly turned ON at the organization level.
+  - `high` (host.isolate, account.disable, ip.block, process.kill, file.quarantine): state-altering containment actions. Gated unconditionally to human authorization (`needs_approval`).
+- **Human Authority & Anti-Self-Approval**:
+  - Only the organization's `security_manager` or owner (`organization_admin`) may approve or reject. Platform SOC analysts and super admins are structurally forbidden (403).
+  - Requesters can NEVER approve their own requests (`self_approval_not_allowed` 403).
+  - Rejections require a mandatory explanation reason.
+- **Evidence Layer & Exactly-Once Execution**:
+  - Every attempt (allowed, pending, or denied) is hashed via SHA-256 and committed to `tool_call_logs`.
+  - Execution runs under a database row lock (`with_for_update()`), ensuring that race conditions or duplicate worker deliveries cannot execute an approval more than once. Expired approvals (24-hour TTL) are refused and stamped `expired`.
+
+## P20 Consented Device Monitoring & Enrollment
+
+Endpoint security telemetry is strictly consent-based: devices cannot be added or monitored secretly.
+- **One-Time Enrollment Tokens**:
+  - Admins (owner, security_manager, or it_developer with write access) generate an enrollment token (`sxe_...`) with a 30-minute lifespan.
+  - The token is hashed with SHA-256 in the database.
+  - The device owner opens a version-stamped consent screen (`/consent/enroll?token=sxe_...`) where the 6 data categories are explicitly disclosed alongside what is prohibited (keystrokes, personal communications, browser history).
+  - The token can be exchanged for an encrypted per-device API key (`sxa_...`) only after consent has been signed. The token is strictly single-use.
+- **Immutable Consent Ledger**:
+  - Updating consent categories or revoking a device NEVER mutates historical consent records.
+  - Every modification commits a new `ConsentRecord` row with the timestamp, client IP, version tag (`v1.0`), and polymorphic account identity.
+- **Server-Side Consent Filtering**:
+  - Ingestion (`POST /api/v1/events`) inspects each incoming event category against the device's currently active consent record.
+  - Non-consented categories are dropped immediately and tallied as `rejected_no_consent` in the API response without being stored.
+  - If a device or its consent has been revoked, ingestion immediately rejects all events with `device_revoked`.
+- **Liveness & Health Status**:
+  - Computed on the fly from `last_heartbeat_at`: $\le 2$ minutes is `connected`, $2\text{--}10$ minutes is `stale`, and $> 10$ minutes is `offline`.

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { Link } from "react-router-dom"
 import { Pencil, Plus, RefreshCw, Search, Trash2 } from "lucide-react"
 
 import Badge from "../../components/ui/Badge"
@@ -24,6 +25,7 @@ import {
   type AssetRow,
   type AssetsLookup,
 } from "../../lib/api"
+import { apiListDevices, type DeviceRow } from "../../lib/devicesApi"
 
 /**
  * The one Assets screen every organization-side role shares:
@@ -397,6 +399,7 @@ function AssetsPage({
   const [page, setPage] = useState(1)
 
   const [lookup, setLookup] = useState<AssetsLookup | null>(null)
+  const [deviceMap, setDeviceMap] = useState<Map<string, DeviceRow>>(new Map())
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<AssetRow | null>(null)
   const [retireTarget, setRetireTarget] = useState<AssetRow | null>(null)
@@ -461,6 +464,20 @@ function AssetsPage({
       .catch(() => setLookup(null)) // pickers just render empty; not fatal
   }, [canWrite, organizationId])
 
+  useEffect(() => {
+    apiListDevices(organizationId)
+      .then((res) => {
+        const m = new Map<string, DeviceRow>()
+        for (const d of res.devices) {
+          m.set(d.asset_id, d)
+        }
+        setDeviceMap(m)
+      })
+      .catch(() => {
+        // device list error is non-fatal for assets
+      })
+  }, [organizationId])
+
   const allTags = useMemo(() => {
     const set = new Set<string>()
     for (const row of rows) for (const t of row.tags) set.add(t)
@@ -519,6 +536,27 @@ function AssetsPage({
         ),
       },
       {
+        key: "agent",
+        header: "Agent",
+        render: (row) => {
+          const dev = deviceMap.get(row.id)
+          if (!dev) return <span className="text-fg-faint text-xs">--</span>
+          const tone =
+            dev.status === "connected"
+              ? "success"
+              : dev.status === "revoked"
+                ? "danger"
+                : dev.status === "pending_consent" || dev.status === "stale"
+                  ? "brand"
+                  : "neutral"
+          return (
+            <Link to={`/devices/${dev.id}`} className="hover:opacity-80 inline-block">
+              <Badge tone={tone}>{dev.status.replace("_", " ")}</Badge>
+            </Link>
+          )
+        },
+      },
+      {
         key: "tags",
         header: "Tags",
         render: (row) =>
@@ -552,7 +590,7 @@ function AssetsPage({
       })
     }
     return base
-  }, [canWrite, openEdit])
+  }, [canWrite, openEdit, deviceMap])
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
 

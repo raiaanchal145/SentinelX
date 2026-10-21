@@ -1891,3 +1891,85 @@ class SystemMetricsDaily(Base):
     incident_count: Mapped[int] = mapped_column(Integer, default=0)
     false_positive_count: Mapped[int] = mapped_column(Integer, default=0)
     sla_compliance_pct: Mapped[float | None] = mapped_column(Float)
+
+
+# ---------------------------------------------------------------------------
+# Device agents & consent records (P20)
+# ---------------------------------------------------------------------------
+
+
+class ConsentRecord(Base):
+    """
+    Immutable audit record of monitoring categories granted for a device (asset).
+    Every grant, renewal, or category modification writes a NEW row; history is
+    never mutated in-place. Revocation stamps revoked_at + revoked_by.
+    """
+
+    __tablename__ = "consent_records"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    asset_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    account_type: Mapped[str] = mapped_column(String(10), nullable=False)  # "user" | "admin"
+    account_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    categories_granted: Mapped[list] = mapped_column(JSONB, nullable=False)
+    consent_text_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    ip: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(300))
+    consented_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_by_account_type: Mapped[str | None] = mapped_column(String(10))
+    revoked_by_account_id: Mapped[uuid.UUID | None] = mapped_column()
+    revocation_reason: Mapped[str | None] = mapped_column(Text)
+
+    asset: Mapped["Asset"] = relationship("Asset", foreign_keys=[asset_id])
+
+
+class DeviceEnrollment(Base):
+    """
+    Represents an endpoint agent enrollment lifecycle for an asset.
+    Mints a single-use 30-minute enrollment token (sxe_...) that the device user
+    must consent to before the agent can swap it for an active ApiKey and EventSource.
+    """
+
+    __tablename__ = "device_enrollments"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    asset_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    token_prefix: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="pending_consent", index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    device_name: Mapped[str | None] = mapped_column(String(200))
+    operating_system: Mapped[str | None] = mapped_column(String(120))
+    agent_version: Mapped[str | None] = mapped_column(String(50))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    event_source_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("event_sources.id", ondelete="SET NULL")
+    )
+    api_key_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("api_keys.id", ondelete="SET NULL"), index=True
+    )
+    consent_record_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("consent_records.id", ondelete="SET NULL")
+    )
+    enrolled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by_account_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    created_by_account_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    asset: Mapped["Asset"] = relationship("Asset", foreign_keys=[asset_id])
+    consent_record: Mapped[ConsentRecord | None] = relationship("ConsentRecord", foreign_keys=[consent_record_id])
+    event_source: Mapped["EventSource | None"] = relationship("EventSource", foreign_keys=[event_source_id])
+    api_key: Mapped["ApiKey | None"] = relationship("ApiKey", foreign_keys=[api_key_id])
+
