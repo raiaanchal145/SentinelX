@@ -130,8 +130,13 @@ function OwnerMembers() {
   async function handleResendInvitation(invitation: OwnerInvitation) {
     setBusyId(invitation.id)
     try {
-      await apiResendInvitation(invitation.id)
-      toast.show(`Invitation resent to ${invitation.email}.`, { tone: "success" })
+      const res = await apiResendInvitation(invitation.id)
+      if (res.invite_link) {
+        await navigator.clipboard.writeText(res.invite_link)
+        toast.show(`Invitation resent! Link copied to clipboard.`, { tone: "success" })
+      } else {
+        toast.show(`Invitation resent to ${invitation.email}.`, { tone: "success" })
+      }
       load()
     } catch (err) {
       toast.show(err instanceof ApiError ? err.message : "Could not resend this invitation.", { tone: "danger" })

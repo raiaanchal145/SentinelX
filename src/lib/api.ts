@@ -511,7 +511,7 @@ export type OwnerInvitation = {
 }
 
 export function apiCreateMemberInvitation(email: string, role: string, teamId?: string) {
-  return request<{ id: string; email: string; role: string; status: string; expires_at: string }>(
+  return request<{ id: string; email: string; role: string; status: string; expires_at: string; invite_link?: string; token?: string }>(
     "/organization/invitations",
     { method: "POST", body: JSON.stringify({ email, role, team_id: teamId }) },
   )
@@ -522,7 +522,7 @@ export function apiListOwnerInvitations() {
 }
 
 export function apiResendInvitation(invitationId: string) {
-  return request<{ id: string; status: string; expires_at: string }>(
+  return request<{ id: string; status: string; expires_at: string; invite_link?: string; token?: string }>(
     `/organization/invitations/${invitationId}/resend`,
     { method: "POST" },
   )
