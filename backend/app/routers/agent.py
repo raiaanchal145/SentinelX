@@ -243,3 +243,4 @@ async def agent_config(
         "enabled_categories": consent.categories_granted,
         "consent_version": consent.consent_text_version,
     }
+

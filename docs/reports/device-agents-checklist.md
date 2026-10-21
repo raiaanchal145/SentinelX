@@ -109,3 +109,4 @@ Verify end-to-end token generation, user consent authorization, single-use key e
 4. Verify immediate ingestion halt:
    - Any further events sent using this device key are rejected with `403 Forbidden: device_revoked`.
    - Heartbeat attempts return `403 Forbidden: device_revoked`.
+

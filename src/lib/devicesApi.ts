@@ -220,3 +220,4 @@ export function apiRevokeDevice(id: string, reason: string): Promise<{ status: s
 export function apiGetConsentCategories(): Promise<{ version: string; categories: ConsentCategory[] }> {
   return request("/devices/consent-categories")
 }
+

@@ -167,3 +167,4 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_table("device_enrollments")
     op.drop_table("consent_records")
+

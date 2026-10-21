@@ -127,3 +127,4 @@ def is_event_consented(event_type: str, granted_categories: list[str] | set[str]
         # Unknown or custom event types map to file_downloads / custom category or require custom grant
         return "file_downloads" in granted_categories
     return cat in granted_categories
+
