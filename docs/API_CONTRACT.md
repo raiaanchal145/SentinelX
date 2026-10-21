@@ -1147,6 +1147,18 @@ Endpoints stream security telemetry only after deliberate, version-stamped, revo
 | `POST /devices/{id}/consent` | owner, security_manager, or it_developer with write access | Appends a NEW versioned consent record. Historical records are never modified. |
 | `POST /devices/{id}/revoke` | owner, security_manager, or it_developer with write access | Revokes device key and consent record. A mandatory reason is required. Ingestion stops immediately (subsequent events return `device_revoked`). |
 
+## Admin Oversight & Aggregations API (`/api/v1/admin`)
+
+Platform-wide aggregate analytics for `super_admin` with strict tenant-isolation for `platform_soc_analyst`.
+
+| Method & Path | Scope | Notes |
+|---|---|---|
+| `GET /admin/oversight/overview` | `super_admin` only | Platform rollups: organizations by status & mode, device connection states (connected $\le 2$m, stale $2\text{--}10$m, offline $> 10$m), events per hour for past 24h, AI agent runs, token counts, and cost in USD. Accepts `?range=24h\|7d\|30d`. |
+| `GET /admin/oversight/soc` | `super_admin`, `platform_soc_analyst` | Cross-tenant SOC health: per-organization open alerts, open incidents, unacknowledged alert counts and oldest age, MTTA, 24h volume sparkline, top detection rules, and unassigned alerts. When called by `platform_soc_analyst`, scoped strictly to their assigned managed organizations and own workload. |
+| `GET /admin/oversight/it` | `super_admin`, `platform_soc_analyst` | Cross-tenant IT health: per-organization open tickets partitioned by priority (P1-P4), SLA at risk and breached counts, oldest open ticket age, workflow pipeline counts by stage, team workloads, and developer workloads. |
+| `POST /admin/alerts/{id}/reassign` | `super_admin` or assigned `platform_soc_analyst` | Reassign an alert to another platform SOC analyst assigned to that organization. Requires `{ "analyst_id": UUID, "reason": str }`. Commits to `AlertHistory` with action `reassign` and appends an `AuditLog` entry. Target analyst must be active and assigned to that tenant (`assignee_not_in_scope` 422 otherwise). |
+| `POST /admin/incidents/{id}/reassign` | `super_admin` or assigned `platform_soc_analyst` | Reassign an incident to another platform SOC analyst assigned to that organization. Requires `{ "analyst_id": UUID, "reason": str }`. Commits to `IncidentTimeline` with entry_type `reassigned` and appends an `AuditLog` entry. Target analyst must be active and assigned to that tenant (`assignee_not_in_scope` 422 otherwise). |
+
 ## Error code reference (structured-detail endpoints only)
 
 | Code | Status | Where |
@@ -1184,3 +1196,7 @@ Endpoints stream security telemetry only after deliberate, version-stamped, revo
 | `device_already_revoked` | 409 | `devices.py`: attempt to revoke an already revoked device |
 | `no_active_consent` | 409 | `devices.py`: attempt to update consent on an unconsented or revoked device |
 | `reason_required` | 422 | `devices.py`: revocation reason missing or empty |
+| `reason_required` | 400 | `admin_oversight.py`: alert/incident reassignment reason missing or empty |
+| `assignee_not_in_scope` | 422 | `admin_oversight.py`: platform SOC analyst not assigned to target organization |
+| `assignee_not_found` | 404 | `admin_oversight.py`: platform SOC analyst account not found or inactive |
+| `alert_not_found` / `incident_not_found` | 404 | `admin_oversight.py`: target alert or incident not found |
