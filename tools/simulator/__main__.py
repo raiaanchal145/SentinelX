@@ -5,13 +5,14 @@ using the repo's venv -- no new dependencies, stdlib only).
     python -m tools.simulator --list
     python -m tools.simulator --scenario ssh_or_windows_bruteforce --dry-run
     python -m tools.simulator --scenario mixed --api-key sx_...
+    python -m tools.simulator --device --enroll-token sxe_... --scenario mixed
 
 Arguments: --api-url (default http://localhost:8000), --api-key (an
 event-source ingestion key, `sx_<prefix>_<secret>`, from the Event
 Sources page), --scenario (a key from scenarios.SCENARIOS), --rate
 (events per second, default 2), --duration (seconds to keep sending,
 default 0 = send the whole scenario once), --seed (default 42),
---list, --dry-run.
+--list, --dry-run, --device, --enroll-token.
 
 Generation is deterministic per seed; --rate and --duration only pace
 or truncate what is SENT. Events go out in batches of at most 250
@@ -28,8 +29,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
-from urllib.parse import urlencode
+from datetime import datetime, timedelta, timezone
 
 from tools.simulator.scenarios import SCENARIOS, SCENARIO_DESCRIPTIONS, generate
 
@@ -49,6 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42, help="RNG seed -- the same seed reproduces the same events (default: %(default)s)")
     parser.add_argument("--list", action="store_true", help="Print the available scenarios and exit")
     parser.add_argument("--dry-run", action="store_true", help="Print the events instead of sending them")
+    parser.add_argument("--device", action="store_true", help="Run in endpoint device agent mode (heartbeat, enrollment, consent-aware)")
+    parser.add_argument("--enroll-token", default=None, help="One-time enrollment token (sxe_...) to swap for an agent API key in device mode")
     return parser
 
 
@@ -101,7 +103,11 @@ def send_batches(api_url: str, api_key: str, events: list[dict], rate: float) ->
                 payload = json.loads(response.read().decode("utf-8"))
                 accepted += payload.get("accepted", 0)
                 rejected += payload.get("rejected", 0)
-                print(f"  batch {start // SEND_BATCH_SIZE + 1}: sent {len(batch)}, accepted {payload.get('accepted', 0)}, rejected {payload.get('rejected', 0)}")
+                no_consent = payload.get("rejected_no_consent", 0)
+                msg = f"  batch {start // SEND_BATCH_SIZE + 1}: sent {len(batch)}, accepted {payload.get('accepted', 0)}, rejected {payload.get('rejected', 0)}"
+                if no_consent > 0:
+                    msg += f" ({no_consent} rejected_no_consent)"
+                print(msg)
                 warnings = response.headers.get("X-Ingestion-Warning")
                 if warnings:
                     print(f"  WARNING from API: {warnings}")
@@ -136,6 +142,53 @@ def main(argv: list[str] | None = None) -> int:
     if args.list:
         print_scenarios()
         return 0
+
+    if args.device:
+        api_key = args.api_key
+        if args.enroll_token:
+            print(f"[Device Agent] Swapping enrollment token '{args.enroll_token[:10]}...' at {args.api_url} ...")
+            enroll_endpoint = args.api_url.rstrip("/") + "/api/v1/agent/enroll"
+            enroll_data = json.dumps({
+                "enrollment_token": args.enroll_token,
+                "device_name": "Simulated Endpoint Agent",
+                "operating_system": "Windows 11 Pro",
+                "agent_version": "1.0.0",
+            }).encode("utf-8")
+            req = urllib.request.Request(enroll_endpoint, data=enroll_data, headers={"Content-Type": "application/json"}, method="POST")
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    api_key = data.get("api_key")
+                    print(f"[Device Agent] Enrolled successfully! Device ID: {data.get('device_id')}")
+                    print(f"[Device Agent] Granted categories: {data.get('enabled_categories')}")
+            except urllib.error.HTTPError as exc:
+                print(f"[Device Agent] Enrollment failed: HTTP {exc.code} -- {exc.read().decode('utf-8')}", file=sys.stderr)
+                return 1
+
+        if not api_key:
+            print("[Device Agent] Error: Must provide either --enroll-token or --api-key in --device mode.", file=sys.stderr)
+            return 1
+
+        # Send heartbeat
+        hb_endpoint = args.api_url.rstrip("/") + "/api/v1/agent/heartbeat"
+        hb_data = json.dumps({"agent_version": "1.0.0"}).encode("utf-8")
+        hb_req = urllib.request.Request(hb_endpoint, data=hb_data, headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}, method="POST")
+        try:
+            with urllib.request.urlopen(hb_req, timeout=15) as resp:
+                hb_resp = json.loads(resp.read().decode("utf-8"))
+                print(f"[Device Agent] Heartbeat confirmed. Status: {hb_resp.get('status')}. Active categories: {hb_resp.get('enabled_categories')}")
+                if hb_resp.get("status") == "revoked" or hb_resp.get("terminate"):
+                    print("[Device Agent] Device or consent is revoked! Agent halting.")
+                    return 0
+        except urllib.error.HTTPError as exc:
+            print(f"[Device Agent] Heartbeat failed: HTTP {exc.code} -- {exc.read().decode('utf-8')}", file=sys.stderr)
+            return 1
+
+        if not args.scenario:
+            print("[Device Agent] Heartbeat completed. To send simulated events through this device agent, specify --scenario <name>.")
+            return 0
+
+        args.api_key = api_key
 
     if not args.scenario:
         parser.error("--scenario is required (or use --list to see the options)")
