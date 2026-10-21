@@ -1512,3 +1512,190 @@ export async function apiDownloadTicketEvidence(ticketId: string, evidenceId: st
   a.remove()
   URL.revokeObjectURL(url)
 }
+
+
+// ============================================================================
+// P22 Admin Oversight Dashboards & Reassignments
+// ============================================================================
+
+export type AdminOverviewResponse = {
+  organizations: {
+    total: number
+    by_status: Record<string, number>
+    by_mode: Record<string, number>
+  }
+  devices: {
+    connected: number
+    stale: number
+    offline: number
+    total: number
+  }
+  events_per_hour_last_24h: { time: string; count: number; value: number }[]
+  ai_usage: {
+    total_runs: number
+    tokens_used: number
+    cost_usd: number
+  }
+  stats: {
+    assets: number
+    users: number
+    open_incidents: number
+    security_events: number
+    incidents_by_severity: {
+      critical: number
+      high: number
+      medium: number
+      low: number
+    }
+  }
+}
+
+export type SocOversightOrg = {
+  id: string
+  name: string
+  soc_mode: "managed" | "in_house"
+  status: "active" | "suspended" | "archived"
+  open_alerts: number
+  open_incidents: number
+  unacknowledged_alerts: number
+  oldest_unacknowledged_age_seconds: number
+  mtta_seconds: number
+}
+
+export type SocAnalystWorkload = {
+  id: string
+  name: string
+  email: string
+  open_alerts: number
+  open_incidents: number
+  assigned_organizations: { id: string; name: string }[]
+}
+
+export type CoverageGapOrg = {
+  id: string
+  name: string
+}
+
+export type TopRuleStat = {
+  name: string
+  count: number
+  false_positive_rate: number
+}
+
+export type UnassignedAlertRow = {
+  id: string
+  title: string
+  severity: "critical" | "high" | "medium" | "low" | "info"
+  status: string
+  detectionRuleName: string
+  organizationId: string
+  organizationName: string
+  assetHostname: string
+  firstSeenAt: string
+  eligibleAnalysts: { id: string; name: string; email: string }[]
+}
+
+export type SocOversightResponse = {
+  kpis: { label: string; value: string; tone: "neutral" | "high" | "medium" | "critical" }[]
+  organizations: SocOversightOrg[]
+  analyst_workload: SocAnalystWorkload[]
+  coverage_gaps: CoverageGapOrg[]
+  top_rules: TopRuleStat[]
+  volume: { time: string; value: number }[]
+  unassigned_alerts: UnassignedAlertRow[]
+}
+
+export type ItOversightOrg = {
+  id: string
+  name: string
+  open_tickets_by_priority: { P1: number; P2: number; P3: number; P4: number }
+  sla_at_risk: number
+  sla_breached: number
+  oldest_open_ticket_age_seconds: number
+}
+
+export type ItTeamWorkload = {
+  team: { id: string; name: string }
+  open: number
+  overdue: number
+}
+
+export type ItDevWorkload = {
+  user: { id: string; name: string; email: string }
+  openTasks: number
+  overdue: number
+}
+
+export type SlaTicketRow = {
+  id: string
+  ticketNumber: string
+  title: string
+  severity: "critical" | "high" | "medium" | "low" | "info"
+  status: string
+  organizationId: string
+  organizationName: string
+  assetHostname: string
+  resolveDueAt: string | null
+  assignedUserId: string | null
+  assigneeName: string
+}
+
+export type ItOversightResponse = {
+  kpis: { label: string; value: string; tone: "neutral" | "high" | "medium" | "critical" }[]
+  organizations: ItOversightOrg[]
+  byStatus: { status: string; count: number }[]
+  byTeam: ItTeamWorkload[]
+  workload: ItDevWorkload[]
+  slaTable: SlaTicketRow[]
+}
+
+export async function apiGetAdminOverview(range: "24h" | "7d" | "30d" = "24h"): Promise<AdminOverviewResponse> {
+  return request<AdminOverviewResponse>(`/api/v1/admin/oversight/overview?range=${range}`)
+}
+
+export async function apiGetSocOversight(range: "24h" | "7d" | "30d" = "24h"): Promise<SocOversightResponse> {
+  return request<SocOversightResponse>(`/api/v1/admin/oversight/soc?range=${range}`)
+}
+
+export async function apiGetItOversight(range: "24h" | "7d" | "30d" = "24h"): Promise<ItOversightResponse> {
+  return request<ItOversightResponse>(`/api/v1/admin/oversight/it?range=${range}`)
+}
+
+export async function apiReassignAlert(
+  alertId: string,
+  analystId: string,
+  reason: string,
+): Promise<{ id: string; assigned_account_id: string; reason: string }> {
+  return request<{ id: string; assigned_account_id: string; reason: string }>(
+    `/api/v1/admin/alerts/${alertId}/reassign`,
+    {
+      method: "POST",
+      body: JSON.stringify({ analyst_id: analystId, reason }),
+    },
+  )
+}
+
+export async function apiReassignIncident(
+  incidentId: string,
+  analystId: string,
+  reason: string,
+): Promise<{ id: string; assigned_account_id: string; reason: string }> {
+  return request<{ id: string; assigned_account_id: string; reason: string }>(
+    `/api/v1/admin/incidents/${incidentId}/reassign`,
+    {
+      method: "POST",
+      body: JSON.stringify({ analyst_id: analystId, reason }),
+    },
+  )
+}
+
+
+export function apiAssignTicket(
+  ticketId: string,
+  payload: { team_id?: string; user_id?: string; reason?: string },
+) {
+  return request<TicketRow>(`/tickets/${ticketId}/assign`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
