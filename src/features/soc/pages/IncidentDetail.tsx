@@ -237,9 +237,14 @@ function IncidentDetail({ platform = false }: { platform?: boolean }) {
 
   if (!data) return null
 
-  // The platform analyst reaches this page from /admin/soc-queue's
-  // Incidents tab; the back-link follows whichever surface they came from.
-  const listPath = platform ? "/admin/soc-queue" : "/soc/incidents"
+  // Back-link follows whichever surface the user came from.
+  const listPath = platform
+    ? "/admin/soc-queue"
+    : me?.role === "organization_admin"
+      ? "/organization/incidents"
+      : me?.role === "security_manager"
+        ? "/manager/incidents"
+        : "/soc/incidents"
   const incident = data.incident
   const allowed = data.allowed_next_states ?? []
 
