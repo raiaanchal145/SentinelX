@@ -2,6 +2,7 @@ import {
   Activity,
   Building2,
   ClipboardList,
+  Laptop,
   LayoutDashboard,
   Radio,
   Server,
@@ -102,6 +103,11 @@ function Sidebar() {
       name: "Assets",
       icon: Server,
       path: "/organization/assets",
+    },
+    {
+      name: "Devices",
+      icon: Laptop,
+      path: "/organization/devices",
     },
     {
       name: "Event sources",

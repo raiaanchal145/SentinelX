@@ -5,6 +5,7 @@ import {
   BookOpen,
   ClipboardList,
   FileText,
+  Laptop,
   LayoutDashboard,
   Radio,
   ScrollText,
@@ -41,12 +42,14 @@ export const ROLE_NAV: Partial<Record<Role, NavItem[]>> = {
     { label: "Incidents", path: "/soc/incidents", icon: ShieldAlert, module: "incidents" },
     { label: "Events", path: "/soc/events", icon: Activity, module: "soc" },
     { label: "Assets", path: "/soc/assets", icon: Server, module: "assets" },
+    { label: "Devices", path: "/devices", icon: Laptop, module: "device_agents" },
     { label: "Reports", path: "/soc/reports", icon: FileText, module: "reports" },
   ],
   it_developer: [
     { label: "My Tasks", path: "/it", icon: ClipboardList, end: true },
     { label: "Tickets", path: "/it/tickets", icon: Ticket, module: "it_tickets" },
     { label: "Assets", path: "/it/assets", icon: Server, module: "assets" },
+    { label: "Devices", path: "/devices", icon: Laptop, module: "device_agents" },
     { label: "Runbooks", path: "/it/runbooks", icon: BookOpen, module: "it_tickets" },
   ],
   security_manager: [
@@ -56,6 +59,7 @@ export const ROLE_NAV: Partial<Record<Role, NavItem[]>> = {
     { label: "Approvals", path: "/manager/approvals", icon: SquareCheck, module: "approvals" },
     { label: "Reports", path: "/manager/reports", icon: FileText, module: "reports" },
     { label: "Assets", path: "/manager/assets", icon: Server, module: "assets" },
+    { label: "Devices", path: "/devices", icon: Laptop, module: "device_agents" },
     { label: "Event sources", path: "/manager/event-sources", icon: Radio },
     { label: "Audit", path: "/manager/audit", icon: ScrollText, module: "audit_logs" },
   ],
@@ -64,6 +68,7 @@ export const ROLE_NAV: Partial<Record<Role, NavItem[]>> = {
     { label: "Audit Logs", path: "/auditor/audit-logs", icon: ScrollText, module: "audit_logs" },
     { label: "Incidents", path: "/auditor/incidents", icon: ShieldAlert, module: "incidents" },
     { label: "Assets", path: "/auditor/assets", icon: Server, module: "assets" },
+    { label: "Devices", path: "/devices", icon: Laptop, module: "device_agents" },
     { label: "Reports", path: "/auditor/reports", icon: FileText, module: "reports" },
   ],
 }

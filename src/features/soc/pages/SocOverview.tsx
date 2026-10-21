@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Link } from "react-router-dom"
-import { Network, RefreshCw } from "lucide-react"
+import { RefreshCw } from "lucide-react"
 
 import IconButton from "../../../components/ui/IconButton"
 import SegmentedControl from "../../../components/ui/SegmentedControl"
@@ -23,6 +23,7 @@ import { useMe } from "../../../lib/me"
 import AlertDrawer from "../components/AlertDrawer"
 import AlertKpiRow from "../components/AlertKpiRow"
 import AiMetricsCard from "../components/AiMetricsCard"
+import AgentHealthWidget from "../components/AgentHealthWidget"
 import ConfirmDialog from "../../../components/ui/ConfirmDialog"
 import TriageQueue from "../components/TriageQueue"
 import { minutesSince } from "../components/alertShared"
@@ -227,15 +228,8 @@ function SocOverview() {
             )}
           </section>
 
-          {/* PLACEHOLDER: device/agent health arrives with the device_agents
-              milestone; disabled so the slot is visible but clearly not live. */}
-          <section aria-label="Device and agent health (placeholder)" className="rounded-card border border-line bg-surface p-4">
-            <h2 className="text-sm font-semibold text-fg-primary">Agent &amp; device health</h2>
-            <div className="mt-3 flex items-center gap-2 rounded-control border border-dashed border-line bg-surface-sunken p-3 text-xs text-fg-muted">
-              <Network size={14} aria-hidden="true" />
-              Device and agent health arrives with the device-agents milestone.
-            </div>
-          </section>
+          {/* Agent & device health widget (P20 Consented Device Monitoring) */}
+          <AgentHealthWidget />
 
           {/* AI operations & metrics */}
           <AiMetricsCard />
