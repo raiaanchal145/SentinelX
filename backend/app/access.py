@@ -109,6 +109,7 @@ ROLE_DEFAULT_MODULES: dict[UserRole, dict[str, str]] = {
     UserRole.it_developer: {
         ModuleKey.assets.value: ACCESS_WRITE,
         ModuleKey.it_tickets.value: ACCESS_WRITE,
+        ModuleKey.device_agents.value: ACCESS_WRITE,
     },
     UserRole.auditor: {
         ModuleKey.assets.value: ACCESS_READ,

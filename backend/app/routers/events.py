@@ -120,6 +120,42 @@ async def ingest_events(
     # enforces the per-key rate limit and last_used_at.)
     event_source, _api_key = await get_event_source_from_api_key(db, authorization)
 
+    # ---- P20: Consent enforcement for enrolled device agents ------------
+    from app.consent import is_event_consented
+    from app.models import ConsentRecord, DeviceEnrollment
+
+    device_enrollment = (
+        await db.execute(
+            select(DeviceEnrollment).where(
+                or_(
+                    DeviceEnrollment.api_key_id == _api_key.id,
+                    DeviceEnrollment.event_source_id == event_source.id,
+                )
+            )
+        )
+    ).scalars().first()
+
+    granted_categories: list[str] | None = None
+    if device_enrollment is not None:
+        if device_enrollment.status == "revoked":
+            raise _err("device_revoked", "This device has been revoked and cannot send events.", 403)
+
+        consent_record = (
+            await db.execute(
+                select(ConsentRecord)
+                .where(
+                    ConsentRecord.asset_id == device_enrollment.asset_id,
+                    ConsentRecord.revoked_at.is_(None),
+                )
+                .order_by(ConsentRecord.consented_at.desc())
+            )
+        ).scalars().first()
+
+        if consent_record is None:
+            granted_categories = []
+        else:
+            granted_categories = list(consent_record.categories_granted or [])
+
     async def _consume_rate_limit(_db, _key, _count):
         """Top up the rate-limit counter for events beyond the one the
         auth-time call already counted. Re-raises 429 when the batch
@@ -141,6 +177,7 @@ async def ingest_events(
     now_utc = datetime.now(timezone.utc)
     accepted: list[dict] = []
     results: list[dict] = []
+    rejected_no_consent = 0
     for index, record in enumerate(records):
         clean, reason = validate_event_record(record)
         if clean is None:
@@ -155,6 +192,11 @@ async def ingest_events(
         window_reason = timestamp_window_check(now_utc, occurred_at)
         if window_reason is not None:
             results.append({"index": index, "status": "rejected", "reason": window_reason})
+            continue
+
+        if granted_categories is not None and not is_event_consented(clean["event_type"], granted_categories):
+            results.append({"index": index, "status": "rejected", "reason": "category_not_consented"})
+            rejected_no_consent += 1
             continue
 
         accepted.append(clean)
@@ -181,10 +223,14 @@ async def ingest_events(
             # header so the collector knows the batch needs re-sending.
             response.headers["X-Ingestion-Warning"] = "queued=false; queue unreachable, re-send this batch"
 
+    if device_enrollment is not None and accepted:
+        device_enrollment.last_seen_at = now_utc
+
     return {
         "status": "accepted" if accepted else "no_acceptable_events",
         "accepted": len(accepted),
         "rejected": len(results) - len(accepted),
+        "rejected_no_consent": rejected_no_consent,
         "results": results,
     }
 
