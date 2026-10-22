@@ -133,3 +133,4 @@ def test_mail_03_benign_newsletter_cleared():
     assert result["is_phishing"] is False
     assert result["severity"] is None
     assert len(result["indicators"]) == 0
+

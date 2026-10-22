@@ -198,3 +198,4 @@ async def test_net_04_ids_alert_ingest(client: AsyncClient, db_session: AsyncSes
 
     assert resp.status_code == 202
     assert resp.json()["accepted"] == 1
+

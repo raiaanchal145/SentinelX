@@ -1,3 +1,4 @@
 # Treat Excel files as binary in git to prevent merge conflicts or corrupted diffs
 test_cases.xlsx binary
 *.xlsx binary
+

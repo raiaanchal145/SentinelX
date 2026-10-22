@@ -126,3 +126,4 @@ async def test_sec_04_tampered_jwt_rejected(client: AsyncClient):
     forged_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmYWtlQGV4YW1wbGUuY29tIn0.tampered_signature_123456789"
     resp = await client.get("/api/v1/auth/me", headers=auth(forged_token))
     assert resp.status_code == 401
+

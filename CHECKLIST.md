@@ -74,3 +74,4 @@
 - [x] Verified `sync_excel.py --dry-run` and `sync_excel.py --sync-only`
 - [x] Verified `new_test.py` generates boilerplate test with next ID
 - [x] Update documentation (`README.md`, team rules, Git workflow)
+

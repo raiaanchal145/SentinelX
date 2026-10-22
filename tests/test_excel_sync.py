@@ -249,3 +249,4 @@ def test_sync_06_database_safety_guard():
 
     with pytest.raises(RuntimeError):
         validate_test_database_url("")
+

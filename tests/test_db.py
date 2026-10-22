@@ -60,3 +60,4 @@ def test_db_02_database_safety_guard():
         with pytest.raises(RuntimeError) as exc_info:
             validate_test_database_url(bad_url)
         assert "CRITICAL DB SAFETY ERROR" in str(exc_info.value)
+

@@ -66,3 +66,4 @@ async def test_dash_02_soc_oversight_metrics(client: AsyncClient, db_session: As
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, dict)
+

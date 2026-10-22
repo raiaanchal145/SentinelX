@@ -138,3 +138,4 @@ async def test_rbac_04_cross_tenant_isolation(client: AsyncClient, db_session: A
     for item in alerts:
         if isinstance(item, dict) and "organization_id" in item:
             assert str(item["organization_id"]) == str(org_a.id)
+

@@ -122,3 +122,4 @@ if SYNC_DELETE_MODE not in {"delete", "archive", "keep_flagged"}:
 # Team Registry
 TEAM_MEMBERS = ["Ansh", "Riteka Singh", "Aanchal Rai"]
 DEFAULT_OWNER = "Ansh"
+
