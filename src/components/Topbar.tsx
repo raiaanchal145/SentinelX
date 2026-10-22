@@ -4,6 +4,7 @@ import {
   LogOut,
   Search,
   ShieldAlert,
+  User as UserIcon,
 } from "lucide-react"
 
 import { Link, useNavigate } from "react-router-dom"
@@ -70,19 +71,21 @@ function Topbar() {
   return (
     <header className="flex h-20 items-center justify-between border-b border-white/10 bg-surface-sunken px-6">
 
-      <div className="hidden items-center gap-3 rounded-xl border border-white/10 bg-surface px-4 py-2 md:flex">
-
+      <button
+        type="button"
+        onClick={() => window.dispatchEvent(new CustomEvent("open_command_palette"))}
+        className="hidden items-center gap-3 rounded-xl border border-white/10 bg-surface px-4 py-2 md:flex text-fg-muted hover:border-white/20 transition cursor-pointer text-left"
+        aria-label="Open command palette"
+      >
         <Search
           size={18}
           className="text-fg-muted"
         />
-
-        <input
-          placeholder="Search..."
-          className="w-64 bg-transparent text-sm text-white outline-none placeholder:text-fg-faint"
-        />
-
-      </div>
+        <span className="w-52 text-sm text-fg-faint">Search or press Ctrl+K...</span>
+        <kbd className="rounded border border-white/10 bg-surface-sunken px-1.5 py-0.5 text-[10px] text-fg-muted font-mono">
+          Ctrl K
+        </kbd>
+      </button>
 
       <div className="ml-auto flex items-center gap-4">
 
@@ -98,22 +101,30 @@ function Topbar() {
         )}
 
         <button className="rounded-xl border border-white/10 bg-surface p-2.5 text-fg-subtle transition hover:text-brand-400">
-
           <Bell size={19} />
-
         </button>
 
-        <div className="hidden text-right sm:block">
+        <Link
+          to="/profile"
+          className="rounded-xl border border-white/10 bg-surface p-2.5 text-fg-subtle transition hover:text-brand-400"
+          title="Account Profile & Settings"
+        >
+          <UserIcon size={18} />
+        </Link>
 
-          <p className="text-sm font-medium text-white">
+        <Link
+          to="/profile"
+          className="hidden text-right sm:block group transition hover:opacity-90"
+          title="Account profile and settings"
+        >
+          <p className="text-sm font-medium text-white group-hover:text-brand-300 transition">
             {name}
           </p>
 
           <p className="text-xs text-fg-muted">
             {formattedRole}
           </p>
-
-        </div>
+        </Link>
 
         <button
           onClick={logout}

@@ -3,6 +3,7 @@ import {
   Activity,
   AlertTriangle,
   BookOpen,
+  Building2,
   ClipboardList,
   FileText,
   Laptop,
@@ -10,9 +11,14 @@ import {
   Radio,
   ScrollText,
   Server,
+  Settings,
   ShieldAlert,
+  ShieldCheck,
   SquareCheck,
   Ticket,
+  Users,
+  UsersRound,
+  Wrench,
 } from "lucide-react"
 
 import type { Role } from "./auth"
@@ -36,6 +42,31 @@ export type NavItem = {
  * the command palette all read from one source instead of drifting apart.
  */
 export const ROLE_NAV: Partial<Record<Role, NavItem[]>> = {
+  super_admin: [
+    { label: "Admin Dashboard", path: "/admin", icon: LayoutDashboard, end: true },
+    { label: "Organizations", path: "/admin/organizations", icon: Building2 },
+    { label: "SOC Team", path: "/admin/soc-team", icon: Users },
+    { label: "SOC Oversight", path: "/admin/soc-oversight", icon: ShieldAlert },
+    { label: "IT Oversight", path: "/admin/it-oversight", icon: Wrench },
+    { label: "Assets", path: "/admin/assets", icon: Server },
+    { label: "Security Overview", path: "/admin/security-overview", icon: ShieldCheck },
+  ],
+  platform_soc_analyst: [
+    { label: "SOC Queue", path: "/admin/soc-queue", icon: ShieldAlert, end: true },
+  ],
+  organization_admin: [
+    { label: "Dashboard", path: "/organization", icon: Building2, end: true },
+    { label: "Members", path: "/organization/members", icon: Users },
+    { label: "Teams", path: "/organization/teams", icon: UsersRound },
+    { label: "Assets", path: "/organization/assets", icon: Server },
+    { label: "Devices", path: "/organization/devices", icon: Laptop },
+    { label: "Event Sources", path: "/organization/event-sources", icon: Radio },
+    { label: "Access", path: "/organization/access", icon: ShieldCheck },
+    { label: "SOC Oversight", path: "/admin/soc-oversight", icon: ShieldAlert },
+    { label: "Security Activity", path: "/organization/security-activity", icon: Activity },
+    { label: "Incidents", path: "/organization/incidents", icon: ShieldAlert },
+    { label: "Settings", path: "/organization/settings", icon: Settings },
+  ],
   soc_analyst: [
     { label: "Overview", path: "/soc", icon: LayoutDashboard, end: true },
     { label: "Alerts", path: "/soc/alerts", icon: AlertTriangle, module: "soc" },

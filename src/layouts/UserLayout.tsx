@@ -14,6 +14,7 @@ import {
   Menu,
   Search,
   ShieldCheck,
+  User as UserIcon,
 } from "lucide-react"
 
 import DropdownMenu, { type DropdownMenuItem } from "../components/ui/DropdownMenu"
@@ -122,7 +123,16 @@ function UserLayout() {
   )
 
   const userMenuItems: DropdownMenuItem[] = [
-    { key: "profile", label: "Profile", onSelect: () => {}, disabled: true },
+    {
+      key: "profile",
+      label: (
+        <span className="flex items-center gap-2">
+          <UserIcon size={14} aria-hidden="true" />
+          Profile & Sessions
+        </span>
+      ),
+      onSelect: () => navigate("/profile"),
+    },
     {
       key: "sign-out",
       label: (
@@ -198,10 +208,9 @@ function UserLayout() {
         <div className="ml-auto flex items-center gap-2">
           <button
             type="button"
-            // TODO: phase 6 -- wire this up to the real CommandPalette overlay.
-            onClick={() => {}}
+            onClick={() => window.dispatchEvent(new CustomEvent("open_command_palette"))}
             aria-label="Open command palette"
-            className="hidden items-center gap-2 rounded-control border border-line bg-surface px-3 py-2 text-xs text-fg-muted transition hover:border-line-strong hover:text-fg-subtle sm:flex"
+            className="hidden items-center gap-2 rounded-control border border-line bg-surface px-3 py-2 text-xs text-fg-muted transition hover:border-line-strong hover:text-fg-subtle sm:flex cursor-pointer"
           >
             <Search size={14} aria-hidden="true" />
             <span>Search</span>
