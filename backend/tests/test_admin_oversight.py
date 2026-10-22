@@ -442,3 +442,102 @@ async def test_reassign_incident_rules_and_audit(client, db_session):
         )
     ).scalar_one()
     assert audit.details["after"]["reason"] == "Escalated for senior review"
+
+
+async def test_admin_assets_list_and_kpis(client, db_session):
+    from app.models import AssetCriticality, AssetType
+
+    org1 = await make_organization(db_session, name="Org One")
+    org2 = await make_organization(db_session, name="Org Two")
+    super_tok = await _super_admin_token(client, db_session, email="super_assets@example.com")
+
+    a1 = Asset(
+        organization_id=org1.id,
+        name="web-server-01",
+        hostname="web01.internal",
+        asset_type=AssetType.server,
+        criticality=AssetCriticality.critical,
+        status="active",
+    )
+    a2 = Asset(
+        organization_id=org1.id,
+        name="db-server-01",
+        hostname="db01.internal",
+        asset_type=AssetType.database,
+        criticality=AssetCriticality.high,
+        status="active",
+    )
+    a3 = Asset(
+        organization_id=org2.id,
+        name="legacy-box",
+        hostname="old.internal",
+        asset_type=AssetType.workstation,
+        criticality=AssetCriticality.low,
+        status="retired",
+    )
+    db_session.add_all([a1, a2, a3])
+    await db_session.commit()
+
+    # 1. Non-super admin rejected
+    user = await make_user(db_session, organization_id=org1.id, email="dev_assets@example.com", role=UserRole.it_developer)
+    user_tok = await login(client, user.email)
+    resp_unauth = await client.get("/api/v1/admin/assets", headers=auth(user_tok))
+    assert resp_unauth.status_code == 403
+
+    # 2. Super admin lists all assets
+    resp = await client.get("/api/v1/admin/assets", headers=auth(super_tok))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 3
+    assert body["kpis"]["total"] == 3
+    assert body["kpis"]["active"] == 2
+    assert body["kpis"]["retired"] == 1
+    assert body["kpis"]["critical"] == 1
+    assert len(body["organizations"]) >= 2
+
+    # 3. Filter by organization
+    resp_org1 = await client.get(f"/api/v1/admin/assets?organization_id={org1.id}", headers=auth(super_tok))
+    assert resp_org1.status_code == 200
+    assert resp_org1.json()["total"] == 2
+
+    # 4. Filter by search query
+    resp_q = await client.get("/api/v1/admin/assets?q=web01", headers=auth(super_tok))
+    assert resp_q.status_code == 200
+    assert resp_q.json()["total"] == 1
+    assert resp_q.json()["assets"][0]["hostname"] == "web01.internal"
+
+
+async def test_admin_security_overview(client, db_session):
+    org = await make_organization(db_session, name="Security Org")
+    super_tok = await _super_admin_token(client, db_session, email="super_sec@example.com")
+
+    now = datetime.now(timezone.utc)
+    inc = Incident(
+        organization_id=org.id,
+        title="Ransomware Detected",
+        severity=EventSeverity.critical,
+        status=IncidentStatus.investigating,
+        opened_at=now,
+    )
+    alert = Alert(
+        organization_id=org.id,
+        title="Suspicious Powershell Execution",
+        severity=EventSeverity.high,
+        status=AlertStatus.new,
+        first_seen_at=now,
+        last_seen_at=now,
+    )
+    db_session.add_all([inc, alert])
+    await db_session.commit()
+
+    resp = await client.get("/api/v1/admin/oversight/security-overview?range=24h", headers=auth(super_tok))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["kpis"]["critical_incidents"] >= 1
+    assert body["kpis"]["open_alerts"] >= 1
+    assert body["incidents_by_severity"]["critical"] >= 1
+    assert len(body["active_incidents"]) >= 1
+    assert body["active_incidents"][0]["title"] == "Ransomware Detected"
+    assert len(body["recent_alerts"]) >= 1
+    assert body["recent_alerts"][0]["title"] == "Suspicious Powershell Execution"
+

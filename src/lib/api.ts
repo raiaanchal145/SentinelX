@@ -1702,3 +1702,106 @@ export function apiAssignTicket(
     body: JSON.stringify(payload),
   })
 }
+
+export type AdminAssetRow = {
+  id: string
+  organization_id: string
+  organization_name: string
+  name: string
+  hostname: string
+  ip_address: string
+  asset_type: string
+  criticality: "critical" | "high" | "medium" | "low"
+  status: "active" | "retired"
+  operating_system: string
+  environment: string
+  description: string
+  created_at: string | null
+}
+
+export type AdminAssetsResponse = {
+  assets: AdminAssetRow[]
+  total: number
+  page: number
+  page_size: number
+  organizations: { id: string; name: string }[]
+  kpis: {
+    total: number
+    active: number
+    retired: number
+    critical: number
+  }
+}
+
+export type AdminSecurityOverviewResponse = {
+  kpis: {
+    total_active_incidents: number
+    critical_incidents: number
+    high_incidents: number
+    open_alerts: number
+    unacknowledged_alerts: number
+    mtta_minutes: number
+    security_events_in_range: number
+    connected_devices: number
+  }
+  incidents_by_severity: {
+    critical: number
+    high: number
+    medium: number
+    low: number
+  }
+  active_incidents: {
+    id: string
+    title: string
+    severity: "critical" | "high" | "medium" | "low" | "info"
+    status: string
+    opened_at: string | null
+    organization_id: string
+    organization_name: string
+  }[]
+  recent_alerts: {
+    id: string
+    title: string
+    severity: "critical" | "high" | "medium" | "low" | "info"
+    status: string
+    first_seen_at: string | null
+    organization_id: string
+    organization_name: string
+    asset_hostname: string
+  }[]
+  organizations: {
+    id: string
+    name: string
+    soc_mode: "managed" | "in_house"
+    status: string
+    asset_count: number
+    device_count: number
+  }[]
+}
+
+export async function apiGetAdminAssets(params: {
+  organization_id?: string
+  q?: string
+  asset_type?: string
+  criticality?: string
+  status?: string
+  page?: number
+  page_size?: number
+} = {}): Promise<AdminAssetsResponse> {
+  const query = new URLSearchParams()
+  if (params.organization_id) query.set("organization_id", params.organization_id)
+  if (params.q) query.set("q", params.q)
+  if (params.asset_type) query.set("asset_type", params.asset_type)
+  if (params.criticality) query.set("criticality", params.criticality)
+  if (params.status) query.set("status", params.status)
+  if (params.page) query.set("page", String(params.page))
+  if (params.page_size) query.set("page_size", String(params.page_size))
+  const qs = query.toString()
+  return request<AdminAssetsResponse>(`/admin/assets${qs ? `?${qs}` : ""}`)
+}
+
+export async function apiGetAdminSecurityOverview(
+  range: "24h" | "7d" | "30d" = "24h",
+): Promise<AdminSecurityOverviewResponse> {
+  return request<AdminSecurityOverviewResponse>(`/admin/oversight/security-overview?range=${range}`)
+}

@@ -24,7 +24,10 @@ from app.models import (
     AlertHistory,
     AlertStatus,
     Asset,
+    AssetCriticality,
+    AssetType,
     DeviceEnrollment,
+    EventSeverity,
     Incident,
     IncidentStatus,
     IncidentTimeline,
@@ -1117,3 +1120,319 @@ async def reassign_incident(
         "previous_assigned_account_id": previous_assigned_id,
         "reason": reason,
     }
+
+
+# ==============================================================================
+# 6. ASSETS: Cross-tenant assets list & KPIs (super_admin only)
+# ==============================================================================
+
+@router.get("/assets")
+async def list_admin_assets(
+    organization_id: uuid.UUID | None = Query(None),
+    q: str | None = Query(None),
+    asset_type: str | None = Query(None),
+    criticality: str | None = Query(None),
+    status: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    scope: Scope = Depends(require_super_admin),
+):
+    orgs = (
+        await db.execute(
+            select(Organization.id, Organization.name)
+            .where(Organization.status != OrganizationStatus.archived)
+            .order_by(Organization.name)
+        )
+    ).all()
+    org_list = [{"id": str(o.id), "name": o.name} for o in orgs]
+
+    stmt = (
+        select(
+            Asset.id,
+            Asset.organization_id,
+            Asset.name,
+            Asset.hostname,
+            Asset.ip_address,
+            Asset.asset_type,
+            Asset.criticality,
+            Asset.status,
+            Asset.operating_system,
+            Asset.environment,
+            Asset.description,
+            Asset.created_at,
+            Organization.name.label("organization_name"),
+        )
+        .join(Organization, Asset.organization_id == Organization.id)
+    )
+
+    if organization_id:
+        stmt = stmt.where(Asset.organization_id == organization_id)
+    if q:
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(
+            (Asset.name.ilike(like))
+            | (Asset.hostname.ilike(like))
+            | (Asset.ip_address.ilike(like))
+        )
+    if asset_type:
+        try:
+            stmt = stmt.where(Asset.asset_type == AssetType(asset_type))
+        except ValueError:
+            pass
+    if criticality:
+        try:
+            stmt = stmt.where(Asset.criticality == AssetCriticality(criticality))
+        except ValueError:
+            pass
+    if status:
+        stmt = stmt.where(Asset.status == status)
+
+    total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar() or 0
+
+    stmt = stmt.order_by(Asset.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+    rows = (await db.execute(stmt)).all()
+
+    kpi_stmt = select(
+        func.count(Asset.id).label("total"),
+        func.count(Asset.id).filter(Asset.status == "active").label("active"),
+        func.count(Asset.id).filter(Asset.status == "retired").label("retired"),
+        func.count(Asset.id).filter(Asset.criticality == AssetCriticality.critical).label("critical"),
+    )
+    if organization_id:
+        kpi_stmt = kpi_stmt.where(Asset.organization_id == organization_id)
+    kpis = (await db.execute(kpi_stmt)).one()
+
+    assets = [
+        {
+            "id": str(r.id),
+            "organization_id": str(r.organization_id),
+            "organization_name": r.organization_name,
+            "name": r.name,
+            "hostname": r.hostname or "N/A",
+            "ip_address": r.ip_address or "N/A",
+            "asset_type": r.asset_type.value if hasattr(r.asset_type, "value") else str(r.asset_type),
+            "criticality": r.criticality.value if hasattr(r.criticality, "value") else str(r.criticality),
+            "status": r.status,
+            "operating_system": r.operating_system or "Unknown",
+            "environment": r.environment or "unspecified",
+            "description": r.description or "",
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+    ]
+
+    return {
+        "assets": assets,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "organizations": org_list,
+        "kpis": {
+            "total": kpis.total,
+            "active": kpis.active,
+            "retired": kpis.retired,
+            "critical": kpis.critical,
+        },
+    }
+
+
+# ==============================================================================
+# 7. SECURITY OVERVIEW: Threat posture, active incidents, recent alerts
+# ==============================================================================
+
+@router.get("/oversight/security-overview")
+async def security_overview(
+    time_range: str = Query("24h", alias="range", pattern="^(24h|7d|30d)$"),
+    db: AsyncSession = Depends(get_db),
+    scope: Scope = Depends(require_super_admin),
+):
+    now = datetime.now(timezone.utc)
+    since, _ = _parse_time_range(time_range)
+
+    active_statuses = [
+        IncidentStatus.new,
+        IncidentStatus.triaged,
+        IncidentStatus.investigating,
+        IncidentStatus.containment,
+        IncidentStatus.remediation,
+    ]
+
+    sev_rows = (
+        await db.execute(
+            select(Incident.severity, func.count(Incident.id))
+            .where(Incident.status.in_(active_statuses))
+            .group_by(Incident.severity)
+        )
+    ).all()
+    incidents_by_severity = {s.value: 0 for s in EventSeverity}
+    for sev, count in sev_rows:
+        key = sev.value if hasattr(sev, "value") else str(sev)
+        incidents_by_severity[key] = count
+
+    total_active_incidents = sum(incidents_by_severity.values())
+
+    open_alerts_count = (
+        await db.execute(
+            select(func.count(Alert.id)).where(Alert.status.in_([AlertStatus.new, AlertStatus.triaged, AlertStatus.investigating]))
+        )
+    ).scalar() or 0
+
+    unack_alerts_count = (
+        await db.execute(
+            select(func.count(Alert.id)).where(Alert.status == AlertStatus.new)
+        )
+    ).scalar() or 0
+
+    mtta_minutes = 0.0
+    ack_sample = (
+        await db.execute(
+            select(
+                func.avg(
+                    func.extract("epoch", AlertHistory.created_at - Alert.first_seen_at)
+                )
+            )
+            .join(Alert, Alert.id == AlertHistory.alert_id)
+            .where(
+                AlertHistory.action == "acknowledge",
+                AlertHistory.created_at >= since,
+            )
+        )
+    ).scalar()
+    if ack_sample and ack_sample > 0:
+        mtta_minutes = round(float(ack_sample) / 60.0, 1)
+
+    security_events_count = (
+        await db.execute(
+            select(func.count(SecurityEvent.id)).where(SecurityEvent.occurred_at >= since)
+        )
+    ).scalar() or 0
+
+    two_min_ago = now - timedelta(minutes=2)
+    connected_devices = (
+        await db.execute(
+            select(func.count(DeviceEnrollment.id)).where(
+                DeviceEnrollment.last_heartbeat_at >= two_min_ago,
+                DeviceEnrollment.status != "revoked",
+            )
+        )
+    ).scalar() or 0
+
+    incident_rows = (
+        await db.execute(
+            select(
+                Incident.id,
+                Incident.title,
+                Incident.severity,
+                Incident.status,
+                Incident.opened_at,
+                Organization.id.label("org_id"),
+                Organization.name.label("org_name"),
+            )
+            .join(Organization, Incident.organization_id == Organization.id)
+            .where(Incident.status.in_(active_statuses))
+            .order_by(Incident.opened_at.desc())
+            .limit(15)
+        )
+    ).all()
+    incidents_list = [
+        {
+            "id": str(r.id),
+            "title": r.title,
+            "severity": r.severity.value if hasattr(r.severity, "value") else str(r.severity),
+            "status": r.status.value if hasattr(r.status, "value") else str(r.status),
+            "opened_at": r.opened_at.isoformat() if r.opened_at else None,
+            "organization_id": str(r.org_id),
+            "organization_name": r.org_name,
+        }
+        for r in incident_rows
+    ]
+
+    alert_rows = (
+        await db.execute(
+            select(
+                Alert.id,
+                Alert.title,
+                Alert.severity,
+                Alert.status,
+                Alert.first_seen_at,
+                Organization.id.label("org_id"),
+                Organization.name.label("org_name"),
+                Asset.hostname.label("asset_hostname"),
+            )
+            .join(Organization, Alert.organization_id == Organization.id)
+            .outerjoin(Asset, Alert.asset_id == Asset.id)
+            .where(
+                Alert.status.in_([AlertStatus.new, AlertStatus.triaged, AlertStatus.investigating]),
+                Alert.severity.in_([EventSeverity.critical, EventSeverity.high]),
+            )
+            .order_by(Alert.first_seen_at.desc())
+            .limit(15)
+        )
+    ).all()
+    alerts_list = [
+        {
+            "id": str(r.id),
+            "title": r.title,
+            "severity": r.severity.value if hasattr(r.severity, "value") else str(r.severity),
+            "status": r.status.value if hasattr(r.status, "value") else str(r.status),
+            "first_seen_at": r.first_seen_at.isoformat() if r.first_seen_at else None,
+            "organization_id": str(r.org_id),
+            "organization_name": r.org_name,
+            "asset_hostname": r.asset_hostname or "N/A",
+        }
+        for r in alert_rows
+    ]
+
+    org_posture_rows = (
+        await db.execute(
+            select(
+                Organization.id,
+                Organization.name,
+                Organization.soc_mode,
+                Organization.status,
+                func.count(func.distinct(Asset.id)).label("asset_count"),
+                func.count(func.distinct(DeviceEnrollment.id)).filter(DeviceEnrollment.status != "revoked").label("device_count"),
+            )
+            .outerjoin(Asset, Asset.organization_id == Organization.id)
+            .outerjoin(DeviceEnrollment, DeviceEnrollment.organization_id == Organization.id)
+            .where(Organization.status != OrganizationStatus.archived)
+            .group_by(Organization.id, Organization.name, Organization.soc_mode, Organization.status)
+            .order_by(Organization.name)
+        )
+    ).all()
+
+    org_posture = [
+        {
+            "id": str(r.id),
+            "name": r.name,
+            "soc_mode": r.soc_mode.value if hasattr(r.soc_mode, "value") else str(r.soc_mode),
+            "status": r.status.value if hasattr(r.status, "value") else str(r.status),
+            "asset_count": r.asset_count,
+            "device_count": r.device_count,
+        }
+        for r in org_posture_rows
+    ]
+
+    return {
+        "kpis": {
+            "total_active_incidents": total_active_incidents,
+            "critical_incidents": incidents_by_severity.get("critical", 0),
+            "high_incidents": incidents_by_severity.get("high", 0),
+            "open_alerts": open_alerts_count,
+            "unacknowledged_alerts": unack_alerts_count,
+            "mtta_minutes": mtta_minutes,
+            "security_events_in_range": security_events_count,
+            "connected_devices": connected_devices,
+        },
+        "incidents_by_severity": {
+            "critical": incidents_by_severity.get("critical", 0),
+            "high": incidents_by_severity.get("high", 0),
+            "medium": incidents_by_severity.get("medium", 0),
+            "low": incidents_by_severity.get("low", 0),
+        },
+        "active_incidents": incidents_list,
+        "recent_alerts": alerts_list,
+        "organizations": org_posture,
+    }
+
