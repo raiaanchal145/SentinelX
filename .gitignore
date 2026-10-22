@@ -45,3 +45,10 @@ postgres-data/
 .freebuff
 # Evidence uploads (P15): per-machine binary blobs, never committed
 data/evidence/
+
+# Excel reporting & QA test artifacts
+~$*.xlsx
+backups/
+test_cases_LOCKED_*.xlsx
+.pytest_cache/
+
