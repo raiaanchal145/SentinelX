@@ -155,3 +155,42 @@ def send_invitation_email(
     with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, context=context) as server:
         server.login(settings.smtp_user, settings.smtp_password)
         server.sendmail(settings.smtp_user, to_email, message.as_string())
+
+
+def send_two_factor_code_email(to_email: str, name: str, code: str) -> None:
+    """Emails a two-factor authentication code via SMTP.
+    Falls back to printing code to server console if SMTP is unconfigured.
+    """
+    if not settings.smtp_user or not settings.smtp_password:
+        print(f"[SentinelX] SMTP not configured -- 2FA code for {to_email}: {code}")
+        return
+
+    message = MIMEMultipart("alternative")
+    message["Subject"] = "Your SentinelX Two-Factor Security Code"
+    message["From"] = f"{settings.smtp_from_name} <{settings.smtp_user}>"
+    message["To"] = to_email
+
+    text_body = (
+        f"Hi {name},\n\n"
+        f"Your SentinelX two-factor authentication code is: {code}\n\n"
+        f"This code expires in 10 minutes.\n\n"
+        f"If you did not initiate this request, someone may be trying to access your account."
+    )
+
+    html_body = f"""
+    <div style="font-family: Arial, sans-serif; color: #0b1f33;">
+      <p>Hi {name},</p>
+      <p>Your SentinelX two-factor security code is:</p>
+      <p style="font-size: 28px; font-weight: bold; letter-spacing: 6px; color: #0284c7;">{code}</p>
+      <p>This code expires in 10 minutes.</p>
+      <p style="color: #888;">If you did not initiate this request, please change your password immediately.</p>
+    </div>
+    """
+
+    message.attach(MIMEText(text_body, "plain"))
+    message.attach(MIMEText(html_body, "html"))
+
+    context = ssl.create_default_context()
+    with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, context=context) as server:
+        server.login(settings.smtp_user, settings.smtp_password)
+        server.sendmail(settings.smtp_user, to_email, message.as_string())
