@@ -355,6 +355,9 @@ class Admin(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    two_factor_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    two_factor_code: Mapped[str | None] = mapped_column(String(10))
+    two_factor_code_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     organization: Mapped["Organization | None"] = relationship(
         back_populates="admins", foreign_keys=[organization_id]
@@ -432,6 +435,9 @@ class User(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    two_factor_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    two_factor_code: Mapped[str | None] = mapped_column(String(10))
+    two_factor_code_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     organization: Mapped["Organization"] = relationship(back_populates="users")
     team: Mapped["Team | None"] = relationship(back_populates="members")
@@ -736,6 +742,7 @@ class Session(Base):
     ip: Mapped[str | None] = mapped_column(String(64))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

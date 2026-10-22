@@ -46,10 +46,19 @@ export class ApiError extends Error {
   }
 }
 
-type LoginResponse = {
+export type AuthSuccessResponse = {
   access_token: string
   token_type: string
   user: ApiUser
+}
+
+export type LoginResponse = {
+  access_token: string
+  token_type?: string
+  user?: ApiUser
+  requires_2fa?: boolean
+  temp_token?: string
+  message?: string
 }
 
 type MessageResponse = {
@@ -184,7 +193,7 @@ export function apiGetInvitation(token: string) {
 }
 
 export function apiAcceptInvitation(token: string, fullName: string, password: string) {
-  return request<LoginResponse>("/invitations/accept", {
+  return request<AuthSuccessResponse>("/invitations/accept", {
     method: "POST",
     body: JSON.stringify({ token, full_name: fullName, password }),
   })
@@ -1804,4 +1813,148 @@ export async function apiGetAdminSecurityOverview(
   range: "24h" | "7d" | "30d" = "24h",
 ): Promise<AdminSecurityOverviewResponse> {
   return request<AdminSecurityOverviewResponse>(`/admin/oversight/security-overview?range=${range}`)
+}
+
+// ---------------------------------------------------------------------------
+// Profile, Sessions, 2FA & Command Palette (P25)
+// ---------------------------------------------------------------------------
+
+export type UserProfile = {
+  id: string
+  name: string
+  email: string
+  role: string
+  account_type: string
+  organization_id?: string | null
+  organization_name?: string | null
+  two_factor_enabled: boolean
+  created_at?: string | null
+}
+
+export type SessionItem = {
+  id: string
+  device: string
+  user_agent: string
+  ip: string
+  last_seen_at?: string | null
+  created_at?: string | null
+  is_current: boolean
+}
+
+export type SessionsResponse = {
+  sessions: SessionItem[]
+}
+
+export type PaletteAlertItem = {
+  id: string
+  title: string
+  severity: string
+  status: string
+  organization_id: string
+  created_at?: string | null
+}
+
+export type PaletteIncidentItem = {
+  id: string
+  title: string
+  severity: string
+  status: string
+  organization_id: string
+  opened_at?: string | null
+}
+
+export type PaletteTicketItem = {
+  id: string
+  ticket_number?: string | null
+  title: string
+  priority: string
+  status: string
+  organization_id: string
+  created_at?: string | null
+}
+
+export type PaletteAssetItem = {
+  id: string
+  name: string
+  hostname?: string | null
+  ip_address?: string | null
+  asset_type: string
+  status: string
+  organization_id: string
+}
+
+export type PaletteSearchResponse = {
+  alerts: PaletteAlertItem[]
+  incidents: PaletteIncidentItem[]
+  tickets: PaletteTicketItem[]
+  assets: PaletteAssetItem[]
+}
+
+export function apiGetProfile(): Promise<UserProfile> {
+  return request<UserProfile>("/profile")
+}
+
+export function apiUpdateProfile(name: string): Promise<UserProfile> {
+  return request<UserProfile>("/profile", {
+    method: "PUT",
+    body: JSON.stringify({ name }),
+  })
+}
+
+export function apiChangePassword(payload: {
+  old_password: string
+  new_password: string
+  revoke_other_sessions?: boolean
+}): Promise<{ message: string }> {
+  return request<{ message: string }>("/profile/change-password", {
+    method: "POST",
+    body: JSON.stringify({
+      old_password: payload.old_password,
+      new_password: payload.new_password,
+      revoke_other_sessions: payload.revoke_other_sessions ?? true,
+    }),
+  })
+}
+
+export function apiGetSessions(): Promise<SessionsResponse> {
+  return request<SessionsResponse>("/profile/sessions")
+}
+
+export function apiRevokeSession(sessionId: string): Promise<{ id: string; revoked: boolean }> {
+  return request<{ id: string; revoked: boolean }>(`/profile/sessions/${sessionId}`, {
+    method: "DELETE",
+  })
+}
+
+export function apiRevokeAllSessions(keepCurrent = true): Promise<{ revoked_count: number; keep_current: boolean }> {
+  return request<{ revoked_count: number; keep_current: boolean }>(
+    `/profile/sessions/revoke-all?keep_current=${keepCurrent}`,
+    {
+      method: "POST",
+    },
+  )
+}
+
+export function apiSend2faCode(): Promise<{ message: string }> {
+  return request<{ message: string }>("/profile/2fa/send-code", {
+    method: "POST",
+  })
+}
+
+export function apiToggle2fa(enable: boolean, code: string): Promise<{ two_factor_enabled: boolean; message: string }> {
+  return request<{ two_factor_enabled: boolean; message: string }>("/profile/2fa/toggle", {
+    method: "POST",
+    body: JSON.stringify({ enable, code }),
+  })
+}
+
+export function apiLogin2fa(temp_token: string, code: string): Promise<LoginResponse> {
+  return request<LoginResponse>("/auth/login-2fa", {
+    method: "POST",
+    body: JSON.stringify({ temp_token, code }),
+  })
+}
+
+export function apiSearchPalette(q: string, limit = 5): Promise<PaletteSearchResponse> {
+  return request<PaletteSearchResponse>(`/palette/search?q=${encodeURIComponent(q)}&limit=${limit}`)
 }

@@ -6,12 +6,13 @@ import {
 import {
   Eye,
   EyeOff,
+  KeyRound,
   ShieldCheck,
 } from "lucide-react"
 
 import { useNavigate } from "react-router-dom"
 
-import { apiLogin, ApiError } from "../lib/api"
+import { apiLogin, apiLogin2fa, ApiError } from "../lib/api"
 import { homePathFor } from "../lib/auth"
 
 // Same allow-list the backend enforces: only the standard set of
@@ -22,26 +23,23 @@ function Login() {
   const navigate = useNavigate()
 
   const [email, setEmail] = useState("")
-  const [password, setPassword] =
-    useState("")
+  const [password, setPassword] = useState("")
+  const [showPassword, setShowPassword] = useState(false)
+  const [error, setError] = useState("")
+  const [infoMessage, setInfoMessage] = useState("")
+  const [submitting, setSubmitting] = useState(false)
 
-  const [
-    showPassword,
-    setShowPassword,
-  ] = useState(false)
-
-  const [error, setError] =
-    useState("")
-
-  const [submitting, setSubmitting] =
-    useState(false)
+  // Two-Factor Authentication state
+  const [step, setStep] = useState<"credentials" | "2fa">("credentials")
+  const [tempToken, setTempToken] = useState("")
+  const [twoFactorCode, setTwoFactorCode] = useState("")
 
   const handleLogin = async (
     e: FormEvent<HTMLFormElement>,
   ) => {
     e.preventDefault()
-
     setError("")
+    setInfoMessage("")
 
     if (!EMAIL_PATTERN.test(email)) {
       setError(
@@ -53,44 +51,21 @@ function Login() {
     setSubmitting(true)
 
     try {
-      const { access_token, user } =
-        await apiLogin(email, password)
+      const loginRes = await apiLogin(email, password)
 
-      localStorage.setItem(
-        "sentinelx_token",
-        access_token,
-      )
+      if (loginRes.requires_2fa && loginRes.temp_token) {
+        setTempToken(loginRes.temp_token)
+        setStep("2fa")
+        setInfoMessage(loginRes.message || "A security verification code has been sent to your email.")
+        return
+      }
 
-      localStorage.setItem(
-        "sentinelx_logged_in",
-        "true",
-      )
+      if (!loginRes.access_token || !loginRes.user) {
+        setError("Invalid response from server. Please try again.")
+        return
+      }
 
-      localStorage.setItem(
-        "sentinelx_role",
-        user.role,
-      )
-
-      localStorage.setItem(
-        "sentinelx_name",
-        user.name,
-      )
-
-      localStorage.setItem(
-        "sentinelx_email",
-        user.email,
-      )
-
-      // TODO: replace with real auth (backend already issues a JWT) --
-      // kept alongside the existing mock-session keys above.
-      localStorage.setItem(
-        "sentinelx_account_type",
-        user.account_type,
-      )
-
-      window.dispatchEvent(new Event("sentinelx_auth_change"))
-
-      navigate(homePathFor(user.role))
+      completeLogin(loginRes.access_token, loginRes.user)
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.code === "organization_suspended" || err.code === "organization_archived") {
@@ -119,6 +94,47 @@ function Login() {
     } finally {
       setSubmitting(false)
     }
+  }
+
+  const handle2faSubmit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    setError("")
+
+    const code = twoFactorCode.trim()
+    if (!code) {
+      setError("Please enter the 6-digit verification code.")
+      return
+    }
+
+    setSubmitting(true)
+    try {
+      const loginRes = await apiLogin2fa(tempToken, code)
+      if (!loginRes.access_token || !loginRes.user) {
+        setError("Invalid response from server. Please try again.")
+        return
+      }
+      completeLogin(loginRes.access_token, loginRes.user)
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setError(err.message)
+      } else {
+        setError("Invalid or expired verification code.")
+      }
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const completeLogin = (token: string, user: { role: string; name: string; email: string; account_type: string }) => {
+    localStorage.setItem("sentinelx_token", token)
+    localStorage.setItem("sentinelx_logged_in", "true")
+    localStorage.setItem("sentinelx_role", user.role)
+    localStorage.setItem("sentinelx_name", user.name)
+    localStorage.setItem("sentinelx_email", user.email)
+    localStorage.setItem("sentinelx_account_type", user.account_type)
+
+    window.dispatchEvent(new Event("sentinelx_auth_change"))
+    navigate(homePathFor(user.role))
   }
 
   return (
@@ -189,118 +205,172 @@ function Login() {
           <div className="w-full max-w-md">
 
             <div className="rounded-2xl border border-white/10 bg-surface p-8 shadow-2xl">
+              {step === "credentials" ? (
+                <>
+                  <h2 className="text-2xl font-semibold">
+                    Welcome back
+                  </h2>
 
-              <h2 className="text-2xl font-semibold">
-                Welcome back
-              </h2>
+                  <p className="mt-2 text-sm text-fg-muted">
+                    Sign in to SentinelX.
+                  </p>
 
-              <p className="mt-2 text-sm text-fg-muted">
-                Sign in to SentinelX.
-              </p>
+                  <form
+                    onSubmit={handleLogin}
+                    className="mt-8 space-y-5"
+                  >
+                    <div>
+                      <label className="mb-2 block text-sm text-fg-secondary">
+                        Email address
+                      </label>
 
-              <form
-                onSubmit={handleLogin}
-                className="mt-8 space-y-5"
-              >
+                      <input
+                        type="email"
+                        value={email}
+                        onChange={(e) =>
+                          setEmail(
+                            e.target.value,
+                          )
+                        }
+                        placeholder="you@example.com"
+                        className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 outline-none focus:border-brand-500"
+                        required
+                      />
+                    </div>
 
-                <div>
+                    <div>
+                      <div className="mb-2 flex items-center justify-between">
+                        <label className="text-sm text-fg-secondary">
+                          Password
+                        </label>
 
-                  <label className="mb-2 block text-sm text-fg-secondary">
-                    Email address
-                  </label>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            navigate("/forgot-password")
+                          }
+                          className="text-xs text-brand-400 hover:text-brand-300"
+                        >
+                          Forgot password?
+                        </button>
+                      </div>
 
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) =>
-                      setEmail(
-                        e.target.value,
-                      )
-                    }
-                    placeholder="you@example.com"
-                    className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 outline-none focus:border-brand-500"
-                    required
-                  />
+                      <div className="relative">
+                        <input
+                          type={
+                            showPassword
+                              ? "text"
+                              : "password"
+                          }
+                          value={password}
+                          onChange={(e) =>
+                            setPassword(
+                              e.target.value,
+                            )
+                          }
+                          placeholder="Enter password"
+                          className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 pr-12 outline-none focus:border-brand-500"
+                          required
+                        />
 
-                </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowPassword(
+                              !showPassword,
+                            )
+                          }
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-muted"
+                        >
+                          {showPassword
+                            ? <EyeOff size={18} />
+                            : <Eye size={18} />
+                          }
+                        </button>
+                      </div>
+                    </div>
 
-                <div>
+                    {error && (
+                      <div className="rounded-xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger-fg">
+                        {error}
+                      </div>
+                    )}
 
-                  <div className="mb-2 flex items-center justify-between">
+                    <button
+                      type="submit"
+                      disabled={submitting}
+                      className="w-full rounded-xl bg-brand-600 py-3 font-medium transition hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {submitting ? "Signing in..." : "Sign in"}
+                    </button>
+                  </form>
+                </>
+              ) : (
+                <>
+                  <div className="mb-4 inline-flex rounded-xl bg-brand-500/10 p-3 text-brand-400">
+                    <KeyRound size={26} aria-hidden="true" />
+                  </div>
+                  <h2 className="text-2xl font-semibold">
+                    Two-Factor Authentication
+                  </h2>
 
-                    <label className="text-sm text-fg-secondary">
-                      Password
-                    </label>
+                  <p className="mt-2 text-sm text-fg-muted">
+                    {infoMessage || "Enter the 6-digit security code sent to your email to verify your identity."}
+                  </p>
+
+                  <form
+                    onSubmit={handle2faSubmit}
+                    className="mt-6 space-y-5"
+                  >
+                    <div>
+                      <label className="mb-2 block text-sm text-fg-secondary">
+                        Security verification code
+                      </label>
+
+                      <input
+                        type="text"
+                        maxLength={6}
+                        pattern="[0-9]{6}"
+                        inputMode="numeric"
+                        autoFocus
+                        value={twoFactorCode}
+                        onChange={(e) =>
+                          setTwoFactorCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+                        }
+                        placeholder="123456"
+                        className="w-full text-center text-2xl tracking-[0.3em] font-mono rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 outline-none focus:border-brand-500"
+                        required
+                      />
+                    </div>
+
+                    {error && (
+                      <div className="rounded-xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger-fg">
+                        {error}
+                      </div>
+                    )}
+
+                    <button
+                      type="submit"
+                      disabled={submitting || twoFactorCode.trim().length !== 6}
+                      className="w-full rounded-xl bg-brand-600 py-3 font-medium transition hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {submitting ? "Verifying..." : "Verify and Sign In"}
+                    </button>
 
                     <button
                       type="button"
-                      onClick={() =>
-                        navigate("/forgot-password")
-                      }
-                      className="text-xs text-brand-400 hover:text-brand-300"
+                      onClick={() => {
+                        setStep("credentials")
+                        setError("")
+                        setTwoFactorCode("")
+                      }}
+                      className="w-full rounded-xl border border-white/10 bg-surface-sunken py-2.5 text-sm font-medium text-fg-subtle hover:text-fg-primary hover:bg-surface-hover"
                     >
-                      Forgot password?
+                      Back to login
                     </button>
-
-                  </div>
-
-                  <div className="relative">
-
-                    <input
-                      type={
-                        showPassword
-                          ? "text"
-                          : "password"
-                      }
-                      value={password}
-                      onChange={(e) =>
-                        setPassword(
-                          e.target.value,
-                        )
-                      }
-                      placeholder="Enter password"
-                      className="w-full rounded-xl border border-white/10 bg-surface-sunken px-4 py-3 pr-12 outline-none focus:border-brand-500"
-                      required
-                    />
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setShowPassword(
-                          !showPassword,
-                        )
-                      }
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-muted"
-                    >
-
-                      {showPassword
-                        ? <EyeOff size={18} />
-                        : <Eye size={18} />
-                      }
-
-                    </button>
-
-                  </div>
-
-                </div>
-
-                {error && (
-
-                  <div className="rounded-xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger-fg">
-                    {error}
-                  </div>
-
-                )}
-
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="w-full rounded-xl bg-brand-600 py-3 font-medium transition hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {submitting ? "Signing in..." : "Sign in"}
-                </button>
-
-              </form>
+                  </form>
+                </>
+              )}
 
               <div className="mt-6 text-center text-sm text-fg-muted">
 

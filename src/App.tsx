@@ -40,6 +40,8 @@ import UserLayout from "./layouts/UserLayout"
 import NotificationsPage from "./features/notifications/pages/NotificationsPage"
 import NotificationPreferencesPage from "./features/notifications/pages/NotificationPreferencesPage"
 import ModuleGuard from "./components/ModuleGuard"
+import CommandPalette from "./components/CommandPalette"
+import ProfilePage from "./pages/ProfilePage"
 
 import SocOverview from "./features/soc/pages/SocOverview"
 import SocAlerts from "./features/soc/pages/SocAlerts"
@@ -135,7 +137,9 @@ function CatchAllRoute() {
 
 function App() {
   return (
-    <Routes>
+    <>
+      <CommandPalette />
+      <Routes>
 
       {/* DEFAULT */}
 
@@ -456,7 +460,18 @@ function App() {
         <Route path="/notifications/preferences" element={<NotificationPreferencesPage />} />
         <Route path="/devices" element={<ModuleGuard module="device_agents"><DevicesPage /></ModuleGuard>} />
         <Route path="/devices/:id" element={<ModuleGuard module="device_agents"><DeviceDetailPage /></ModuleGuard>} />
+        <Route path="/profile" element={<ProfilePage />} />
       </Route>
+
+      {/* PROFILE -- for super_admin, platform_soc_analyst, organization_admin */}
+      <Route
+        path="/profile"
+        element={
+          <ProtectedRoute allowedRoles={["super_admin", "platform_soc_analyst", "organization_admin"]}>
+            <ProfilePage />
+          </ProtectedRoute>
+        }
+      />
 
       {/* SOC ANALYST -- top navigation shell */}
 
@@ -562,6 +577,7 @@ function App() {
       />
 
     </Routes>
+    </>
   )
 }
 

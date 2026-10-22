@@ -1159,6 +1159,31 @@ Platform-wide aggregate analytics for `super_admin` with strict tenant-isolation
 | `POST /admin/alerts/{id}/reassign` | `super_admin` or assigned `platform_soc_analyst` | Reassign an alert to another platform SOC analyst assigned to that organization. Requires `{ "analyst_id": UUID, "reason": str }`. Commits to `AlertHistory` with action `reassign` and appends an `AuditLog` entry. Target analyst must be active and assigned to that tenant (`assignee_not_in_scope` 422 otherwise). |
 | `POST /admin/incidents/{id}/reassign` | `super_admin` or assigned `platform_soc_analyst` | Reassign an incident to another platform SOC analyst assigned to that organization. Requires `{ "analyst_id": UUID, "reason": str }`. Commits to `IncidentTimeline` with entry_type `reassigned` and appends an `AuditLog` entry. Target analyst must be active and assigned to that tenant (`assignee_not_in_scope` 422 otherwise). |
 
+## Profile, Sessions & 2FA API (`/api/v1/profile` & `/api/v1/auth`)
+
+Account self-service, session tracking, password rotation, and two-factor authentication available to all authenticated roles.
+
+| Method & Path | Scope | Notes |
+|---|---|---|
+| `GET /api/v1/profile` | Any authenticated account | Returns account profile: `{ id, name, email, role, account_type, organization_id, organization_name, two_factor_enabled, created_at }`. |
+| `PUT /api/v1/profile` | Any authenticated account | Updates full name: `{ name: string }`. Audited to `audit_logs` (`profile.update_name`). |
+| `POST /api/v1/profile/change-password` | Any authenticated account | Changes password: `{ old_password, new_password, revoke_other_sessions: bool }`. Requires correct old password, min 6 characters. If `revoke_other_sessions` is true, immediately revokes all other active sessions in `sessions` table. Audited (`profile.change_password`). |
+| `GET /api/v1/profile/sessions` | Any authenticated account | Lists all active non-expired sessions for the calling account: `{ sessions: [{ id, device, user_agent, ip, last_seen_at, created_at, is_current }] }`. `is_current` matches the token's `sid` claim. |
+| `DELETE /api/v1/profile/sessions/{id}` | Any authenticated account | Revokes an active session (`revoked_at = now()`). Audited (`session.revoke`). That session/browser is 401 Unauthorized on its next request. |
+| `POST /api/v1/profile/sessions/revoke-all` | Any authenticated account | Revokes all sessions (`keep_current: bool = true`). Audited (`session.revoke_all`). |
+| `POST /api/v1/profile/2fa/send-code` | Any authenticated account | Generates and emails a 10-minute 6-digit verification code to the account's registered email. |
+| `POST /api/v1/profile/2fa/toggle` | Any authenticated account | Enables or disables 2FA: `{ enable: bool, code: string }`. Verifies 6-digit code. Audited (`profile.2fa_toggle`). |
+| `POST /api/v1/auth/login-2fa` | Anonymous (with temp token) | Completes 2FA login: `{ temp_token: string, code: string }`. Exchanges 2FA temp token + 6-digit code for a real access token and session. |
+
+## Command Palette Scoped Search API (`/api/v1/palette`)
+
+Provides keyboard-driven scoped search across alerts, incidents, tickets, and assets within the caller's authorized scope.
+
+| Method & Path | Scope | Notes |
+|---|---|---|
+| `GET /api/v1/palette/search?q={query}&limit=5` | Any authenticated account | Scoped entity search across `alerts` (title/rule/ID), `incidents` (title/summary/ID), `tickets` (title/ticket_number/ID), and `assets` (name/hostname/IP/ID). For `super_admin`: all organizations. For `platform_soc_analyst`: alerts and incidents in assigned managed orgs. For tenant accounts: strictly scoped to caller's `organization_id`. |
+
+
 ## Error code reference (structured-detail endpoints only)
 
 | Code | Status | Where |
