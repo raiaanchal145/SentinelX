@@ -68,10 +68,13 @@ export async function request<T>(
 ): Promise<T> {
   const token = localStorage.getItem("sentinelx_token")
 
+  // Normalize path if caller inadvertently included the `/api/v1` prefix
+  const cleanPath = path.startsWith("/api/v1") ? path.slice(7) : path
+
   let response: Response
 
   try {
-    response = await fetch(`${API_BASE}${path}`, {
+    response = await fetch(`${API_BASE}${cleanPath}`, {
       ...options,
       headers: {
         "Content-Type": "application/json",
@@ -1650,15 +1653,15 @@ export type ItOversightResponse = {
 }
 
 export async function apiGetAdminOverview(range: "24h" | "7d" | "30d" = "24h"): Promise<AdminOverviewResponse> {
-  return request<AdminOverviewResponse>(`/api/v1/admin/oversight/overview?range=${range}`)
+  return request<AdminOverviewResponse>(`/admin/oversight/overview?range=${range}`)
 }
 
 export async function apiGetSocOversight(range: "24h" | "7d" | "30d" = "24h"): Promise<SocOversightResponse> {
-  return request<SocOversightResponse>(`/api/v1/admin/oversight/soc?range=${range}`)
+  return request<SocOversightResponse>(`/admin/oversight/soc?range=${range}`)
 }
 
 export async function apiGetItOversight(range: "24h" | "7d" | "30d" = "24h"): Promise<ItOversightResponse> {
-  return request<ItOversightResponse>(`/api/v1/admin/oversight/it?range=${range}`)
+  return request<ItOversightResponse>(`/admin/oversight/it?range=${range}`)
 }
 
 export async function apiReassignAlert(
@@ -1667,7 +1670,7 @@ export async function apiReassignAlert(
   reason: string,
 ): Promise<{ id: string; assigned_account_id: string; reason: string }> {
   return request<{ id: string; assigned_account_id: string; reason: string }>(
-    `/api/v1/admin/alerts/${alertId}/reassign`,
+    `/admin/alerts/${alertId}/reassign`,
     {
       method: "POST",
       body: JSON.stringify({ analyst_id: analystId, reason }),
@@ -1681,7 +1684,7 @@ export async function apiReassignIncident(
   reason: string,
 ): Promise<{ id: string; assigned_account_id: string; reason: string }> {
   return request<{ id: string; assigned_account_id: string; reason: string }>(
-    `/api/v1/admin/incidents/${incidentId}/reassign`,
+    `/admin/incidents/${incidentId}/reassign`,
     {
       method: "POST",
       body: JSON.stringify({ analyst_id: analystId, reason }),
