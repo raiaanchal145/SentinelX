@@ -1086,3 +1086,24 @@ Platform administrators (`super_admin`) require real aggregate visibility across
   - A non-empty reason is mandatory (`400 reason_required`) and is committed synchronously to `AlertHistory` / `IncidentTimeline` and `audit_logs` (`alert.reassign` / `incident.reassign`).
 - **Coverage Gap Alerts**:
   - Managed organizations lacking any assigned platform SOC analyst are computed dynamically and surfaced with an immediate call-to-action link to `/admin/soc-team`.
+
+## P25 Profile, Real Sessions, Email 2FA, and Command Palette
+
+Account self-service, session tracking, email-based two-factor authentication, and keyboard-driven scoped command navigation.
+
+- **Real Database Sessions & Next-Request Revocation**:
+  - Every login (`POST /auth/login` or `POST /auth/login-2fa`) creates a real row in `sessions` with client IP, user-agent parsed device info, and 7-day expiration.
+  - The session ID (`sid`) is embedded in access tokens.
+  - `get_current_account` in `app/scope.py` validates the session row on every request: if `revoked_at` is set or the session has expired, the request is immediately rejected with `401 Unauthorized` ("This session has been revoked").
+  - On sensitive actions (e.g. password change with `revoke_other_sessions=True`, `DELETE /profile/sessions/{id}`, or `POST /profile/sessions/revoke-all`), other active sessions are revoked immediately in the database, locking out those devices on their very next request.
+- **Pure Python Email-Based Two-Factor Authentication (Zero New Dependencies)**:
+  - Built using Python's standard library (`secrets`, `asyncio`, `datetime`) and existing email infrastructure (`send_two_factor_code_email`) without any external packages.
+  - Generates 6-digit cryptographic numeric codes valid for 10 minutes.
+  - During login, accounts with `two_factor_enabled=True` receive a fresh email code and an ephemeral JWT scoped to `2fa_pending`. Only upon exchanging that temporary token and the correct code at `POST /auth/login-2fa` is a real session issued.
+  - Toggling 2FA ON or OFF requires email confirmation with a fresh 6-digit code.
+- **Role & Module-Aware Command Palette (`Ctrl/Cmd+K`)**:
+  - Built with pure React, existing theme tokens, and Lucide icons without new npm dependencies.
+  - Page navigation dynamically respects the user's role and `me.effective_modules`.
+  - Scoped entity search (`GET /api/v1/palette/search`) queries alerts, incidents, tickets, and assets strictly within tenant boundaries (or across all tenants for `super_admin`).
+  - Recent searches and pages are stored in `localStorage` with clear capabilities.
+
