@@ -7,6 +7,7 @@ from app.config import settings
 from app.database import get_db
 from app.routers import (
     admin_organizations,
+    admin_oversight,
     admin_soc,
     agent,
     ai,
@@ -102,3 +103,4 @@ app.include_router(notifications.router)
 app.include_router(ai.router)
 app.include_router(devices.router)
 app.include_router(agent.router)
+app.include_router(admin_oversight.router)

@@ -898,6 +898,7 @@ class SecurityEvent(Base):
             "occurred_at",
         ),
         Index("ix_security_events_org_asset_id", "organization_id", "asset_id"),
+        Index("ix_security_events_occurred_at", "occurred_at"),
     )
 
 
@@ -1023,6 +1024,7 @@ class Alert(Base):
         # assignee filter.
         Index("ix_alerts_org_last_seen", "organization_id", text("last_seen_at DESC")),
         Index("ix_alerts_assigned", "assigned_account_type", "assigned_account_id"),
+        Index("ix_alerts_created_at", "created_at"),
     )
 
 
@@ -1281,7 +1283,10 @@ class Incident(Base):
     )
     created_by_id: Mapped[uuid.UUID | None] = mapped_column()
 
-    __table_args__ = (Index("ix_incidents_org_status", "organization_id", "status"),)
+    __table_args__ = (
+        Index("ix_incidents_org_status", "organization_id", "status"),
+        Index("ix_incidents_opened_at", "opened_at"),
+    )
 
 
 class IncidentAlert(Base):

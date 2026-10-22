@@ -68,10 +68,13 @@ export async function request<T>(
 ): Promise<T> {
   const token = localStorage.getItem("sentinelx_token")
 
+  // Normalize path if caller inadvertently included the `/api/v1` prefix
+  const cleanPath = path.startsWith("/api/v1") ? path.slice(7) : path
+
   let response: Response
 
   try {
-    response = await fetch(`${API_BASE}${path}`, {
+    response = await fetch(`${API_BASE}${cleanPath}`, {
       ...options,
       headers: {
         "Content-Type": "application/json",
@@ -1511,4 +1514,294 @@ export async function apiDownloadTicketEvidence(ticketId: string, evidenceId: st
   a.click()
   a.remove()
   URL.revokeObjectURL(url)
+}
+
+
+// ============================================================================
+// P22 Admin Oversight Dashboards & Reassignments
+// ============================================================================
+
+export type AdminOverviewResponse = {
+  organizations: {
+    total: number
+    by_status: Record<string, number>
+    by_mode: Record<string, number>
+  }
+  devices: {
+    connected: number
+    stale: number
+    offline: number
+    total: number
+  }
+  events_per_hour_last_24h: { time: string; count: number; value: number }[]
+  ai_usage: {
+    total_runs: number
+    tokens_used: number
+    cost_usd: number
+  }
+  stats: {
+    assets: number
+    users: number
+    open_incidents: number
+    security_events: number
+    incidents_by_severity: {
+      critical: number
+      high: number
+      medium: number
+      low: number
+    }
+  }
+}
+
+export type SocOversightOrg = {
+  id: string
+  name: string
+  soc_mode: "managed" | "in_house"
+  status: "active" | "suspended" | "archived"
+  open_alerts: number
+  open_incidents: number
+  unacknowledged_alerts: number
+  oldest_unacknowledged_age_seconds: number
+  mtta_seconds: number
+}
+
+export type SocAnalystWorkload = {
+  id: string
+  name: string
+  email: string
+  open_alerts: number
+  open_incidents: number
+  assigned_organizations: { id: string; name: string }[]
+}
+
+export type CoverageGapOrg = {
+  id: string
+  name: string
+}
+
+export type TopRuleStat = {
+  name: string
+  count: number
+  false_positive_rate: number
+}
+
+export type UnassignedAlertRow = {
+  id: string
+  title: string
+  severity: "critical" | "high" | "medium" | "low" | "info"
+  status: string
+  detectionRuleName: string
+  organizationId: string
+  organizationName: string
+  assetHostname: string
+  firstSeenAt: string
+  eligibleAnalysts: { id: string; name: string; email: string }[]
+}
+
+export type SocOversightResponse = {
+  kpis: { label: string; value: string; tone: "neutral" | "high" | "medium" | "critical" }[]
+  organizations: SocOversightOrg[]
+  analyst_workload: SocAnalystWorkload[]
+  coverage_gaps: CoverageGapOrg[]
+  top_rules: TopRuleStat[]
+  volume: { time: string; value: number }[]
+  unassigned_alerts: UnassignedAlertRow[]
+}
+
+export type ItOversightOrg = {
+  id: string
+  name: string
+  open_tickets_by_priority: { P1: number; P2: number; P3: number; P4: number }
+  sla_at_risk: number
+  sla_breached: number
+  oldest_open_ticket_age_seconds: number
+}
+
+export type ItTeamWorkload = {
+  team: { id: string; name: string }
+  open: number
+  overdue: number
+}
+
+export type ItDevWorkload = {
+  user: { id: string; name: string; email: string }
+  openTasks: number
+  overdue: number
+}
+
+export type SlaTicketRow = {
+  id: string
+  ticketNumber: string
+  title: string
+  severity: "critical" | "high" | "medium" | "low" | "info"
+  status: string
+  organizationId: string
+  organizationName: string
+  assetHostname: string
+  resolveDueAt: string | null
+  assignedUserId: string | null
+  assigneeName: string
+}
+
+export type ItOversightResponse = {
+  kpis: { label: string; value: string; tone: "neutral" | "high" | "medium" | "critical" }[]
+  organizations: ItOversightOrg[]
+  byStatus: { status: string; count: number }[]
+  byTeam: ItTeamWorkload[]
+  workload: ItDevWorkload[]
+  slaTable: SlaTicketRow[]
+}
+
+export async function apiGetAdminOverview(range: "24h" | "7d" | "30d" = "24h"): Promise<AdminOverviewResponse> {
+  return request<AdminOverviewResponse>(`/admin/oversight/overview?range=${range}`)
+}
+
+export async function apiGetSocOversight(range: "24h" | "7d" | "30d" = "24h"): Promise<SocOversightResponse> {
+  return request<SocOversightResponse>(`/admin/oversight/soc?range=${range}`)
+}
+
+export async function apiGetItOversight(range: "24h" | "7d" | "30d" = "24h"): Promise<ItOversightResponse> {
+  return request<ItOversightResponse>(`/admin/oversight/it?range=${range}`)
+}
+
+export async function apiReassignAlert(
+  alertId: string,
+  analystId: string,
+  reason: string,
+): Promise<{ id: string; assigned_account_id: string; reason: string }> {
+  return request<{ id: string; assigned_account_id: string; reason: string }>(
+    `/admin/alerts/${alertId}/reassign`,
+    {
+      method: "POST",
+      body: JSON.stringify({ analyst_id: analystId, reason }),
+    },
+  )
+}
+
+export async function apiReassignIncident(
+  incidentId: string,
+  analystId: string,
+  reason: string,
+): Promise<{ id: string; assigned_account_id: string; reason: string }> {
+  return request<{ id: string; assigned_account_id: string; reason: string }>(
+    `/admin/incidents/${incidentId}/reassign`,
+    {
+      method: "POST",
+      body: JSON.stringify({ analyst_id: analystId, reason }),
+    },
+  )
+}
+
+
+export function apiAssignTicket(
+  ticketId: string,
+  payload: { team_id?: string; user_id?: string; reason?: string },
+) {
+  return request<TicketRow>(`/tickets/${ticketId}/assign`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export type AdminAssetRow = {
+  id: string
+  organization_id: string
+  organization_name: string
+  name: string
+  hostname: string
+  ip_address: string
+  asset_type: string
+  criticality: "critical" | "high" | "medium" | "low"
+  status: "active" | "retired"
+  operating_system: string
+  environment: string
+  description: string
+  created_at: string | null
+}
+
+export type AdminAssetsResponse = {
+  assets: AdminAssetRow[]
+  total: number
+  page: number
+  page_size: number
+  organizations: { id: string; name: string }[]
+  kpis: {
+    total: number
+    active: number
+    retired: number
+    critical: number
+  }
+}
+
+export type AdminSecurityOverviewResponse = {
+  kpis: {
+    total_active_incidents: number
+    critical_incidents: number
+    high_incidents: number
+    open_alerts: number
+    unacknowledged_alerts: number
+    mtta_minutes: number
+    security_events_in_range: number
+    connected_devices: number
+  }
+  incidents_by_severity: {
+    critical: number
+    high: number
+    medium: number
+    low: number
+  }
+  active_incidents: {
+    id: string
+    title: string
+    severity: "critical" | "high" | "medium" | "low" | "info"
+    status: string
+    opened_at: string | null
+    organization_id: string
+    organization_name: string
+  }[]
+  recent_alerts: {
+    id: string
+    title: string
+    severity: "critical" | "high" | "medium" | "low" | "info"
+    status: string
+    first_seen_at: string | null
+    organization_id: string
+    organization_name: string
+    asset_hostname: string
+  }[]
+  organizations: {
+    id: string
+    name: string
+    soc_mode: "managed" | "in_house"
+    status: string
+    asset_count: number
+    device_count: number
+  }[]
+}
+
+export async function apiGetAdminAssets(params: {
+  organization_id?: string
+  q?: string
+  asset_type?: string
+  criticality?: string
+  status?: string
+  page?: number
+  page_size?: number
+} = {}): Promise<AdminAssetsResponse> {
+  const query = new URLSearchParams()
+  if (params.organization_id) query.set("organization_id", params.organization_id)
+  if (params.q) query.set("q", params.q)
+  if (params.asset_type) query.set("asset_type", params.asset_type)
+  if (params.criticality) query.set("criticality", params.criticality)
+  if (params.status) query.set("status", params.status)
+  if (params.page) query.set("page", String(params.page))
+  if (params.page_size) query.set("page_size", String(params.page_size))
+  const qs = query.toString()
+  return request<AdminAssetsResponse>(`/admin/assets${qs ? `?${qs}` : ""}`)
+}
+
+export async function apiGetAdminSecurityOverview(
+  range: "24h" | "7d" | "30d" = "24h",
+): Promise<AdminSecurityOverviewResponse> {
+  return request<AdminSecurityOverviewResponse>(`/admin/oversight/security-overview?range=${range}`)
 }

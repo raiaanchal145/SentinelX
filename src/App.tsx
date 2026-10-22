@@ -19,6 +19,8 @@ import OrganizationDashboard from "./pages/OrganizationDashboard"
 
 import SocOversightAdmin from "./features/admin/pages/SocOversight"
 import ItOversightAdmin from "./features/admin/pages/ItOversight"
+import AdminAssets from "./features/admin/pages/AdminAssets"
+import AdminSecurityOverview from "./features/admin/pages/AdminSecurityOverview"
 import Organizations from "./features/admin/pages/Organizations"
 import OrganizationDetail from "./features/admin/pages/OrganizationDetail"
 import SocTeam from "./features/admin/pages/SocTeam"
@@ -418,6 +420,24 @@ function App() {
         element={
           <ProtectedRoute allowedRoles={["super_admin", "organization_admin"]}>
             <ItOversightAdmin />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/admin/assets"
+        element={
+          <ProtectedRoute allowedRoles={["super_admin"]}>
+            <AdminAssets />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/admin/security-overview"
+        element={
+          <ProtectedRoute allowedRoles={["super_admin"]}>
+            <AdminSecurityOverview />
           </ProtectedRoute>
         }
       />

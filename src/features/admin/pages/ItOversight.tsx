@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react"
-import { RefreshCw } from "lucide-react"
+import { useCallback, useEffect, useState } from "react"
+import { Link } from "react-router-dom"
+import { AlertCircle, Clock, RefreshCw, Users, Wrench } from "lucide-react"
 
 import Sidebar from "../../../components/Sidebar"
 import Topbar from "../../../components/Topbar"
-import DemoDataChip from "../../../components/shared/DemoDataChip"
 import EmptyState from "../../../components/EmptyState"
 import Badge from "../../../components/ui/Badge"
 import CountdownChip from "../../../components/ui/CountdownChip"
@@ -14,64 +14,55 @@ import Skeleton from "../../../components/ui/Skeleton"
 import SeverityBadge from "../../../components/SeverityBadge"
 import { useToast } from "../../../components/ui/Toast"
 
-import { delay, getAssetById, getItOversight, IT_WORKFLOW_ORDER } from "../../../lib/data"
-import { scopeFor } from "../../../lib/scope"
-import { useMockStore } from "../../../mocks/store"
-import type { Ticket } from "../../../types"
+import {
+  ApiError,
+  apiGetItOversight,
+  type ItOversightResponse,
+  type SlaTicketRow,
+} from "../../../lib/api"
 
 const STATUS_LABEL: Record<string, string> = {
+  OPEN: "Open",
+  TRIAGED: "Triaged",
   ASSIGNED: "Assigned",
   ACKNOWLEDGED: "Acknowledged",
   INVESTIGATING: "Investigating",
   REMEDIATION: "Remediation",
   VERIFICATION: "Verification",
   RESOLVED: "Resolved",
+  CLOSED: "Closed",
 }
 
-/** Same tenant-safety note as the SOC oversight page: candidates come from
- * the ticket's own organization, not the admin's (possibly "all") scope. */
-function itOptionsFor(users: ReturnType<typeof useMockStore>["state"]["users"], organizationId: string) {
-  return users.filter((u) => u.role === "it_developer" && u.organizationId === organizationId)
-}
+type TimeRange = "24h" | "7d" | "30d"
 
-/** Admin-side aggregate view -- P22 "IT oversight page (aggregates, workload,
- * coverage, SLA)". Reassigning an at-risk/overdue ticket is the only
- * mutation here, and it is audited via ADMIN_REASSIGN_TICKET. */
 function ItOversightAdmin() {
-  const { state, dispatch } = useMockStore()
   const toast = useToast()
-  const scope = useMemo(() => scopeFor(), [])
 
+  const [range, setRange] = useState<TimeRange>("24h")
+  const [data, setData] = useState<ItOversightResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [lastUpdated, setLastUpdated] = useState(() => new Date())
 
-  async function reload() {
+  const reload = useCallback(async () => {
     setLoading(true)
-    await delay(null)
-    setLoading(false)
-    setLastUpdated(new Date())
-  }
+    try {
+      const res = await apiGetItOversight(range)
+      setData(res)
+      setLastUpdated(new Date())
+    } catch (err) {
+      toast.show(err instanceof ApiError ? err.message : "Failed to load IT oversight telemetry.", {
+        tone: "danger",
+      })
+    } finally {
+      setLoading(false)
+    }
+  }, [range, toast])
 
   useEffect(() => {
-    let cancelled = false
-    delay(null).then(() => {
-      if (!cancelled) setLoading(false)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [])
+    reload()
+  }, [reload])
 
-  const oversight = useMemo(() => getItOversight(state, scope), [state, scope])
-
-  function handleReassign(ticket: Ticket, userId: string) {
-    if (!userId) return
-    const dev = state.users.find((u) => u.id === userId)
-    dispatch({ type: "ADMIN_REASSIGN_TICKET", ticketId: ticket.id, userId, actorName: scope.displayName })
-    toast.show(`Reassigned ${ticket.ticketNumber} to ${dev?.name ?? "IT"}.`, { tone: "success" })
-  }
-
-  const columns: DataTableColumn<Ticket>[] = [
+  const columns: DataTableColumn<SlaTicketRow>[] = [
     {
       key: "severity",
       header: "Severity",
@@ -89,9 +80,21 @@ function ItOversightAdmin() {
       ),
     },
     {
+      key: "organization",
+      header: "Organization",
+      render: (t) => (
+        <Link
+          to={`/admin/organizations/${t.organizationId}`}
+          className="text-xs font-medium text-brand-300 hover:underline"
+        >
+          {t.organizationName}
+        </Link>
+      ),
+    },
+    {
       key: "asset",
       header: "Asset",
-      render: (t) => getAssetById(state, t.assetId)?.hostname ?? <span className="text-fg-faint">--</span>,
+      render: (t) => <span className="font-mono text-xs">{t.assetHostname}</span>,
     },
     {
       key: "due",
@@ -102,35 +105,11 @@ function ItOversightAdmin() {
     {
       key: "assignee",
       header: "Assigned to",
-      render: (t) => {
-        const current = state.users.find((u) => u.id === t.assignedUserId)
-        return current?.name ?? <span className="text-fg-faint">Unassigned</span>
-      },
-    },
-    {
-      key: "reassign",
-      header: "Reassign",
-      width: "200px",
-      render: (t) => {
-        const devs = itOptionsFor(state.users, t.organizationId)
-        return (
-          <select
-            defaultValue=""
-            onChange={(e) => handleReassign(t, e.target.value)}
-            aria-label={`Reassign ${t.ticketNumber} to another IT developer`}
-            className="w-full rounded-control border border-line bg-surface px-2 py-1.5 text-xs text-fg-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
-          >
-            <option value="" disabled>
-              Choose IT developer...
-            </option>
-            {devs.map((dev) => (
-              <option key={dev.id} value={dev.id}>
-                {dev.name}
-              </option>
-            ))}
-          </select>
-        )
-      },
+      render: (t) => (
+        <span className={t.assigneeName === "Unassigned" ? "text-fg-faint" : "text-fg-secondary"}>
+          {t.assigneeName}
+        </span>
+      ),
     },
   ]
 
@@ -145,77 +124,107 @@ function ItOversightAdmin() {
               <p className="text-sm text-brand-400">System Administration</p>
               <h1 className="mt-2 text-2xl font-semibold text-fg-primary">IT Oversight</h1>
               <p className="mt-1 flex items-center gap-2 text-xs text-fg-muted">
-                Remediation coverage, SLA health and workload across{" "}
-                {scope.organizationId === "all" ? "every organization" : "your organization"}. Last updated{" "}
+                Remediation coverage, SLA health, and developer workloads across tenants. Last updated{" "}
                 <time dateTime={lastUpdated.toISOString()} title={lastUpdated.toString()}>
                   {lastUpdated.toLocaleTimeString()}
                 </time>
-                <DemoDataChip />
               </p>
             </div>
-            <IconButton icon={RefreshCw} label="Refresh dashboard" onClick={reload} />
+            <div className="flex items-center gap-3">
+              <label htmlFor="it-range-select" className="sr-only">
+                Time range
+              </label>
+              <select
+                id="it-range-select"
+                value={range}
+                onChange={(e) => setRange(e.target.value as TimeRange)}
+                aria-label="Select time range"
+                className="rounded-control border border-line bg-surface px-3 py-1.5 text-xs text-fg-secondary outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+              >
+                <option value="24h">Last 24 Hours</option>
+                <option value="7d">Last 7 Days</option>
+                <option value="30d">Last 30 Days</option>
+              </select>
+              <IconButton icon={RefreshCw} label="Refresh dashboard" onClick={reload} />
+            </div>
           </div>
 
+          {/* Key metrics */}
           <section aria-label="Key metrics" className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-            {loading
+            {loading && !data
               ? Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-24 w-full rounded-card" />)
-              : oversight.kpis.map((kpi) => <KpiCard key={kpi.label} {...kpi} />)}
+              : data?.kpis.map((kpi) => <KpiCard key={kpi.label} {...kpi} />)}
           </section>
 
+          {/* Pipeline by stage */}
           <section aria-label="Pipeline by status" className="rounded-card border border-line bg-surface p-4">
-            <h2 className="text-sm font-semibold text-fg-primary">Open tickets by stage</h2>
-            {loading ? (
+            <h2 className="text-sm font-semibold text-fg-primary">Open tickets by workflow stage</h2>
+            {loading && !data ? (
               <Skeleton className="mt-3 h-10 w-full" />
             ) : (
               <div className="mt-3 flex flex-wrap gap-2">
-                {IT_WORKFLOW_ORDER.map((status) => {
-                  const row = oversight.byStatus.find((s) => s.status === status)
-                  return (
-                    <span
-                      key={status}
-                      className="inline-flex items-center gap-1.5 rounded-control border border-line bg-surface-sunken px-2.5 py-1.5 text-xs text-fg-secondary"
-                    >
-                      {STATUS_LABEL[status] ?? status}
-                      <Badge tone={row && row.count > 0 ? "brand" : "neutral"}>{row?.count ?? 0}</Badge>
-                    </span>
-                  )
-                })}
+                {data?.byStatus.map((row) => (
+                  <span
+                    key={row.status}
+                    className="inline-flex items-center gap-1.5 rounded-control border border-line bg-surface-sunken px-2.5 py-1.5 text-xs text-fg-secondary"
+                  >
+                    {STATUS_LABEL[row.status] ?? row.status}
+                    <Badge tone={row.count > 0 ? "brand" : "neutral"}>{row.count}</Badge>
+                  </span>
+                ))}
               </div>
             )}
           </section>
 
+          {/* Main Oversight Grid */}
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+            {/* SLA At-Risk Queue */}
             <section className="xl:col-span-2" aria-label="SLA at risk">
-              <h2 className="mb-2 text-sm font-semibold text-fg-primary">Overdue &amp; at-risk tickets</h2>
+              <div className="mb-2 flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-fg-primary">Overdue &amp; at-risk tickets</h2>
+                <span className="text-xs text-fg-muted">
+                  {data?.slaTable.length ?? 0} tickets nearing breach
+                </span>
+              </div>
               <DataTable
                 columns={columns}
-                rows={oversight.slaTable}
+                rows={data?.slaTable ?? []}
                 getRowId={(t) => t.id}
                 ariaLabel="Overdue and at-risk tickets"
-                loading={loading}
+                loading={loading && !data}
                 emptyState={
-                  <EmptyState title="SLA is healthy" description="No ticket is overdue or close to breaching its SLA." />
+                  <EmptyState title="SLA is healthy" description="No ticket is currently overdue or at risk of SLA breach." />
                 }
               />
             </section>
 
+            {/* Team & Dev Workloads */}
             <div className="space-y-4">
+              {/* By Team */}
               <section aria-label="By team" className="rounded-card border border-line bg-surface p-4">
-                <h2 className="text-sm font-semibold text-fg-primary">By team</h2>
-                {loading ? (
-                  <Skeleton count={2} className="h-10 w-full" />
-                ) : oversight.byTeam.length === 0 ? (
+                <div className="flex items-center justify-between">
+                  <h2 className="flex items-center gap-1.5 text-sm font-semibold text-fg-primary">
+                    <Users size={15} className="text-brand-400" aria-hidden="true" />
+                    Workload by Team
+                  </h2>
+                </div>
+                {loading && !data ? (
+                  <Skeleton count={2} className="mt-3 h-10 w-full" />
+                ) : (data?.byTeam.length ?? 0) === 0 ? (
                   <p className="mt-2 text-xs text-fg-muted">No tickets assigned to a team yet.</p>
                 ) : (
                   <ul className="mt-3 space-y-2">
-                    {oversight.byTeam.map((row) => (
+                    {data?.byTeam.map((row) => (
                       <li
-                        key={row.team?.id ?? "unknown"}
-                        className="flex items-center justify-between rounded-control border border-line bg-surface-sunken p-2 text-xs"
+                        key={row.team.id}
+                        className="flex items-center justify-between rounded-control border border-line bg-surface-sunken p-2.5 text-xs"
                       >
-                        <span className="font-medium text-fg-primary">{row.team?.name ?? "Unassigned team"}</span>
+                        <span className="font-medium text-fg-primary">{row.team.name}</span>
                         <span className="text-fg-muted">
-                          {row.open} open &middot; {row.overdue} overdue
+                          {row.open} open &middot;{" "}
+                          <span className={row.overdue > 0 ? "font-semibold text-critical-fg" : ""}>
+                            {row.overdue} overdue
+                          </span>
                         </span>
                       </li>
                     ))}
@@ -223,22 +232,34 @@ function ItOversightAdmin() {
                 )}
               </section>
 
+              {/* Developer Workload */}
               <section aria-label="IT workload" className="rounded-card border border-line bg-surface p-4">
-                <h2 className="text-sm font-semibold text-fg-primary">IT workload</h2>
-                {loading ? (
-                  <Skeleton count={3} className="h-10 w-full" />
-                ) : oversight.workload.length === 0 ? (
-                  <p className="mt-2 text-xs text-fg-muted">No open tickets assigned yet.</p>
+                <div className="flex items-center justify-between">
+                  <h2 className="flex items-center gap-1.5 text-sm font-semibold text-fg-primary">
+                    <Wrench size={15} className="text-brand-400" aria-hidden="true" />
+                    Developer Workload
+                  </h2>
+                </div>
+                {loading && !data ? (
+                  <Skeleton count={3} className="mt-3 h-10 w-full" />
+                ) : (data?.workload.length ?? 0) === 0 ? (
+                  <p className="mt-2 text-xs text-fg-muted">No active IT developers found.</p>
                 ) : (
                   <ul className="mt-3 space-y-2">
-                    {oversight.workload.map((row) => (
+                    {data?.workload.map((row) => (
                       <li
-                        key={row.user?.id ?? "unknown"}
-                        className="flex items-center justify-between rounded-control border border-line bg-surface-sunken p-2 text-xs"
+                        key={row.user.id}
+                        className="flex items-center justify-between rounded-control border border-line bg-surface-sunken p-2.5 text-xs"
                       >
-                        <span className="font-medium text-fg-primary">{row.user?.name ?? "Unknown"}</span>
+                        <div>
+                          <span className="font-medium text-fg-primary">{row.user.name}</span>
+                          <p className="text-[11px] text-fg-muted">{row.user.email}</p>
+                        </div>
                         <span className="text-fg-muted">
-                          {row.openTasks} open &middot; {row.overdue} overdue
+                          {row.openTasks} open &middot;{" "}
+                          <span className={row.overdue > 0 ? "font-semibold text-critical-fg" : ""}>
+                            {row.overdue} overdue
+                          </span>
                         </span>
                       </li>
                     ))}
@@ -246,42 +267,43 @@ function ItOversightAdmin() {
                 )}
               </section>
 
-              <section aria-label="Awaiting verification" className="rounded-card border border-line bg-surface p-4">
-                <h2 className="text-sm font-semibold text-fg-primary">Awaiting SOC verification</h2>
-                {loading ? (
-                  <Skeleton count={2} className="h-8 w-full" />
-                ) : oversight.awaitingVerification.length === 0 ? (
-                  <p className="mt-2 text-xs text-fg-muted">Nothing waiting on SOC right now.</p>
+              {/* Tenant IT Health Matrix */}
+              <section aria-label="Tenant IT health" className="rounded-card border border-line bg-surface p-4">
+                <h2 className="flex items-center gap-1.5 text-sm font-semibold text-fg-primary">
+                  <Clock size={15} className="text-brand-400" aria-hidden="true" />
+                  Tenant Ticket Health
+                </h2>
+                {loading && !data ? (
+                  <Skeleton count={3} className="mt-3 h-10 w-full" />
+                ) : (data?.organizations.length ?? 0) === 0 ? (
+                  <p className="mt-2 text-xs text-fg-muted">No organization tickets found.</p>
                 ) : (
-                  <ul className="mt-3 space-y-1.5">
-                    {oversight.awaitingVerification.slice(0, 6).map((ticket) => (
-                      <li key={ticket.id} className="flex items-center justify-between gap-2 text-xs text-fg-secondary">
-                        <span className="truncate">
-                          {ticket.ticketNumber} &middot; {ticket.title}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-
-              <section aria-label="Repeat-incident assets" className="rounded-card border border-line bg-surface p-4">
-                <h2 className="text-sm font-semibold text-fg-primary">Repeat-incident assets</h2>
-                {loading ? (
-                  <Skeleton count={2} className="h-8 w-full" />
-                ) : oversight.repeatAssets.length === 0 ? (
-                  <p className="mt-2 text-xs text-fg-muted">No asset has needed remediation more than once.</p>
-                ) : (
-                  <ul className="mt-3 space-y-1.5">
-                    {oversight.repeatAssets.map((row, i) => (
-                      <li
-                        key={row.asset?.id ?? `unknown-${i}`}
-                        className="flex items-center justify-between text-xs text-fg-secondary"
-                      >
-                        <span>{row.asset?.hostname ?? "Unknown asset"}</span>
-                        <Badge tone="neutral">{row.count}x</Badge>
-                      </li>
-                    ))}
+                  <ul className="mt-3 space-y-2">
+                    {data?.organizations.slice(0, 5).map((org) => {
+                      const prio = org.open_tickets_by_priority
+                      return (
+                        <li
+                          key={org.id}
+                          className="flex flex-col gap-1 rounded-control border border-line bg-surface-sunken p-2.5 text-xs"
+                        >
+                          <div className="flex items-center justify-between">
+                            <Link to={`/admin/organizations/${org.id}`} className="font-medium text-fg-primary hover:underline">
+                              {org.name}
+                            </Link>
+                            <span className="text-fg-muted">
+                              P1: <strong className="text-critical-fg">{prio.P1}</strong> &middot; P2:{" "}
+                              <strong className="text-amber-400">{prio.P2}</strong> &middot; P3: {prio.P3}
+                            </span>
+                          </div>
+                          {(org.sla_at_risk > 0 || org.sla_breached > 0) && (
+                            <p className="flex items-center gap-1 text-[11px] text-critical-fg">
+                              <AlertCircle size={12} />
+                              {org.sla_breached} breached &middot; {org.sla_at_risk} at risk
+                            </p>
+                          )}
+                        </li>
+                      )
+                    })}
                   </ul>
                 )}
               </section>

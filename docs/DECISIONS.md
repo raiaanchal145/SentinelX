@@ -1067,3 +1067,22 @@ Endpoint security telemetry is strictly consent-based: devices cannot be added o
   - **Consent-Gated Collection**: Event categories disabled in the server consent config are excluded at query/subscription time via XPath filters where supported, ensuring non-consented channels are never monitored.
   - **Reliable Telemetry**: Windows Event Log bookmarks (`EvtCreateBookmark`/`EvtUpdateBookmark`) prevent lost or duplicated records across service restarts. An encrypted/permission-locked local SQLite buffer handles network partitions with a 50 MB safety cap.
   - **Kill Switch**: The agent actively monitors heartbeat and config responses; if the server reports the device or consent is revoked, the agent halts all collection and exits immediately.
+
+
+## P22 Admin Oversight Dashboards on Real Data
+
+Platform administrators (`super_admin`) require real aggregate visibility across all tenants, infrastructure assets, analyst workloads, SLA health, and automation costs without relying on client-side mock stores or simulated delays.
+
+- **Real SQL Rollups & Index Acceleration**:
+  - Replaced all mock store derivations (`getSocOversight`, `getItOversight`, `delay(null)`) and hardcoded dashboard zeroes with live SQL aggregations under `/api/v1/admin/oversight`.
+  - Added standalone B-tree indexes on `security_events(occurred_at)`, `alerts(created_at)`, and `incidents(opened_at)` via Alembic migration `e8f9a0b1c2d3` to guarantee constant-time queries across millions of rows during 24h/7d/30d rollups.
+- **Role Isolation & Tenant Scoping**:
+  - `super_admin` sees unrestricted platform rollups, unassigned alerts across all managed tenants, and platform analyst workloads.
+  - `platform_soc_analyst` callers to SOC and IT oversight are strictly partitioned to their assigned managed active organizations (`SocOrganizationAssignment`) and can only view their own analyst workload (`analyst_workload`), preventing horizontal tenant leakage.
+  - Organization admins and standard user accounts are structurally forbidden (`403`).
+- **Audited Reassignments**:
+  - `POST /admin/alerts/{id}/reassign` and `POST /admin/incidents/{id}/reassign` transfer active tickets between assigned platform SOC analysts.
+  - Reassignments enforce that the target analyst is an active `platform_soc_analyst` assigned to that specific tenant (`422 assignee_not_in_scope` otherwise).
+  - A non-empty reason is mandatory (`400 reason_required`) and is committed synchronously to `AlertHistory` / `IncidentTimeline` and `audit_logs` (`alert.reassign` / `incident.reassign`).
+- **Coverage Gap Alerts**:
+  - Managed organizations lacking any assigned platform SOC analyst are computed dynamically and surfaced with an immediate call-to-action link to `/admin/soc-team`.

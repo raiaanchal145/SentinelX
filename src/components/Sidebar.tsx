@@ -21,6 +21,7 @@ type NavItem = {
   name: string
   icon: LucideIcon
   path: string
+  end?: boolean
 }
 
 function Sidebar() {
@@ -35,6 +36,12 @@ function Sidebar() {
 
   const superAdminItems: NavItem[] = [
     {
+      name: "Admin Dashboard",
+      icon: LayoutDashboard,
+      path: "/admin",
+      end: true,
+    },
+    {
       name: "Organizations",
       icon: Building2,
       path: "/admin/organizations",
@@ -45,20 +52,11 @@ function Sidebar() {
       path: "/admin/soc-team",
     },
     {
-      name: "Admin Dashboard",
-      icon: LayoutDashboard,
-      path: "/admin",
-    },
-    {
-      // Was "/soc-dashboard", which only ever redirected into the
-      // analyst-only /soc route and bounced an admin straight back home.
-      // Now points at the real admin-side oversight page (P22).
       name: "SOC Oversight",
       icon: ShieldAlert,
       path: "/admin/soc-oversight",
     },
     {
-      // Same fix as above, for the IT side.
       name: "IT Oversight",
       icon: Wrench,
       path: "/admin/it-oversight",
@@ -66,12 +64,12 @@ function Sidebar() {
     {
       name: "Assets",
       icon: Server,
-      path: "/admin",
+      path: "/admin/assets",
     },
     {
       name: "Security Overview",
       icon: ShieldCheck,
-      path: "/admin",
+      path: "/admin/security-overview",
     },
   ]
 
@@ -88,6 +86,7 @@ function Sidebar() {
       name: "Dashboard",
       icon: Building2,
       path: "/organization",
+      end: true,
     },
     {
       name: "Members",
@@ -277,10 +276,11 @@ function Sidebar() {
             <NavLink
               key={item.name}
               to={item.path}
+              end={item.end}
               className={({ isActive }) =>
                 `flex items-center gap-3 rounded-xl px-4 py-3 text-sm transition ${
                   isActive
-                    ? "bg-brand-500/10 text-brand-400"
+                    ? "bg-brand-500/10 text-brand-400 font-medium"
                     : "text-fg-subtle hover:bg-white/5 hover:text-white"
                 }`
               }
