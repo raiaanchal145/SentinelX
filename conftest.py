@@ -246,6 +246,13 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
         yield ac
     app.dependency_overrides.pop(get_db, None)
 
+    try:
+        from app.routers.event_sources import close_rate_limit_redis
+        await close_rate_limit_redis()
+    except Exception:
+        pass
+
+
 
 class MockMailer:
     """In-memory email capturer replacing real SMTP during test runs."""
