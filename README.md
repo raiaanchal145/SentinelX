@@ -243,3 +243,69 @@ Never run `docker compose down -v`, `alembic revision --autogenerate` against so
 - Each teammate has their **own separate local database** — this is intentional. Nobody's test data is shared, and nothing about the database ever gets committed to GitHub (`.env`, `.dev-state.json`, `.dev-logs/`, and any local data are excluded via `.gitignore`).
 - If you later add or change a table (a SQLAlchemy model in `backend/app/models.py`), only the person making that change runs `alembic revision --autogenerate -m "..."` and commits the resulting file in `backend/migrations/versions/`. Everyone else just runs `npm run dev` (or `npm run dev:db`) after pulling to catch up — never `--autogenerate` on someone else's change.
 - **Pulling the admins/users split migration** (`f2a3b4c5d6e7_admins_users_split_and_pipeline_tables.py`): just run `npm run dev` (or `npm run dev:db`) like any other migration. It splits the old single `users` table into `admins` (super_admin/organization_admin) and a narrower `users` (soc_analyst/security_manager/it_developer/auditor), and adds the full event → alert → incident → ticket → remediation → verification pipeline schema. If you already had test accounts in your local `users` table, any super_admin/organization_admin rows are moved into `admins` automatically as part of the upgrade -- you don't need to re-register. As always, this migration was written by hand, not with `--autogenerate` -- don't run `alembic revision --autogenerate` against it or any other migration in this project.
+
+---
+
+## 5. QA Automation & Excel Test Report
+
+SentinelX includes a complete QA test automation suite with an automatic, bidirectional-aware Excel reporting engine (`test_cases.xlsx`).
+
+**Team QA Roles:**
+- **Ansh** (Team Lead)
+- **Riteka Singh** (QA Engineer)
+- **Aanchal Rai** (QA Engineer)
+
+### Core Principles
+1. **The Code is the Single Source of Truth:**
+   Tests are never manually created in Excel. Each test carries its own metadata directly in Python via the `@tc` decorator:
+   ```python
+   @tc(
+       id="ALR-03",
+       module="Alerts",
+       description="Successful login after many failures raises Critical alert",
+       preconditions="Org exists, built-in rules loaded",
+       steps="Submit failed login sequence followed by logon_success",
+       expected="Sequence matched, severity=Critical",
+       type="automated",
+       owner="Ansh",
+   )
+   def test_critical_alert(...):
+       ...
+   ```
+2. **Strict Database Safety Guard:**
+   - Tests execute **exclusively** against a dedicated local test database (`sentinelx_test`).
+   - The test runner inspects `TEST_DATABASE_URL` and **immediately aborts** if it matches cloud-hosted patterns (Supabase, AWS RDS, Neon, Render, etc.) or if the database name lacks the word `test`.
+3. **Detection Accuracy & Confusion Matrix:**
+   - Labelled ground-truth datasets in `tests/data/` (logs, network traffic, phishing emails) evaluate threat detection performance.
+   - Calculates True Positives (TP), False Positives (FP), True Negatives (TN), False Negatives (FN), Precision, Recall, Accuracy, and F1 Score.
+   - Mandates a minimum 80% (`0.80`) accuracy/precision/recall threshold.
+4. **Excel Report Architecture (`test_cases.xlsx`):**
+   - **`Test_Cases`**: All 55 test cases sorted naturally (e.g. `AUTH-02` before `AUTH-10`), color-coded status badges, frozen panes, borders, and auto-fitted columns.
+   - **`Run_History`**: Appends execution timestamp, total tests, pass/fail counts, pass rate %, git commit hash, and run duration.
+   - **`Summary`**: Per-module test statistics and pass rates with overall totals.
+   - **`Detection_Metrics`**: Formatted Confusion Matrix and Per-Severity breakdown.
+   - **`Removed_Cases`**: Archived list of tests deleted from code with timestamps and reasons.
+   - **Remarks Preservation**: Any manual notes written in the `Remarks` column of `test_cases.xlsx` are **never overwritten**.
+   - **Backup Rotation**: Automatically maintains the last 5 timestamped backups in `backups/`.
+   - **Lock Protection**: If Excel is open during a test run, results are saved to a timestamped fallback (`test_cases_LOCKED_<timestamp>.xlsx`) with a clear user alert.
+
+### Everyday QA Commands
+```bash
+# 1. Run all tests and auto-update test_cases.xlsx
+pytest -v
+
+# 2. Preview additions/updates/removals without modifying Excel
+python sync_excel.py --dry-run
+
+# 3. Synchronize test cases from code to Excel without running tests
+python sync_excel.py --sync-only
+
+# 4. Generate a new test case with next free ID (e.g. AUTH-09)
+python new_test.py --module Login --name "Verify remember me persistence" --owner "Ansh"
+```
+
+### Team Rules
+- **Rule 1 (Branch):** All QA commits remain strictly on the `ansh-dev` branch locally. Do not push without TL approval.
+- **Rule 2 (No Manual Excel Edits for Cases):** Never add or delete test rows in Excel. Use `python new_test.py` or write `@tc` decorated test functions in code.
+- **Rule 3 (Safe DB Only):** Never point `TEST_DATABASE_URL` to staging, production, or shared team databases.
+
