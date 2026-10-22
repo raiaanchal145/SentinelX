@@ -1,0 +1,8 @@
+[
+  {
+    "event_type": "connection_allowed",
+    "ip": "10.0.0.12",
+    "occurred_at": "2026-10-22T08:50:00+00:00",
+    "message": "Outbound HTTPS flow established to 140.82.112.4:443"
+  }
+]

@@ -1,0 +1,8 @@
+[
+  {
+    "event_type": "dns_query",
+    "ip": "10.0.0.12",
+    "occurred_at": "2026-10-22T08:45:00+00:00",
+    "message": "Standard DNS query for registry.npmjs.org IN A"
+  }
+]

@@ -1,0 +1,7 @@
+{
+  "sender": "pm-office@sentinelxcorp.com",
+  "recipient": "scrum-team@sentinelxcorp.com",
+  "subject": "Invitation: Sprint Planning & Backlog Grooming",
+  "body": "Hi team, please find attached the meeting invitation and zoom dial-in coordinates for Monday at 10 AM.",
+  "attachments": ["meeting.ics"]
+}

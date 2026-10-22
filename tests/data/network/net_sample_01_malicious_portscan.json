@@ -1,0 +1,38 @@
+[
+  {
+    "event_type": "firewall_deny",
+    "ip": "203.0.113.88",
+    "occurred_at": "2026-10-22T08:35:00+00:00",
+    "message": "TCP SYN dropped on port 21"
+  },
+  {
+    "event_type": "firewall_deny",
+    "ip": "203.0.113.88",
+    "occurred_at": "2026-10-22T08:35:01+00:00",
+    "message": "TCP SYN dropped on port 22"
+  },
+  {
+    "event_type": "firewall_deny",
+    "ip": "203.0.113.88",
+    "occurred_at": "2026-10-22T08:35:02+00:00",
+    "message": "TCP SYN dropped on port 23"
+  },
+  {
+    "event_type": "firewall_deny",
+    "ip": "203.0.113.88",
+    "occurred_at": "2026-10-22T08:35:03+00:00",
+    "message": "TCP SYN dropped on port 80"
+  },
+  {
+    "event_type": "firewall_deny",
+    "ip": "203.0.113.88",
+    "occurred_at": "2026-10-22T08:35:04+00:00",
+    "message": "TCP SYN dropped on port 443"
+  },
+  {
+    "event_type": "firewall_deny",
+    "ip": "203.0.113.88",
+    "occurred_at": "2026-10-22T08:35:05+00:00",
+    "message": "TCP SYN dropped on port 8080"
+  }
+]

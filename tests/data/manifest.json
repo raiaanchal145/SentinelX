@@ -1,0 +1,119 @@
+[
+  {
+    "id": "SAMPLE-LOG-01",
+    "name": "Repeated Failed Logins (Brute Force)",
+    "file": "logs/log_sample_01_malicious_bruteforce.json",
+    "category": "logs",
+    "label": "malicious",
+    "expected_severity": "High",
+    "rule": "repeated-failed-logins"
+  },
+  {
+    "id": "SAMPLE-LOG-02",
+    "name": "Successful Login After Password Spray",
+    "file": "logs/log_sample_02_malicious_spray_success.json",
+    "category": "logs",
+    "label": "malicious",
+    "expected_severity": "Critical",
+    "rule": "success-after-failures"
+  },
+  {
+    "id": "SAMPLE-LOG-03",
+    "name": "Windows Audit Log Cleared Event",
+    "file": "logs/log_sample_03_malicious_log_cleared.json",
+    "category": "logs",
+    "label": "malicious",
+    "expected_severity": "Critical",
+    "rule": "audit-log-cleared"
+  },
+  {
+    "id": "SAMPLE-LOG-04",
+    "name": "Benign User Login Event",
+    "file": "logs/log_sample_04_benign_normal_login.json",
+    "category": "logs",
+    "label": "benign",
+    "expected_severity": null,
+    "rule": null
+  },
+  {
+    "id": "SAMPLE-LOG-05",
+    "name": "Benign Application Warning Log",
+    "file": "logs/log_sample_05_benign_app_warning.json",
+    "category": "logs",
+    "label": "benign",
+    "expected_severity": null,
+    "rule": null
+  },
+  {
+    "id": "SAMPLE-NET-01",
+    "name": "Rapid Connection Port Scan Sweep",
+    "file": "network/net_sample_01_malicious_portscan.json",
+    "category": "network",
+    "label": "malicious",
+    "expected_severity": "High",
+    "rule": "port-scan"
+  },
+  {
+    "id": "SAMPLE-NET-02",
+    "name": "Outbound C2 Beaconing Signature",
+    "file": "network/net_sample_02_malicious_c2_beacon.json",
+    "category": "network",
+    "label": "malicious",
+    "expected_severity": "Critical",
+    "rule": "ids-c2-beacon"
+  },
+  {
+    "id": "SAMPLE-NET-03",
+    "name": "Standard Benign DNS Query",
+    "file": "network/net_sample_03_benign_dns_lookup.json",
+    "category": "network",
+    "label": "benign",
+    "expected_severity": null,
+    "rule": null
+  },
+  {
+    "id": "SAMPLE-NET-04",
+    "name": "Authorized Outbound HTTPS Flow",
+    "file": "network/net_sample_04_benign_flow_allowed.json",
+    "category": "network",
+    "label": "benign",
+    "expected_severity": null,
+    "rule": null
+  },
+  {
+    "id": "SAMPLE-MAIL-01",
+    "name": "Credential Harvesting Phishing Email",
+    "file": "emails/mail_sample_01_malicious_credential_harvest.json",
+    "category": "emails",
+    "label": "malicious",
+    "expected_severity": "Critical",
+    "rule": "phishing-credential-harvest"
+  },
+  {
+    "id": "SAMPLE-MAIL-02",
+    "name": "Dual Extension Malware Attachment",
+    "file": "emails/mail_sample_02_malicious_malware_exe.json",
+    "category": "emails",
+    "label": "malicious",
+    "expected_severity": "High",
+    "rule": "phishing-executable-attachment"
+  },
+  {
+    "id": "SAMPLE-MAIL-03",
+    "name": "Internal Engineering Newsletter",
+    "file": "emails/mail_sample_03_benign_newsletter.json",
+    "category": "emails",
+    "label": "benign",
+    "expected_severity": null,
+    "rule": null
+  },
+  {
+    "id": "SAMPLE-MAIL-04",
+    "name": "Calendar Invitation Notification",
+    "file": "emails/mail_sample_04_benign_calendar_invite.json",
+    "category": "emails",
+    "label": "benign",
+    "expected_severity": null,
+    "rule": null
+  }
+]

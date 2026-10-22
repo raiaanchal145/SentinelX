@@ -1,0 +1,7 @@
+{
+  "sender": "engineering-all@sentinelxcorp.com",
+  "recipient": "dev-team@sentinelxcorp.com",
+  "subject": "SentinelX October Engineering Newsletter",
+  "body": "Welcome to our monthly retrospective. Highlights this cycle include performance boosts, new detection test automation, and our upcoming hackathon.",
+  "attachments": ["architecture_overview.pdf"]
+}

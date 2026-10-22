@@ -1,0 +1,10 @@
+[
+  {
+    "event_type": "ids_alert",
+    "ip": "10.0.1.15",
+    "host": "workstation-ceo",
+    "occurred_at": "2026-10-22T08:40:00+00:00",
+    "severity_hint": "critical",
+    "message": "ET TROJAN Observed CobaltStrike HTTP Beaconing Response to 198.51.100.99"
+  }
+]
