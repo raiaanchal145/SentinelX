@@ -8,8 +8,9 @@ Excel is purely generated output synchronized from code.
 from __future__ import annotations
 
 import functools
+import inspect
 import re
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from typing import Any, Callable, Literal
 
 # Regex for TestCaseID: 2 to 6 uppercase letters, hyphen, 2 to 4 digits (e.g., AUTH-01, ORG-002)
@@ -59,8 +60,8 @@ def tc(
     """
     Decorator attaching test case metadata directly to a pytest test function.
     Validates required fields and test case ID formatting at decoration time.
+    Preserves coroutine nature of async test functions.
     """
-    # 1. Validate ID format
     clean_id = (id or "").strip()
     if not clean_id or not TC_ID_REGEX.match(clean_id):
         raise ValueError(
@@ -68,7 +69,6 @@ def tc(
             f"(e.g. 'AUTH-01', 'ORG-02', 'ALR-03')."
         )
 
-    # 2. Validate Type
     clean_type = (type or "").strip().lower()
     if clean_type not in VALID_TC_TYPES:
         raise ValueError(
@@ -76,7 +76,6 @@ def tc(
             f"Allowed types: {sorted(VALID_TC_TYPES)}"
         )
 
-    # 3. Validate mandatory fields
     fields = {
         "module": module,
         "description": description,
@@ -103,18 +102,23 @@ def tc(
     )
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        # Attach directly to function
+        import pytest
+
+        is_async = inspect.iscoroutinefunction(func)
+        if is_async:
+            @functools.wraps(func)
+            async def wrapper(*args: Any, **kwargs: Any) -> Any:
+                return await func(*args, **kwargs)
+        else:
+            @functools.wraps(func)
+            def wrapper(*args: Any, **kwargs: Any) -> Any:
+                return func(*args, **kwargs)
+
+        setattr(wrapper, "__test_case_meta__", meta)
         setattr(func, "__test_case_meta__", meta)
 
-        # Also add pytest mark so pytest markers can filter if needed
-        import pytest
-        marked_func = pytest.mark.test_case(meta=meta)(func)
-
-        @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            return marked_func(*args, **kwargs)
-
-        # Preserve the metadata on the wrapper as well
+        # Mark with pytest marker
+        wrapper = pytest.mark.test_case(meta=meta)(wrapper)
         setattr(wrapper, "__test_case_meta__", meta)
         return wrapper
 
