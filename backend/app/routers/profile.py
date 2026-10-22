@@ -421,3 +421,4 @@ async def toggle_2fa(
         "two_factor_enabled": account.two_factor_enabled,
         "message": f"Two-factor authentication has been {action}.",
     }
+

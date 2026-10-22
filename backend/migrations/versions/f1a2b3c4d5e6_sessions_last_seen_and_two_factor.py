@@ -45,3 +45,4 @@ def downgrade() -> None:
     op.drop_column("admins", "two_factor_enabled")
 
     op.drop_column("sessions", "last_seen_at")
+

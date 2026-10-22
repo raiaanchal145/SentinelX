@@ -213,3 +213,4 @@ async def palette_search(
         tickets=tickets_res,
         assets=assets_res,
     )
+
