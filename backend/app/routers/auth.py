@@ -20,19 +20,23 @@ anonymous.
 """
 
 import asyncio
+import hashlib
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.access import get_effective_access
+from app.config import settings
 from app.database import get_db
 from app.email_utils import (
     generate_verification_code,
     send_password_reset_email,
+    send_two_factor_code_email,
     send_verification_email,
 )
 from app.models import (
@@ -40,10 +44,11 @@ from app.models import (
     Admin,
     Organization,
     OrganizationStatus,
+    Session,
     User,
 )
 from app.scope import Scope, org_scope
-from app.security import create_access_token, hash_password, verify_password
+from app.security import create_access_token, decode_access_token, hash_password, verify_password
 from app.validators import is_valid_email_format
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -111,10 +116,18 @@ class ResetPasswordRequest(BaseModel):
     new_password: str
 
 
+class Login2FaRequest(BaseModel):
+    temp_token: str
+    code: str
+
+
 class LoginResponse(BaseModel):
-    access_token: str
+    access_token: str = ""
     token_type: str = "bearer"
-    user: UserOut
+    user: UserOut | None = None
+    requires_2fa: bool = False
+    temp_token: str | None = None
+    message: str | None = None
 
 
 # The ONE generic message every unknown-email / no-code-on-file /
@@ -244,8 +257,50 @@ async def resend_verification(payload: ResendVerificationRequest, db: AsyncSessi
     return _GENERIC_CODE_RESPONSE
 
 
+async def _create_user_session(
+    db: AsyncSession,
+    account: Admin | User,
+    account_type: str,
+    request: Request,
+) -> tuple[str, Session]:
+    client_ip = request.headers.get("x-forwarded-for")
+    if client_ip:
+        client_ip = client_ip.split(",")[0].strip()
+    elif request.client:
+        client_ip = request.client.host
+    else:
+        client_ip = "127.0.0.1"
+
+    ua = (request.headers.get("user-agent") or "Unknown Device")[:300]
+    session_id = uuid.uuid4()
+    role_value = _role_value(account, account_type)
+
+    token = create_access_token({
+        "sub": str(account.id),
+        "account_type": account_type,
+        "role": role_value,
+        "sid": str(session_id),
+    })
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    now = datetime.now(timezone.utc)
+    sess = Session(
+        id=session_id,
+        account_type=account_type,
+        account_id=account.id,
+        token_hash=token_hash,
+        user_agent=ua,
+        ip=client_ip,
+        expires_at=now + timedelta(minutes=settings.access_token_expire_minutes),
+        last_seen_at=now,
+    )
+    db.add(sess)
+    await db.commit()
+    return token, sess
+
+
 @router.post("/login", response_model=LoginResponse)
-async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(payload: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     email = payload.email.strip().lower()
 
     if not is_valid_email_format(email):
@@ -326,11 +381,77 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
 
     role_value = _role_value(account, account_type)
 
-    token = create_access_token({
-        "sub": str(account.id),
-        "account_type": account_type,
-        "role": role_value,
-    })
+    # 2FA Check (P25)
+    if getattr(account, "two_factor_enabled", False):
+        code = generate_verification_code()
+        account.two_factor_code = code
+        account.two_factor_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=CODE_TTL_MINUTES)
+        await db.commit()
+
+        try:
+            await asyncio.to_thread(send_two_factor_code_email, account.email, account.name, code)
+        except Exception as exc:
+            print(f"[SentinelX] Failed to send 2FA email to {account.email}: {exc}")
+
+        temp_token = create_access_token({
+            "sub": str(account.id),
+            "account_type": account_type,
+            "scope": "2fa_pending",
+        })
+        return LoginResponse(
+            requires_2fa=True,
+            temp_token=temp_token,
+            access_token="",
+            message="A two-factor authentication security code has been sent to your email.",
+        )
+
+    token, _ = await _create_user_session(db, account, account_type, request)
+
+    return LoginResponse(
+        access_token=token,
+        user=UserOut(
+            id=str(account.id), name=account.name, email=account.email,
+            role=role_value, account_type=account_type,
+        ),
+    )
+
+
+@router.post("/login-2fa", response_model=LoginResponse)
+async def login_2fa(payload: Login2FaRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    try:
+        data = decode_access_token(payload.temp_token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired two-factor session. Please log in again.")
+
+    if data.get("scope") != "2fa_pending":
+        raise HTTPException(status_code=401, detail="Invalid token for two-factor authentication.")
+
+    account_id = data.get("sub")
+    account_type = data.get("account_type")
+    if not account_id or account_type not in ("admin", "user"):
+        raise HTTPException(status_code=401, detail="Invalid account.")
+
+    model = Admin if account_type == "admin" else User
+    account = (await db.execute(select(model).where(model.id == account_id))).scalar_one_or_none()
+    if not account or not account.is_active:
+        raise HTTPException(status_code=401, detail="This account has been deactivated.")
+
+    now = datetime.now(timezone.utc)
+    if not account.two_factor_code or not account.two_factor_code_expires_at:
+        raise HTTPException(status_code=400, detail="No two-factor code on file. Please log in again.")
+
+    if now > account.two_factor_code_expires_at:
+        raise HTTPException(status_code=400, detail="Two-factor code has expired. Please log in again.")
+
+    if payload.code.strip() != account.two_factor_code:
+        raise HTTPException(status_code=400, detail="Incorrect two-factor security code.")
+
+    account.two_factor_code = None
+    account.two_factor_code_expires_at = None
+    await db.commit()
+
+    token, _ = await _create_user_session(db, account, account_type, request)
+    role_value = _role_value(account, account_type)
 
     return LoginResponse(
         access_token=token,

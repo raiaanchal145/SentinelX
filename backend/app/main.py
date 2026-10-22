@@ -24,6 +24,8 @@ from app.routers import (
     invitations,
     notifications,
     organization,
+    palette,
+    profile,
     stats,
     tickets,
 )
@@ -104,3 +106,5 @@ app.include_router(ai.router)
 app.include_router(devices.router)
 app.include_router(agent.router)
 app.include_router(admin_oversight.router)
+app.include_router(profile.router)
+app.include_router(palette.router)

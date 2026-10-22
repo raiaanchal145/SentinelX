@@ -29,6 +29,7 @@ Exports:
                    None (super_admin).
 """
 
+from datetime import datetime, timezone
 import uuid
 from dataclasses import dataclass
 
@@ -38,7 +39,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Admin, AdminLevel, User
+from app.models import Admin, AdminLevel, Session, User
 from app.security import decode_access_token
 
 
@@ -91,6 +92,35 @@ async def get_current_account(
     # must stop being able to do anything with it on its very next call.
     if not account.is_active:
         raise HTTPException(status_code=401, detail="This account has been deactivated.")
+
+    # Guard against using temporary 2FA tokens for authenticated API calls
+    if payload.get("scope") == "2fa_pending":
+        raise HTTPException(status_code=401, detail="Two-factor authentication pending. Please complete verification.")
+
+    # Session revocation check (P25)
+    sid = payload.get("sid")
+    if sid:
+        try:
+            sid_uuid = uuid.UUID(sid)
+            sess = (
+                await db.execute(
+                    select(Session).where(
+                        Session.id == sid_uuid,
+                        Session.account_id == account.id,
+                        Session.account_type == account_type,
+                    )
+                )
+            ).scalar_one_or_none()
+            if not sess or sess.revoked_at is not None:
+                raise HTTPException(status_code=401, detail="Session revoked. Please log in again.")
+            if sess.expires_at < datetime.now(timezone.utc):
+                raise HTTPException(status_code=401, detail="Session expired. Please log in again.")
+
+            # Touch last_seen_at
+            sess.last_seen_at = datetime.now(timezone.utc)
+            await db.commit()
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=401, detail="Invalid session token.")
 
     return account
 
