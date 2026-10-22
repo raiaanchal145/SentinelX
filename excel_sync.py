@@ -544,14 +544,19 @@ def sync_detection_metrics_sheet(ws, metrics: dict[str, Any]) -> None:
 
 def sync_removed_cases_sheet(ws) -> None:
     """Initializes Removed_Cases headers if sheet is empty."""
-    if ws.max_row == 0 or ws.cell(row=1, column=1).value is None:
-        headers = ["TestCaseID", "Module", "Description", "RemovedAt", "LastStatus", "Reason"]
+    headers = ["TestCaseID", "Module", "Description", "RemovedAt", "LastStatus", "Reason"]
+    if ws.max_row == 1 and ws.cell(row=1, column=1).value is None:
+        ws.delete_rows(1, 1)
+
+    if ws.max_row == 0 or ws.cell(row=1, column=1).value != "TestCaseID":
+        ws.delete_rows(1, ws.max_row + 1)
         ws.append(headers)
         ws.row_dimensions[1].height = 26
         for c in range(1, len(headers) + 1):
             _format_cell(ws.cell(row=1, column=c), font=HEADER_FONT, fill=HEADER_FILL, alignment=HEADER_ALIGN)
         ws.freeze_panes = "A2"
         _autofit_columns(ws)
+
 
 
 # ---------------------------------------------------------------------------
